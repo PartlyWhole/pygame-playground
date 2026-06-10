@@ -14,7 +14,7 @@ page.on('pageerror', e => errors.push(String(e)));
 
 const fail = (msg) => { console.error('FAIL:', msg); process.exitCode = 1; };
 
-await page.goto('http://localhost:8923/', { waitUntil: 'load' });
+await page.goto(process.argv[2] || 'http://localhost:8923/', { waitUntil: 'load' });
 
 // 1. Boot: status reaches "running" (auto-run of default example) within 90s.
 await page.waitForFunction(

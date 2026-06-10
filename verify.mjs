@@ -111,6 +111,87 @@ const r2 = await frame();
 console.log('re-run animating (untick-ed while True):', r1 !== r2 ? 'YES' : 'NO');
 if (r1 === r2) fail('re-run canvas not animating');
 
+// 9. "Stage 1" shape: draw once, time.sleep, draw again. Must NOT freeze the
+// tab (Pyodide's time.sleep busy-waits unless rewritten to an await).
+await page.evaluate(() => {
+  const cm = document.querySelector('.CodeMirror').CodeMirror;
+  cm.setValue([
+    'import pygame, time',
+    'pygame.init()',
+    'screen = pygame.display.set_mode((400, 300))',
+    'screen.fill((200, 60, 60))',
+    'pygame.display.flip()',
+    'time.sleep(2)',
+    'screen.fill((60, 200, 60))',
+    'pygame.display.flip()',
+  ].join('\n'));
+});
+await page.click('#runBtn');
+await page.waitForFunction(() => document.getElementById('status').textContent === 'running', null, { timeout: 10_000 })
+  .catch(() => fail('stage-1 program did not start'));
+await page.waitForTimeout(700); // we are now inside the 2s sleep
+const sleepFrame = await frame();
+const st0 = Date.now();
+await page.evaluate(() => 1 + 1); // would stall if time.sleep busy-waited
+const sdt = Date.now() - st0;
+console.log(`responsive during time.sleep: ${sdt}ms`);
+if (sdt > 500) fail('tab frozen during time.sleep (busy-wait regression)');
+await page.waitForFunction(() => document.getElementById('status').textContent === 'finished', null, { timeout: 10_000 })
+  .catch(() => fail('stage-1 program never finished (sleep not honored?)'));
+const doneFrame = await frame();
+console.log('time.sleep pauses then continues:', sleepFrame !== doneFrame ? 'YES' : 'NO');
+if (sleepFrame === doneFrame) fail('second draw after time.sleep not visible');
+
+// 10. for-loop pacing (user-reported): draw once, then 30 × pygame.time.wait(100)
+// in a FOR loop (no while → no injected yields), then pygame.quit(). The waits
+// must be honored as real pauses, the tab must stay responsive, and the program
+// should take ~3s — not finish instantly.
+await page.evaluate(() => {
+  const cm = document.querySelector('.CodeMirror').CodeMirror;
+  cm.setValue([
+    'import pygame',
+    'pygame.init()',
+    'screen = pygame.display.set_mode((600, 300))',
+    'screen.fill((20, 20, 10))',
+    'pygame.display.flip()',
+    'for i in range(30):',
+    '    pygame.event.pump()',
+    '    pygame.time.wait(100)',
+    'pygame.quit()',
+  ].join('\n'));
+});
+const w0 = Date.now();
+await page.click('#runBtn');
+await page.waitForFunction(() => document.getElementById('status').textContent === 'running', null, { timeout: 10_000 })
+  .catch(() => fail('for-loop wait program did not start'));
+await page.waitForTimeout(800); // inside the 3s of waits
+const wt0 = Date.now();
+await page.evaluate(() => 1 + 1);
+const wdt = Date.now() - wt0;
+console.log(`responsive during pygame.time.wait loop: ${wdt}ms`);
+if (wdt > 500) fail('tab frozen during pygame.time.wait loop');
+const stillRunning = await page.textContent('#status');
+if (stillRunning !== 'running') fail(`waits not honored — already "${stillRunning}" after 0.8s`);
+await page.waitForFunction(() => document.getElementById('status').textContent === 'finished', null, { timeout: 15_000 })
+  .catch(() => fail('for-loop wait program never finished'));
+const elapsed = Date.now() - w0;
+console.log(`for-loop waits honored: ran ${elapsed}ms (expect ~3000+boot)`);
+if (elapsed < 2500) fail('finished too fast — waits skipped');
+
+// 11. pygame.quit() must not poison the next run.
+await page.evaluate(() => {
+  const cm = document.querySelector('.CodeMirror').CodeMirror;
+  cm.setValue('import pygame\npygame.init()\ns = pygame.display.set_mode((300, 200))\nn = 0\nwhile True:\n    s.fill((n % 255, 120, 60))\n    pygame.display.flip()\n    n += 5\n');
+});
+await page.click('#runBtn');
+await page.waitForFunction(() => document.getElementById('status').textContent === 'running', null, { timeout: 10_000 })
+  .catch(() => fail('run after pygame.quit() did not start'));
+const q1 = await frame();
+await page.waitForTimeout(400);
+const q2 = await frame();
+console.log('run after pygame.quit() animates:', q1 !== q2 ? 'YES' : 'NO');
+if (q1 === q2) fail('canvas dead after a prior pygame.quit()');
+
 await page.screenshot({ path: '/Users/alan/Desktop/pygame-playground/verify-screenshot.png' });
 
 const realErrors = errors.filter(e => !/favicon/.test(e));

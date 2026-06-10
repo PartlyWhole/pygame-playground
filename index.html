@@ -329,6 +329,25 @@ def _delay(ms):
 pygame.time.delay = _delay
 pygame.time.wait = _delay
 
+# Pyodide's time.sleep busy-waits on the browser main thread and freezes the
+# whole page. Statement-level sleeps are rewritten to real awaits by
+# _AsyncSleeps below; this banking fallback covers sleeps in sync helper
+# functions so nothing can ever block the tab.
+import time as _time_mod
+def _bank_sleep(secs):
+    try:
+        _state["delay"] += max(0.0, float(secs))
+    except Exception:
+        pass
+_time_mod.sleep = _bank_sleep
+
+async def __sleep__(secs):
+    try:
+        secs = max(0.0, float(secs))
+    except Exception:
+        secs = 0.0
+    await asyncio.sleep(secs)
+
 async def __yield__():
     d, t, f = _state["delay"], _state["ticked"], _state["flipped"]
     _state["delay"] = 0.0
@@ -407,6 +426,52 @@ class _AwaitCalls(ast.NodeTransformer):
                 node.value = ast.copy_location(ast.Await(value=v), v)
         return node
 
+def _time_import_names(tree):
+    """Names the user's code binds to the time module / time.sleep."""
+    time_aliases, sleep_names = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == "time":
+                    time_aliases.add(a.asname or "time")
+        elif isinstance(n, ast.ImportFrom) and n.module == "time":
+            for a in n.names:
+                if a.name == "sleep":
+                    sleep_names.add(a.asname or "sleep")
+    return time_aliases, sleep_names
+
+class _AsyncSleeps(ast.NodeTransformer):
+    """Statement-level time.sleep(x) / pygame.time.wait(ms) / pygame.time.delay(ms)
+    become real cooperative awaits in async contexts, so 'draw once then sleep'
+    programs pause visibly instead of freezing the tab."""
+    def __init__(self, time_aliases, sleep_names):
+        self.time_aliases = time_aliases
+        self.sleep_names = sleep_names
+    def visit_FunctionDef(self, node):
+        return node
+    def visit_ClassDef(self, node):
+        return node
+    def visit_Expr(self, node):
+        v = node.value
+        if isinstance(v, ast.Call) and len(v.args) == 1 and not v.keywords:
+            f = v.func
+            secs = None
+            if isinstance(f, ast.Name) and f.id in self.sleep_names:
+                secs = v.args[0]
+            elif isinstance(f, ast.Attribute):
+                if (f.attr == "sleep" and isinstance(f.value, ast.Name)
+                        and f.value.id in self.time_aliases):
+                    secs = v.args[0]
+                elif (f.attr in ("wait", "delay") and isinstance(f.value, ast.Attribute)
+                        and f.value.attr == "time"):
+                    secs = ast.BinOp(left=v.args[0], op=ast.Div(),
+                                     right=ast.Constant(value=1000.0))
+            if secs is not None:
+                node.value = ast.copy_location(ast.Await(value=ast.Call(
+                    func=ast.Name(id="__sleep__", ctx=ast.Load()),
+                    args=[secs], keywords=[])), v)
+        return node
+
 class _InjectYield(ast.NodeTransformer):
     """Append 'await __yield__()' to every while-loop body in async contexts."""
     def visit_FunctionDef(self, node):
@@ -423,12 +488,14 @@ def _transform(src):
     a = _Asyncify()
     tree = a.visit(tree)
     tree = _AwaitCalls(a.converted).visit(tree)
+    tree = _AsyncSleeps(*_time_import_names(tree)).visit(tree)
     tree = _InjectYield().visit(tree)
     ast.fix_missing_locations(tree)
     return compile(tree, "<your code>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
 async def _run(src):
-    glb = {"__name__": "__main__", "__yield__": __yield__, "__builtins__": __builtins__}
+    glb = {"__name__": "__main__", "__yield__": __yield__, "__sleep__": __sleep__,
+           "__builtins__": __builtins__}
     try:
         code = _transform(src)
     except SyntaxError:

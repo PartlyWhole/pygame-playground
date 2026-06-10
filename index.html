@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pygame playground</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<style>
+  :root {
+    --bg: #14151a; --panel: #1c1e26; --edge: #2c2f3a;
+    --text: #d8dae5; --dim: #8a8fa3; --accent: #7bd88f; --warn: #f0a45d; --bad: #ff6e7f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--edge);
+    flex: 0 0 auto;
+  }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  button, select {
+    background: #262936; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 5px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #4a4f63; }
+  #runBtn { background: #234430; border-color: #2f6a44; color: #b8f0c6; font-weight: 600; }
+  #runBtn:hover { background: #2b5a3d; }
+  #stopBtn { color: #f3b0ba; }
+  #status {
+    margin-left: auto; font-size: 12.5px; color: var(--dim);
+    padding: 4px 10px; border-radius: 99px; background: #20222c; border: 1px solid var(--edge);
+  }
+  #status.running { color: var(--accent); }
+  #status.error { color: var(--bad); }
+  #status.boot { color: var(--warn); }
+  main { flex: 1 1 0; display: flex; min-height: 0; }
+  #editorPane { flex: 1 1 52%; min-width: 320px; border-right: 1px solid var(--edge); display: flex; }
+  .CodeMirror { flex: 1; height: auto; font-size: 13.5px; }
+  #rightPane { flex: 1 1 48%; display: flex; flex-direction: column; min-width: 360px; }
+  #stage {
+    flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+    overflow: auto; background: #0e0f13; padding: 12px;
+  }
+  #canvas { background: #000; outline: none; border: 1px solid var(--edge); border-radius: 4px; }
+  #canvas:focus { border-color: var(--accent); }
+  #console {
+    flex: 0 0 150px; overflow-y: auto; background: #121318;
+    border-top: 1px solid var(--edge); padding: 8px 12px;
+    font: 12px/1.5 "SF Mono", Menlo, monospace; white-space: pre-wrap;
+  }
+  #console .err { color: var(--bad); }
+  #console .sys { color: var(--dim); font-style: italic; }
+  kbd {
+    background: #262936; border: 1px solid var(--edge); border-radius: 4px;
+    padding: 0 5px; font-size: 11px;
+  }
+  .hint { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐍 pygame <span>playground</span></h1>
+  <select id="examples" title="Load an example"></select>
+  <button id="runBtn">▶ Run</button>
+  <button id="stopBtn">■ Stop</button>
+  <span class="hint"><kbd>⌘</kbd>+<kbd>↩</kbd> runs · click canvas for keyboard</span>
+  <span id="status" class="boot">starting…</span>
+</header>
+<main>
+  <div id="editorPane"><textarea id="code"></textarea></div>
+  <div id="rightPane">
+    <div id="stage"><canvas id="canvas" width="640" height="480" tabindex="0"></canvas></div>
+    <div id="console"></div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script>
+// ---------------------------------------------------------------- examples
+const EXAMPLES = {
+  "Bouncy balls": String.raw`import pygame, random
+
+pygame.init()
+screen = pygame.display.set_mode((640, 480))
+pygame.display.set_caption("bouncy balls")
+clock = pygame.time.Clock()
+
+balls = []
+for i in range(14):
+    balls.append({
+        "x": random.randint(40, 600), "y": random.randint(40, 440),
+        "vx": random.choice([-4, -3, 3, 4]), "vy": random.choice([-4, -3, 3, 4]),
+        "r": random.randint(10, 26),
+        "c": (random.randint(80, 255), random.randint(80, 255), random.randint(80, 255)),
+    })
+
+running = True
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    for b in balls:
+        b["x"] += b["vx"]
+        b["y"] += b["vy"]
+        if b["x"] < b["r"] or b["x"] > 640 - b["r"]: b["vx"] *= -1
+        if b["y"] < b["r"] or b["y"] > 480 - b["r"]: b["vy"] *= -1
+
+    screen.fill((18, 18, 26))
+    for b in balls:
+        pygame.draw.circle(screen, b["c"], (int(b["x"]), int(b["y"])), b["r"])
+    pygame.display.flip()
+    clock.tick(60)
+`,
+
+  "Arrow-key square": String.raw`# Click the canvas first so it gets keyboard focus!
+import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((640, 480))
+clock = pygame.time.Clock()
+
+x, y, size, speed = 320.0, 240.0, 36, 5
+trail = []
+
+while True:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise SystemExit
+
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT]:  x -= speed
+    if keys[pygame.K_RIGHT]: x += speed
+    if keys[pygame.K_UP]:    y -= speed
+    if keys[pygame.K_DOWN]:  y += speed
+    x = max(size, min(640 - size, x))
+    y = max(size, min(480 - size, y))
+
+    trail.append((x, y))
+    if len(trail) > 30:
+        trail.pop(0)
+
+    screen.fill((14, 16, 22))
+    for i, (tx, ty) in enumerate(trail):
+        s = int(size * i / len(trail))
+        pygame.draw.rect(screen, (40 + 5 * i, 60, 90),
+                         (tx - s / 2, ty - s / 2, s, s), border_radius=6)
+    pygame.draw.rect(screen, (120, 220, 160),
+                     (x - size / 2, y - size / 2, size, size), border_radius=8)
+    pygame.display.flip()
+    clock.tick(60)
+`,
+
+  "Mouse painter": String.raw`# Hold the mouse button and drag to paint. Press C to clear.
+import pygame, math
+
+pygame.init()
+screen = pygame.display.set_mode((640, 480))
+clock = pygame.time.Clock()
+screen.fill((16, 16, 22))
+hue = 0
+
+while True:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise SystemExit
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_c:
+            screen.fill((16, 16, 22))
+
+    if pygame.mouse.get_pressed()[0]:
+        mx, my = pygame.mouse.get_pos()
+        hue = (hue + 2) % 360
+        color = pygame.Color(0)
+        color.hsva = (hue, 90, 100, 100)
+        pygame.draw.circle(screen, color, (mx, my), 12)
+
+    pygame.display.flip()
+    clock.tick(120)
+`,
+
+  "Starfield": String.raw`import pygame, random
+
+pygame.init()
+W, H = 640, 480
+screen = pygame.display.set_mode((W, H))
+clock = pygame.time.Clock()
+
+stars = [[random.uniform(-W, W), random.uniform(-H, H), random.uniform(1, W)]
+         for _ in range(220)]
+
+while True:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise SystemExit
+
+    screen.fill((4, 5, 12))
+    for s in stars:
+        s[2] -= 6
+        if s[2] <= 1:
+            s[0], s[1], s[2] = random.uniform(-W, W), random.uniform(-H, H), W
+        sx = int(W / 2 + s[0] / s[2] * 240)
+        sy = int(H / 2 + s[1] / s[2] * 240)
+        if 0 <= sx < W and 0 <= sy < H:
+            b = int(255 * (1 - s[2] / W))
+            r = 2 if s[2] < W / 3 else 1
+            pygame.draw.circle(screen, (b, b, min(255, b + 40)), (sx, sy), r)
+
+    pygame.display.flip()
+    clock.tick(60)
+`,
+
+  "Snake": String.raw`# Arrow keys to steer. R restarts after game over. (Click the canvas first!)
+import pygame, random
+
+CELL, COLS, ROWS = 20, 32, 24
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((COLS * CELL, ROWS * CELL))
+    clock = pygame.time.Clock()
+    font = pygame.font.Font(None, 42)
+
+    while True:  # one iteration per game
+        snake = [(COLS // 2, ROWS // 2)]
+        d = (1, 0)
+        food = (random.randrange(COLS), random.randrange(ROWS))
+        score, alive = 0, True
+
+        while alive:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    raise SystemExit
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_LEFT  and d != (1, 0):  d = (-1, 0)
+                    if event.key == pygame.K_RIGHT and d != (-1, 0): d = (1, 0)
+                    if event.key == pygame.K_UP    and d != (0, 1):  d = (0, -1)
+                    if event.key == pygame.K_DOWN  and d != (0, -1): d = (0, 1)
+
+            head = (snake[0][0] + d[0], snake[0][1] + d[1])
+            if (head in snake or not (0 <= head[0] < COLS) or not (0 <= head[1] < ROWS)):
+                alive = False
+            else:
+                snake.insert(0, head)
+                if head == food:
+                    score += 1
+                    food = (random.randrange(COLS), random.randrange(ROWS))
+                else:
+                    snake.pop()
+
+            screen.fill((15, 18, 15))
+            fx, fy = food
+            pygame.draw.rect(screen, (235, 90, 90), (fx * CELL + 2, fy * CELL + 2, CELL - 4, CELL - 4), border_radius=6)
+            for i, (sx, sy) in enumerate(snake):
+                g = max(90, 210 - i * 6)
+                pygame.draw.rect(screen, (70, g, 90), (sx * CELL + 1, sy * CELL + 1, CELL - 2, CELL - 2), border_radius=4)
+            img = font.render(str(score), True, (200, 210, 200))
+            screen.blit(img, (10, 6))
+            pygame.display.flip()
+            clock.tick(9 + score // 3)
+
+        # game over screen
+        img = font.render(f"Game over — {score} points. Press R", True, (240, 220, 180))
+        screen.blit(img, img.get_rect(center=(COLS * CELL // 2, ROWS * CELL // 2)))
+        pygame.display.flip()
+        waiting = True
+        while waiting:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    raise SystemExit
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                    waiting = False
+            clock.tick(30)
+
+main()
+`,
+};
+
+// ---------------------------------------------------------------- python bootstrap
+const BOOT_PY = String.raw`
+import sys, os, ast, asyncio, traceback, copy
+
+import pygame
+
+_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0}
+
+_orig_flip = pygame.display.flip
+def _flip(*a, **k):
+    _state["flipped"] = True
+    return _orig_flip(*a, **k)
+pygame.display.flip = _flip
+
+_orig_update = pygame.display.update
+def _update(*a, **k):
+    _state["flipped"] = True
+    return _orig_update(*a, **k)
+pygame.display.update = _update
+
+class _Clock:
+    """Clock whose tick() never busy-waits: it banks the frame budget and the
+    injected loop yield sleeps it off cooperatively."""
+    def __init__(self):
+        self._last = pygame.time.get_ticks()
+        self._dt = 0
+    def tick(self, fps=0):
+        now = pygame.time.get_ticks()
+        self._dt = now - self._last
+        self._last = now
+        _state["ticked"] = True
+        if fps:
+            _state["delay"] = max(0.0, 1.0 / fps - self._dt / 1000.0)
+        return self._dt
+    tick_busy_loop = tick
+    def get_time(self): return self._dt
+    def get_rawtime(self): return self._dt
+    def get_fps(self):
+        return 1000.0 / self._dt if self._dt else 0.0
+pygame.time.Clock = _Clock
+
+def _delay(ms):
+    _state["delay"] += ms / 1000.0
+    return int(ms)
+pygame.time.delay = _delay
+pygame.time.wait = _delay
+
+async def __yield__():
+    d, t, f = _state["delay"], _state["ticked"], _state["flipped"]
+    _state["delay"] = 0.0
+    _state["ticked"] = False
+    _state["flipped"] = False
+    if d > 0:
+        await asyncio.sleep(d)
+    elif t:
+        await asyncio.sleep(0)
+    elif f:
+        await asyncio.sleep(1 / 60)       # flip but no tick: default to ~60fps
+    else:
+        _state["n"] += 1
+        if _state["n"] % 256 == 0:        # plain compute loop: yield occasionally
+            await asyncio.sleep(0)
+
+_YIELD = ast.parse("await __yield__()").body[0]
+
+def _walk_shallow(node):
+    """Walk child nodes without entering nested function/class scopes."""
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        n = stack.pop()
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(n))
+
+def _is_gameloop(w):
+    for n in _walk_shallow(w):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            if n.func.attr in ("flip", "tick", "tick_busy_loop"):
+                return True
+            if (n.func.attr == "update" and isinstance(n.func.value, ast.Attribute)
+                    and n.func.value.attr == "display"):
+                return True
+            if (n.func.attr in ("get", "poll", "wait") and isinstance(n.func.value, ast.Attribute)
+                    and n.func.value.attr == "event"):
+                return True
+    return False
+
+class _Asyncify(ast.NodeTransformer):
+    """def f(): while ...flip()...  ->  async def f(), remembering names."""
+    def __init__(self):
+        self.converted = set()
+    def visit_ClassDef(self, node):
+        return node
+    def visit_FunctionDef(self, node):
+        for n in _walk_shallow(node):
+            if isinstance(n, ast.While) and _is_gameloop(n):
+                self.converted.add(node.name)
+                new = ast.AsyncFunctionDef(
+                    name=node.name, args=node.args, body=node.body,
+                    decorator_list=node.decorator_list, returns=node.returns,
+                    type_comment=None)
+                return ast.copy_location(new, node)
+        return node
+
+class _AwaitCalls(ast.NodeTransformer):
+    """main() -> await main() for converted functions; asyncio.run(x) -> await x.
+    Only in async-capable contexts (module level / async defs)."""
+    def __init__(self, names):
+        self.names = names
+    def visit_FunctionDef(self, node):
+        return node
+    def visit_ClassDef(self, node):
+        return node
+    def visit_Expr(self, node):
+        self.generic_visit(node)
+        v = node.value
+        if isinstance(v, ast.Call):
+            f = v.func
+            if (isinstance(f, ast.Attribute) and f.attr == "run"
+                    and isinstance(f.value, ast.Name) and f.value.id == "asyncio" and v.args):
+                node.value = ast.copy_location(ast.Await(value=v.args[0]), v)
+            elif isinstance(f, ast.Name) and f.id in self.names:
+                node.value = ast.copy_location(ast.Await(value=v), v)
+        return node
+
+class _InjectYield(ast.NodeTransformer):
+    """Append 'await __yield__()' to every while-loop body in async contexts."""
+    def visit_FunctionDef(self, node):
+        return node
+    def visit_ClassDef(self, node):
+        return node
+    def visit_While(self, node):
+        self.generic_visit(node)
+        node.body = node.body + [copy.deepcopy(_YIELD)]
+        return node
+
+def _transform(src):
+    tree = ast.parse(src)
+    a = _Asyncify()
+    tree = a.visit(tree)
+    tree = _AwaitCalls(a.converted).visit(tree)
+    tree = _InjectYield().visit(tree)
+    ast.fix_missing_locations(tree)
+    return compile(tree, "<your code>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+
+async def _run(src):
+    glb = {"__name__": "__main__", "__yield__": __yield__, "__builtins__": __builtins__}
+    try:
+        code = _transform(src)
+    except SyntaxError:
+        traceback.print_exc(limit=0)
+        return "error"
+    try:
+        if pygame.get_init():
+            pygame.event.clear()
+        res = eval(code, glb)
+        if asyncio.iscoroutine(res):
+            await res
+        return "ok"
+    except asyncio.CancelledError:
+        return "stopped"
+    except SystemExit:
+        return "exit"
+    except BaseException:
+        traceback.print_exc()
+        return "error"
+
+def _start(src):
+    old = _state["task"]
+    if old is not None and not old.done():
+        old.cancel()
+    _state["delay"] = 0.0
+    _state["flipped"] = False
+    _state["ticked"] = False
+    _state["n"] = 0
+    t = asyncio.ensure_future(_run(src))
+    _state["task"] = t
+    return t
+
+def _stop():
+    t = _state["task"]
+    if t is not None and not t.done():
+        t.cancel()
+        return True
+    return False
+`;
+
+// ---------------------------------------------------------------- UI plumbing
+const consoleEl = document.getElementById("console");
+const statusEl = document.getElementById("status");
+const canvasEl = document.getElementById("canvas");
+
+function logLine(text, cls) {
+  const div = document.createElement("div");
+  if (cls) div.className = cls;
+  div.textContent = text;
+  consoleEl.appendChild(div);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+function clearConsole() { consoleEl.textContent = ""; }
+function setStatus(cls, text) { statusEl.className = cls; statusEl.textContent = text; }
+
+const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
+  mode: "python", theme: "material-darker", lineNumbers: true,
+  indentUnit: 4, viewportMargin: Infinity,
+  extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
+});
+
+const exampleSel = document.getElementById("examples");
+for (const name of Object.keys(EXAMPLES)) {
+  const opt = document.createElement("option");
+  opt.value = opt.textContent = name;
+  exampleSel.appendChild(opt);
+}
+let loadedExample = EXAMPLES[exampleSel.value];
+editor.setValue(loadedExample);
+exampleSel.addEventListener("change", () => {
+  if (editor.getValue() !== loadedExample &&
+      !confirm("Replace your current code with the example?")) {
+    return;
+  }
+  loadedExample = EXAMPLES[exampleSel.value];
+  editor.setValue(loadedExample);
+  run();
+});
+
+// ---------------------------------------------------------------- pyodide boot
+const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
+let pyodide = null;
+let runTask = null;
+
+async function boot() {
+  setStatus("boot", "loading Python…");
+  const mod = await import(PYODIDE_BASE + "pyodide.mjs");
+  pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
+  pyodide.setStdout({ batched: (s) => logLine(s, "out") });
+  pyodide.setStderr({ batched: (s) => logLine(s, "err") });
+  // Register the canvas with SDL BEFORE pygame is imported (load-bearing order),
+  // and scope SDL's keyboard capture to the canvas so the editor keeps working.
+  if (pyodide.canvas && pyodide.canvas.setCanvas2D) {
+    pyodide.canvas.setCanvas2D(canvasEl);
+  } else {
+    pyodide._module.canvas = canvasEl;
+  }
+  pyodide.runPython(
+    'import os; os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"');
+  setStatus("boot", "loading pygame…");
+  await pyodide.loadPackage("pygame-ce");
+  await pyodide.runPythonAsync(BOOT_PY);
+  setStatus("ready", "ready");
+}
+const booted = boot().catch((e) => {
+  setStatus("error", "boot failed");
+  logLine(String(e), "err");
+  throw e;
+});
+
+// ---------------------------------------------------------------- run / stop
+async function run() {
+  try { await booted; } catch { return; }
+  clearConsole();
+  canvasEl.focus();
+  const start = pyodide.globals.get("_start");
+  const task = start(editor.getValue());
+  start.destroy();
+  runTask = task;
+  setStatus("running", "running");
+  task.then((kind) => {
+    if (runTask !== task) return;
+    if (kind === "error") setStatus("error", "error — see console");
+    else if (kind === "stopped") { setStatus("ready", "stopped"); logLine("— stopped —", "sys"); }
+    else { setStatus("ready", "finished"); logLine("— program finished —", "sys"); }
+  }).catch(() => {
+    if (runTask === task) setStatus("ready", "stopped");
+  });
+}
+
+document.getElementById("runBtn").addEventListener("click", run);
+document.getElementById("stopBtn").addEventListener("click", () => {
+  if (pyodide) pyodide.runPython("_stop()");
+});
+
+// Run the default example as soon as Python is up.
+booted.then(run).catch(() => {});
+</script>
+</body>
+</html>

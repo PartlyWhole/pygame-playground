@@ -69,6 +69,7 @@
   <select id="examples" title="Load an example"></select>
   <button id="runBtn">▶ Run</button>
   <button id="stopBtn">■ Stop</button>
+  <button id="shareBtn" title="Copy a link that opens this code">🔗 Share</button>
   <span class="hint"><kbd>⌘</kbd>+<kbd>↩</kbd> runs · click canvas for keyboard</span>
   <span id="status" class="boot">starting…</span>
 </header>
@@ -563,8 +564,32 @@ for (const name of Object.keys(EXAMPLES)) {
   opt.value = opt.textContent = name;
   exampleSel.appendChild(opt);
 }
-let loadedExample = EXAMPLES[exampleSel.value];
+function codeFromHash() {
+  if (!location.hash.startsWith("#code=")) return null;
+  try {
+    const b64 = location.hash.slice(6).replace(/-/g, "+").replace(/_/g, "/");
+    return decodeURIComponent(escape(atob(b64)));
+  } catch {
+    return null;
+  }
+}
+let loadedExample = codeFromHash() ?? EXAMPLES[exampleSel.value];
 editor.setValue(loadedExample);
+
+document.getElementById("shareBtn").addEventListener("click", async () => {
+  const b64 = btoa(unescape(encodeURIComponent(editor.getValue())))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const url = location.origin + location.pathname + "#code=" + b64;
+  history.replaceState(null, "", url);
+  const btn = document.getElementById("shareBtn");
+  try {
+    await navigator.clipboard.writeText(url);
+    btn.textContent = "✓ copied";
+  } catch {
+    btn.textContent = "✓ in URL bar";
+  }
+  setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
+});
 exampleSel.addEventListener("change", () => {
   if (editor.getValue() !== loadedExample &&
       !confirm("Replace your current code with the example?")) {

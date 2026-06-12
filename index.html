@@ -458,62 +458,55 @@ main()
 
 // ---------------------------------------------------------------- python bootstrap
 const BOOT_PY = String.raw`
-import sys, os, ast, asyncio, traceback, copy
+import os, ast, asyncio, traceback, copy, time as _time
 
 import pygame
 
 _state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0}
 
-_orig_flip = pygame.display.flip
-def _flip(*a, **k):
-    _state["flipped"] = True
-    return _orig_flip(*a, **k)
-pygame.display.flip = _flip
+def _flag_flip(fn):
+    def wrapper(*a, **k):
+        _state["flipped"] = True
+        return fn(*a, **k)
+    return wrapper
 
-_orig_update = pygame.display.update
-def _update(*a, **k):
-    _state["flipped"] = True
-    return _orig_update(*a, **k)
-pygame.display.update = _update
+pygame.display.flip = _flag_flip(pygame.display.flip)
+pygame.display.update = _flag_flip(pygame.display.update)
 
 class _Clock:
-    """Clock whose tick() never busy-waits: it banks the frame budget and the
-    injected loop yield sleeps it off cooperatively."""
+    """tick() never busy-waits: it banks the frame budget, which the injected
+    loop yield sleeps off cooperatively."""
     def __init__(self):
         self._last = pygame.time.get_ticks()
         self._dt = 0
     def tick(self, fps=0):
         now = pygame.time.get_ticks()
-        self._dt = now - self._last
-        self._last = now
+        self._dt, self._last = now - self._last, now
         _state["ticked"] = True
         if fps:
             _state["delay"] = max(0.0, 1.0 / fps - self._dt / 1000.0)
         return self._dt
     tick_busy_loop = tick
     def get_time(self): return self._dt
-    def get_rawtime(self): return self._dt
-    def get_fps(self):
-        return 1000.0 / self._dt if self._dt else 0.0
+    get_rawtime = get_time
+    def get_fps(self): return 1000.0 / self._dt if self._dt else 0.0
 pygame.time.Clock = _Clock
 
-def _delay(ms):
-    _state["delay"] += ms / 1000.0
-    return int(ms)
-pygame.time.delay = _delay
-pygame.time.wait = _delay
-
-# Pyodide's time.sleep busy-waits on the browser main thread and freezes the
-# whole page. Statement-level sleeps are rewritten to real awaits by
-# _AsyncSleeps below; this banking fallback covers sleeps in sync helper
-# functions so nothing can ever block the tab.
-import time as _time_mod
-def _bank_sleep(secs):
+# Pyodide's time.sleep busy-waits the browser main thread. Statement-level
+# sleeps become real awaits via _Awaiter below; banking is the no-freeze
+# fallback for sleeps buried in sync helper functions.
+def _bank(secs):
     try:
         _state["delay"] += max(0.0, float(secs))
     except Exception:
         pass
-_time_mod.sleep = _bank_sleep
+
+def _wait_ms(ms):
+    _bank(ms / 1000.0)
+    return int(ms)
+
+pygame.time.delay = pygame.time.wait = _wait_ms
+_time.sleep = _bank
 
 async def __sleep__(secs):
     try:
@@ -523,25 +516,25 @@ async def __sleep__(secs):
     await asyncio.sleep(secs)
 
 async def __yield__():
-    d, t, f = _state["delay"], _state["ticked"], _state["flipped"]
-    _state["delay"] = 0.0
-    _state["ticked"] = False
-    _state["flipped"] = False
+    d, ticked, flipped = _state["delay"], _state["ticked"], _state["flipped"]
+    _state.update(delay=0.0, ticked=False, flipped=False)
     if d > 0:
         await asyncio.sleep(d)
-    elif t:
+    elif ticked:
         await asyncio.sleep(0)
-    elif f:
+    elif flipped:
         await asyncio.sleep(1 / 60)       # flip but no tick: default to ~60fps
     else:
         _state["n"] += 1
         if _state["n"] % 256 == 0:        # plain compute loop: yield occasionally
             await asyncio.sleep(0)
 
+# ---- source transform: plain pygame code -> cooperative async ----
+
 _YIELD = ast.parse("await __yield__()").body[0]
 
-def _walk_shallow(node):
-    """Walk child nodes without entering nested function/class scopes."""
+def _shallow(node):
+    """Walk child nodes without crossing into nested function/class scopes."""
     stack = list(ast.iter_child_nodes(node))
     while stack:
         n = stack.pop()
@@ -549,123 +542,95 @@ def _walk_shallow(node):
         if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             stack.extend(ast.iter_child_nodes(n))
 
-def _is_gameloop(w):
-    for n in _walk_shallow(w):
+def _is_gameloop(loop):
+    for n in _shallow(loop):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-            if n.func.attr in ("flip", "tick", "tick_busy_loop"):
-                return True
-            if (n.func.attr == "update" and isinstance(n.func.value, ast.Attribute)
-                    and n.func.value.attr == "display"):
-                return True
-            if (n.func.attr in ("get", "poll", "wait") and isinstance(n.func.value, ast.Attribute)
-                    and n.func.value.attr == "event"):
+            f = n.func
+            owner = f.value.attr if isinstance(f.value, ast.Attribute) else None
+            if (f.attr in ("flip", "tick", "tick_busy_loop")
+                    or (f.attr, owner) == ("update", "display")
+                    or (f.attr in ("get", "poll", "wait") and owner == "event")):
                 return True
     return False
 
-class _Asyncify(ast.NodeTransformer):
+def _time_names(tree):
+    """Names the user's code binds to the time module / time.sleep."""
+    mods, sleeps = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            mods.update(a.asname or "time" for a in n.names if a.name == "time")
+        elif isinstance(n, ast.ImportFrom) and n.module == "time":
+            sleeps.update(a.asname or "sleep" for a in n.names if a.name == "sleep")
+    return mods, sleeps
+
+class _SyncBarrier(ast.NodeTransformer):
+    """Base for the passes below: never descend into sync defs or classes,
+    where an inserted await would be a syntax error."""
+    def visit_FunctionDef(self, node): return node
+    def visit_ClassDef(self, node): return node
+
+class _Asyncify(_SyncBarrier):
     """def f(): while ...flip()...  ->  async def f(), remembering names."""
     def __init__(self):
         self.converted = set()
-    def visit_ClassDef(self, node):
-        return node
     def visit_FunctionDef(self, node):
-        for n in _walk_shallow(node):
-            if isinstance(n, ast.While) and _is_gameloop(n):
-                self.converted.add(node.name)
-                new = ast.AsyncFunctionDef(
-                    name=node.name, args=node.args, body=node.body,
-                    decorator_list=node.decorator_list, returns=node.returns,
-                    type_comment=None)
-                return ast.copy_location(new, node)
+        if any(isinstance(n, ast.While) and _is_gameloop(n) for n in _shallow(node)):
+            node.__class__ = ast.AsyncFunctionDef
+            self.converted.add(node.name)
         return node
 
-class _AwaitCalls(ast.NodeTransformer):
-    """main() -> await main() for converted functions; asyncio.run(x) -> await x.
-    Only in async-capable contexts (module level / async defs)."""
-    def __init__(self, names):
-        self.names = names
-    def visit_FunctionDef(self, node):
-        return node
-    def visit_ClassDef(self, node):
-        return node
+class _Awaiter(_SyncBarrier):
+    """Statement-level rewrites in async contexts:
+       main()                        -> await main()      (converted functions)
+       asyncio.run(x)                -> await x
+       time.sleep(s)                 -> await __sleep__(s)
+       pygame.time.wait|delay(ms)    -> await __sleep__(ms / 1000)"""
+    def __init__(self, converted, time_mods, sleep_names):
+        self.converted, self.time_mods, self.sleep_names = converted, time_mods, sleep_names
+    @staticmethod
+    def _sleep(secs):
+        return ast.Call(func=ast.Name("__sleep__", ast.Load()), args=[secs], keywords=[])
     def visit_Expr(self, node):
         self.generic_visit(node)
         v = node.value
-        if isinstance(v, ast.Call):
-            f = v.func
-            if (isinstance(f, ast.Attribute) and f.attr == "run"
-                    and isinstance(f.value, ast.Name) and f.value.id == "asyncio" and v.args):
-                node.value = ast.copy_location(ast.Await(value=v.args[0]), v)
-            elif isinstance(f, ast.Name) and f.id in self.names:
-                node.value = ast.copy_location(ast.Await(value=v), v)
+        if not isinstance(v, ast.Call):
+            return node
+        f, simple = v.func, len(v.args) == 1 and not v.keywords
+        target = None
+        if isinstance(f, ast.Name):
+            if f.id in self.converted:
+                target = v
+            elif simple and f.id in self.sleep_names:
+                target = self._sleep(v.args[0])
+        elif isinstance(f, ast.Attribute):
+            owner = f.value
+            if f.attr == "run" and isinstance(owner, ast.Name) and owner.id == "asyncio" and v.args:
+                target = v.args[0]
+            elif simple and f.attr == "sleep" and isinstance(owner, ast.Name) and owner.id in self.time_mods:
+                target = self._sleep(v.args[0])
+            elif simple and f.attr in ("wait", "delay") and isinstance(owner, ast.Attribute) and owner.attr == "time":
+                target = self._sleep(ast.BinOp(left=v.args[0], op=ast.Div(), right=ast.Constant(1000.0)))
+        if target is not None:
+            node.value = ast.copy_location(ast.Await(value=target), v)
         return node
 
-def _time_import_names(tree):
-    """Names the user's code binds to the time module / time.sleep."""
-    time_aliases, sleep_names = set(), set()
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Import):
-            for a in n.names:
-                if a.name == "time":
-                    time_aliases.add(a.asname or "time")
-        elif isinstance(n, ast.ImportFrom) and n.module == "time":
-            for a in n.names:
-                if a.name == "sleep":
-                    sleep_names.add(a.asname or "sleep")
-    return time_aliases, sleep_names
-
-class _AsyncSleeps(ast.NodeTransformer):
-    """Statement-level time.sleep(x) / pygame.time.wait(ms) / pygame.time.delay(ms)
-    become real cooperative awaits in async contexts, so 'draw once then sleep'
-    programs pause visibly instead of freezing the tab."""
-    def __init__(self, time_aliases, sleep_names):
-        self.time_aliases = time_aliases
-        self.sleep_names = sleep_names
-    def visit_FunctionDef(self, node):
-        return node
-    def visit_ClassDef(self, node):
-        return node
-    def visit_Expr(self, node):
-        v = node.value
-        if isinstance(v, ast.Call) and len(v.args) == 1 and not v.keywords:
-            f = v.func
-            secs = None
-            if isinstance(f, ast.Name) and f.id in self.sleep_names:
-                secs = v.args[0]
-            elif isinstance(f, ast.Attribute):
-                if (f.attr == "sleep" and isinstance(f.value, ast.Name)
-                        and f.value.id in self.time_aliases):
-                    secs = v.args[0]
-                elif (f.attr in ("wait", "delay") and isinstance(f.value, ast.Attribute)
-                        and f.value.attr == "time"):
-                    secs = ast.BinOp(left=v.args[0], op=ast.Div(),
-                                     right=ast.Constant(value=1000.0))
-            if secs is not None:
-                node.value = ast.copy_location(ast.Await(value=ast.Call(
-                    func=ast.Name(id="__sleep__", ctx=ast.Load()),
-                    args=[secs], keywords=[])), v)
-        return node
-
-class _InjectYield(ast.NodeTransformer):
-    """Append 'await __yield__()' to every while-loop body in async contexts."""
-    def visit_FunctionDef(self, node):
-        return node
-    def visit_ClassDef(self, node):
-        return node
+class _InjectYield(_SyncBarrier):
+    """Append 'await __yield__()' to every while-body in async contexts."""
     def visit_While(self, node):
         self.generic_visit(node)
-        node.body = node.body + [copy.deepcopy(_YIELD)]
+        node.body.append(copy.deepcopy(_YIELD))
         return node
 
 def _transform(src):
     tree = ast.parse(src)
-    a = _Asyncify()
-    tree = a.visit(tree)
-    tree = _AwaitCalls(a.converted).visit(tree)
-    tree = _AsyncSleeps(*_time_import_names(tree)).visit(tree)
+    asyncify = _Asyncify()
+    tree = asyncify.visit(tree)
+    tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
     tree = _InjectYield().visit(tree)
     ast.fix_missing_locations(tree)
     return compile(tree, "<your code>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+
+# ---- run management ----
 
 async def _run(src):
     glb = {"__name__": "__main__", "__yield__": __yield__, "__sleep__": __sleep__,
@@ -691,20 +656,14 @@ async def _run(src):
         return "error"
 
 def _start(src):
-    old = _state["task"]
-    if old is not None and not old.done():
-        old.cancel()
-    _state["delay"] = 0.0
-    _state["flipped"] = False
-    _state["ticked"] = False
-    _state["n"] = 0
-    t = asyncio.ensure_future(_run(src))
-    _state["task"] = t
-    return t
+    _stop()
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0)
+    _state["task"] = asyncio.ensure_future(_run(src))
+    return _state["task"]
 
 def _stop():
     t = _state["task"]
-    if t is not None and not t.done():
+    if t and not t.done():
         t.cancel()
         return True
     return False
@@ -737,11 +696,13 @@ for (const name of Object.keys(EXAMPLES)) {
   opt.value = opt.textContent = name;
   exampleSel.appendChild(opt);
 }
+const b64url = {
+  enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+  dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))),
+};
 function codeFromHash() {
-  if (!location.hash.startsWith("#code=")) return null;
   try {
-    const b64 = location.hash.slice(6).replace(/-/g, "+").replace(/_/g, "/");
-    return decodeURIComponent(escape(atob(b64)));
+    return location.hash.startsWith("#code=") ? b64url.dec(location.hash.slice(6)) : null;
   } catch {
     return null;
   }
@@ -749,18 +710,11 @@ function codeFromHash() {
 let loadedExample = codeFromHash() ?? EXAMPLES[exampleSel.value];
 editor.setValue(loadedExample);
 
-document.getElementById("shareBtn").addEventListener("click", async () => {
-  const b64 = btoa(unescape(encodeURIComponent(editor.getValue())))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const url = location.origin + location.pathname + "#code=" + b64;
+document.getElementById("shareBtn").addEventListener("click", async (e) => {
+  const url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());
   history.replaceState(null, "", url);
-  const btn = document.getElementById("shareBtn");
-  try {
-    await navigator.clipboard.writeText(url);
-    btn.textContent = "✓ copied";
-  } catch {
-    btn.textContent = "✓ in URL bar";
-  }
+  const btn = e.currentTarget;
+  btn.textContent = await navigator.clipboard.writeText(url).then(() => "✓ copied", () => "✓ in URL bar");
   setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
 });
 exampleSel.addEventListener("change", () => {
@@ -816,9 +770,9 @@ async function run() {
   setStatus("running", "running");
   task.then((kind) => {
     if (runTask !== task) return;
-    if (kind === "error") setStatus("error", "error — see console");
-    else if (kind === "stopped") { setStatus("ready", "stopped"); logLine("— stopped —", "sys"); }
-    else { setStatus("ready", "finished"); logLine("— program finished —", "sys"); }
+    if (kind === "error") return setStatus("error", "error — see console");
+    setStatus("ready", kind === "stopped" ? "stopped" : "finished");
+    logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {
     if (runTask === task) setStatus("ready", "stopped");
   });

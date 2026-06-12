@@ -86,6 +86,179 @@
 <script>
 // ---------------------------------------------------------------- examples
 const EXAMPLES = {
+  "Swimming fish": String.raw`# PartlyWhole — two fish swimming in circles (procedural chain animation).
+# Move the mouse over the canvas and they follow it.
+import pygame, math, random
+
+W, H = 640, 480
+S = 0.26                 # fish scale
+TAU = math.tau
+
+pygame.init()
+screen = pygame.display.set_mode((W, H))
+pygame.display.set_caption("PartlyWhole - swimming in circles")
+clock = pygame.time.Clock()
+overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+
+def polar(angle, length=1.0):
+    return pygame.Vector2(math.cos(angle), math.sin(angle)) * length
+
+def wrap(angle):         # wrap to (-pi, pi]
+    return (angle + math.pi) % TAU - math.pi
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+def smooth(pts, steps=6):    # closed Catmull-Rom spline through pts
+    out = []
+    for i in range(len(pts)):
+        p0, p1, p2, p3 = pts[i - 1], pts[i], pts[(i + 1) % len(pts)], pts[(i + 2) % len(pts)]
+        for k in range(steps):
+            t = k / steps
+            out.append(0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
+                              + (3 * p1 - 3 * p2 + p3 - p0) * t ** 3))
+    return out
+
+def ellipse(c, rx, ry, rot, steps=18):
+    return [c + pygame.Vector2(rx * math.cos(k * TAU / steps),
+                               ry * math.sin(k * TAU / steps)).rotate_rad(rot)
+            for k in range(steps)]
+
+def draw_shape(pts, color):
+    pygame.draw.polygon(screen, color, pts)
+    pygame.draw.aalines(screen, (170, 185, 200), True, pts)
+
+class Chain:             # joints trail the head, bending at most self.bend per link
+    def __init__(self, n, link, bend):
+        self.link, self.bend = link, bend
+        self.joints = [pygame.Vector2(W / 2, H / 2 + i * link) for i in range(n)]
+        self.angles = [0.0] * n
+
+    def resolve(self, head):
+        d = head - self.joints[0]
+        self.angles[0] = math.atan2(d.y, d.x)
+        self.joints[0] = pygame.Vector2(head)
+        for i in range(1, len(self.joints)):
+            d = self.joints[i - 1] - self.joints[i]
+            want = math.atan2(d.y, d.x)
+            self.angles[i] = self.angles[i - 1] + clamp(wrap(want - self.angles[i - 1]),
+                                                        -self.bend, self.bend)
+            self.joints[i] = self.joints[i - 1] - polar(self.angles[i], self.link)
+
+class Fish:
+    WIDTHS = [w * S for w in (68, 81, 84, 83, 77, 64, 51, 38, 32, 19)]
+
+    def __init__(self, hue):
+        self.hue = hue
+        self.heading = 0.0
+        self.spine = Chain(12, 64 * S, math.pi / 8)
+
+    def side(self, i, off, extra=0.0):   # point on the body edge at joint i
+        return self.spine.joints[i] + polar(self.spine.angles[i] + off, self.WIDTHS[i] + extra)
+
+    def swim(self, target):              # turn-rate-limited pursuit
+        head = self.spine.joints[0]
+        d = target - head
+        self.heading += clamp(wrap(math.atan2(d.y, d.x) - self.heading), -0.04, 0.04)
+        self.spine.resolve(head + polar(self.heading, min(d.length(), 8 * S)))
+
+    def draw(self):
+        j, a = self.spine.joints, self.spine.angles
+        body, fin = pygame.Color(0), pygame.Color(0)
+        body.hsva = (self.hue % 360, 85, 72, 100)
+        fin.hsva = (self.hue % 360, 55, 85, 100)
+        curve = wrap(a[6] - a[0]) + wrap(a[11] - a[6])   # spine curvature bends the fins
+
+        for s in (1, -1):                                # pectoral + ventral fin pairs
+            draw_shape(ellipse(self.side(3, s * math.pi / 3), 80 * S, 32 * S, a[2] - s * math.pi / 4), fin)
+            draw_shape(ellipse(self.side(7, s * math.pi / 2), 48 * S, 16 * S, a[6] - s * math.pi / 4), fin)
+
+        tail = [j[i] + polar(a[i] - math.pi / 2, 1.5 * curve * (i - 8) ** 2) for i in range(8, 12)]
+        tail += [j[i] + polar(a[i] + math.pi / 2, clamp(curve * 6, -13 * S, 13 * S)) for i in (11, 10, 9, 8)]
+        draw_shape(smooth(tail), fin)
+
+        outline = [self.side(i, math.pi / 2) for i in range(10)]   # body silhouette
+        outline.append(self.side(9, math.pi))
+        outline += [self.side(i, -math.pi / 2) for i in range(9, -1, -1)]
+        outline += [self.side(0, -math.pi / 6), self.side(0, 0, 4 * S), self.side(0, math.pi / 6)]
+        draw_shape(smooth(outline), body)
+
+        m1, m2 = wrap(a[6] - a[0]), wrap(a[7] - a[0])
+        dorsal = [j[4], j[5], j[6], j[7],
+                  j[6] + polar(a[6] + math.pi / 2, m2 * 16 * S),
+                  j[5] + polar(a[5] + math.pi / 2, m1 * 16 * S)]
+        draw_shape(smooth(dorsal), fin)
+
+class Bubble:
+    def __init__(self):
+        self.respawn()
+        self.y = random.uniform(0, H)
+
+    def respawn(self):
+        self.x, self.y = random.uniform(0, W), H + 10
+        self.r = random.uniform(1, 4)
+        self.speed = random.uniform(0.3, 1.1)
+        self.wobble = random.uniform(0, TAU)
+        self.alpha = random.randint(20, 60)
+
+    def update(self):
+        self.y -= self.speed
+        self.wobble += 0.02
+        self.x += math.sin(self.wobble) * 0.3
+        if self.y < -10:
+            self.respawn()
+        pygame.draw.circle(overlay, (180, 220, 255, self.alpha), (self.x, self.y), self.r, 1)
+
+def caustics(t):         # drifting light blobs on the water
+    for i in range(6):
+        c = pygame.Vector2(W * 0.3 + math.sin(t * 0.0003 + i * 1.2) * W * 0.3,
+                           H * 0.3 + math.cos(t * 0.0004 + i * 0.9) * H * 0.3)
+        r = 80 + math.sin(t * 0.001 + i) * 40
+        pygame.draw.polygon(overlay, (74, 143, 184, 8), ellipse(c, r, r * 0.6, t * 0.0001 + i))
+
+fish = [Fish(0), Fish(180)]
+bubbles = [Bubble() for _ in range(30)]
+ORBIT = (11 * 64 * S + max(Fish.WIDTHS) * 6) / math.pi   # two fish share the circle without overlap
+center = pygame.Vector2(W / 2, H / 2)
+label = pygame.font.Font(None, 26).render("PartlyWhole", True, (255, 255, 255))
+label.set_alpha(110)
+
+def swim_all(t):
+    for f, phase, woff in ((fish[1], math.pi, math.pi * 0.7), (fish[0], 0.0, 0.0)):
+        wiggle = math.sin(t * 0.003 + woff) * ORBIT * 0.08
+        f.swim(center + polar(t * 0.0009 + phase + 0.5, ORBIT + wiggle))
+
+for i in range(400):     # warm-up so the fish start mid-glide
+    swim_all(i * 16.0)
+
+t = 0.0
+mouse = pygame.Vector2(W / 2, H / 2)
+while True:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            raise SystemExit
+        if e.type == pygame.MOUSEMOTION:
+            mouse.update(e.pos)
+    center += (mouse - center) * 0.03
+
+    for f in fish:
+        f.hue += 0.2     # complementary pair drifts around the color wheel
+    swim_all(t)
+
+    screen.fill((10, 22, 40))
+    overlay.fill((0, 0, 0, 0))
+    caustics(t)
+    for b in bubbles:
+        b.update()
+    screen.blit(overlay, (0, 0))
+    for f in (fish[1], fish[0]):
+        f.draw()
+    screen.blit(label, (W / 2 - label.get_width() / 2, 14))
+
+    pygame.display.flip()
+    t += clock.tick(60)
+`,
+
   "Bouncy balls": String.raw`import pygame, random
 
 pygame.init()

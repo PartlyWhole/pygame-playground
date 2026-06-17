@@ -70,7 +70,7 @@
   <button id="runBtn">▶ Run</button>
   <button id="stopBtn">■ Stop</button>
   <button id="shareBtn" title="Copy a link that opens this code">🔗 Share</button>
-  <span class="hint"><kbd>⌘</kbd>+<kbd>↩</kbd> runs · click canvas for keyboard</span>
+  <span class="hint"><kbd>⌘</kbd><kbd>↩</kbd> run · <kbd>⌘</kbd><kbd>/</kbd> comment · <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> indent · click canvas for keys</span>
   <span id="status" class="boot">starting…</span>
 </header>
 <main>
@@ -83,6 +83,9 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
 <script>
 // ---------------------------------------------------------------- examples
 const EXAMPLES = {
@@ -686,8 +689,22 @@ function setStatus(cls, text) { statusEl.className = cls; statusEl.textContent =
 
 const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
   mode: "python", theme: "material-darker", lineNumbers: true,
-  indentUnit: 4, viewportMargin: Infinity,
-  extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
+  indentUnit: 4, indentWithTabs: false, viewportMargin: Infinity,
+  autoCloseBrackets: true, styleActiveLine: true,
+  extraKeys: {
+    "Cmd-Enter": run, "Ctrl-Enter": run,
+    "Tab": (cm) => cm.somethingSelected()
+      ? cm.indentSelection("add")
+      : cm.replaceSelection(" ".repeat(cm.getOption("indentUnit")), "end"),
+    "Shift-Tab": (cm) => cm.indentSelection("subtract"),
+    "Cmd-]": (cm) => cm.indentSelection("add"),
+    "Ctrl-]": (cm) => cm.indentSelection("add"),
+    "Cmd-[": (cm) => cm.indentSelection("subtract"),
+    "Ctrl-[": (cm) => cm.indentSelection("subtract"),
+    "Cmd-/": "toggleComment",
+    "Ctrl-/": "toggleComment",
+    "Cmd-Backspace": "delGroupBefore",
+  },
 });
 
 const exampleSel = document.getElementById("examples");

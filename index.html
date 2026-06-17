@@ -40,15 +40,26 @@
   #status.error { color: var(--bad); }
   #status.boot { color: var(--warn); }
   main { flex: 1 1 0; display: flex; min-height: 0; }
-  #editorPane { flex: 1 1 52%; min-width: 320px; border-right: 1px solid var(--edge); display: flex; }
+  #editorPane { flex: 0 1 52%; min-width: 240px; display: flex; overflow: hidden; }
   .CodeMirror { flex: 1; height: auto; font-size: 13.5px; }
-  #rightPane { flex: 1 1 48%; display: flex; flex-direction: column; min-width: 360px; }
+  #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--edge); }
+  #splitter:hover, #splitter.active { background: var(--accent); }
+  #rightPane { flex: 1 1 0; display: flex; flex-direction: column; min-width: 280px; }
   #stage {
-    flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
-    overflow: auto; background: #0e0f13; padding: 12px;
+    position: relative; flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: #0e0f13; padding: 12px;
   }
-  #canvas { background: #000; outline: none; border: 1px solid var(--edge); border-radius: 4px; }
-  #canvas:focus { border-color: var(--accent); }
+  /* canvas is sized by fitCanvas(): scaled to fill the stage, aspect ratio preserved.
+     border is a box-shadow so it adds no layout box and the scale stays exact. */
+  #canvas { background: #000; outline: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--edge); }
+  #canvas:focus { box-shadow: 0 0 0 1px var(--accent); }
+  #fsBtn {
+    position: absolute; bottom: 14px; right: 14px; padding: 3px 9px;
+    font-size: 15px; line-height: 1.2; background: rgba(38, 41, 54, 0.65);
+    opacity: 0.45; transition: opacity .15s;
+  }
+  #stage:hover #fsBtn { opacity: 1; }
+  body.resizing { cursor: col-resize; user-select: none; }
   #console {
     flex: 0 0 150px; overflow-y: auto; background: #121318;
     border-top: 1px solid var(--edge); padding: 8px 12px;
@@ -75,8 +86,12 @@
 </header>
 <main>
   <div id="editorPane"><textarea id="code"></textarea></div>
+  <div id="splitter" title="Drag to resize"></div>
   <div id="rightPane">
-    <div id="stage"><canvas id="canvas" width="640" height="480" tabindex="0"></canvas></div>
+    <div id="stage">
+      <canvas id="canvas" width="640" height="480" tabindex="0"></canvas>
+      <button id="fsBtn" title="Fullscreen">⛶</button>
+    </div>
     <div id="console"></div>
   </div>
 </main>
@@ -742,6 +757,60 @@ exampleSel.addEventListener("change", () => {
   loadedExample = EXAMPLES[exampleSel.value];
   editor.setValue(loadedExample);
   run();
+});
+
+// ---------------------------------------------------------------- layout: scale, resize, fullscreen
+const stageEl = document.getElementById("stage");
+const editorPaneEl = document.getElementById("editorPane");
+
+// Scale the canvas to fill the stage, preserving the pygame resolution's aspect ratio.
+function fitCanvas() {
+  const cs = getComputedStyle(stageEl);
+  const availW = stageEl.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const availH = stageEl.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const cw = canvasEl.width, ch = canvasEl.height;
+  if (cw > 0 && ch > 0 && availW > 0 && availH > 0) {
+    const scale = Math.min(availW / cw, availH / ch);
+    canvasEl.style.width = cw * scale + "px";
+    canvasEl.style.height = ch * scale + "px";
+  }
+}
+new ResizeObserver(fitCanvas).observe(stageEl);
+// pygame.display.set_mode() rewrites the canvas width/height attributes — refit when it does.
+new MutationObserver(fitCanvas).observe(canvasEl, { attributes: true, attributeFilter: ["width", "height"] });
+fitCanvas();
+
+// Draggable divider between the editor and the stage.
+const splitterEl = document.getElementById("splitter");
+splitterEl.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const left = document.querySelector("main").getBoundingClientRect().left;
+  splitterEl.setPointerCapture(e.pointerId);
+  splitterEl.classList.add("active");
+  document.body.classList.add("resizing");
+  const onMove = (ev) => {
+    const w = Math.max(240, Math.min(ev.clientX - left, window.innerWidth - 300));
+    editorPaneEl.style.flex = "0 1 " + w + "px";
+  };
+  const onUp = () => {
+    splitterEl.classList.remove("active");
+    document.body.classList.remove("resizing");
+    splitterEl.removeEventListener("pointermove", onMove);
+    splitterEl.removeEventListener("pointerup", onUp);
+    editor.refresh();
+  };
+  splitterEl.addEventListener("pointermove", onMove);
+  splitterEl.addEventListener("pointerup", onUp);
+});
+
+// Fullscreen the stage; fitCanvas re-runs via the ResizeObserver as the box changes.
+const fsBtn = document.getElementById("fsBtn");
+fsBtn.addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stageEl.requestFullscreen?.().catch(() => {});
+});
+document.addEventListener("fullscreenchange", () => {
+  fsBtn.textContent = document.fullscreenElement ? "⤡" : "⛶";   // compress ⇄ expand
 });
 
 // ---------------------------------------------------------------- pyodide boot

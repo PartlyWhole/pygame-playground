@@ -739,8 +739,21 @@ function codeFromHash() {
     return null;
   }
 }
-let loadedExample = codeFromHash() ?? EXAMPLES[exampleSel.value];
-editor.setValue(loadedExample);
+// Persist the editor to localStorage. Precedence on load: share link > saved > default.
+const STORAGE_KEY = "pygame-playground:code";
+const storage = {
+  get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
+  set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch {} },
+};
+let loadedExample = EXAMPLES[exampleSel.value];
+editor.setValue(codeFromHash() ?? storage.get() ?? loadedExample);
+
+let saveTimer = null;
+editor.on("change", () => {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => storage.set(editor.getValue()), 400);
+});
+addEventListener("beforeunload", () => storage.set(editor.getValue()));   // flush latest on close
 
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
   const url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());

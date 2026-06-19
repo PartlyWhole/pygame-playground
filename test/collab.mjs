@@ -15,5 +15,21 @@ try {
     .then(() => true, () => false);
   console.log('button lazy-loaded automerge:', loaded);
   if (!loaded) fail('automerge did not load on click');
-  console.log(process.exitCode ? 'TASK2 FAIL' : 'TASK2 OK');
+
+  // --- room create + join adopt ---
+  {
+    const A = await b.newPage();
+    await A.goto('http://localhost:8923/');
+    await A.waitForFunction(() => document.getElementById('collabBtn') !== null, null, { timeout: 30000 });
+    await A.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('seeded_by_A = 123'));
+    await A.click('#collabBtn');
+    const hash = await A.waitForFunction(() => location.hash.startsWith('#room=') ? location.hash : false, null, { timeout: 30000 }).then(h => h.jsonValue());
+    console.log('room hash:', hash.slice(0, 40) + '…');
+    const B = await b.newPage();
+    await B.goto('http://localhost:8923/' + hash);
+    await B.waitForFunction(() => document.querySelector('.CodeMirror')?.CodeMirror.getValue().includes('seeded_by_A'), null, { timeout: 30000 })
+      .then(() => console.log('JOIN OK: B adopted A code'), () => { console.error('JOIN FAIL'); process.exitCode = 1; });
+  }
+
+  console.log(process.exitCode ? 'TASK3 FAIL' : 'TASK3 OK');
 } finally { await b.close(); }

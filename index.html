@@ -752,15 +752,26 @@ const storage = {
   get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
   set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch {} },
 };
+// ---------------------------------------------------------------- collaboration (lazy) — declared early so joinRoom() can reference collab before the collab section below
+const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
+let _amCache = null;
+
 let loadedExample = EXAMPLES[exampleSel.value];
-editor.setValue(codeFromHash() ?? storage.get() ?? loadedExample);
+const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
+if (roomFromHash) {
+  editor.setValue(loadedExample);                       // placeholder until the doc arrives
+  joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
+} else {
+  editor.setValue(codeFromHash() ?? storage.get() ?? loadedExample);
+}
 
 let saveTimer = null;
 editor.on("change", () => {
+  if (collab.active) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => storage.set(editor.getValue()), 400);
 });
-addEventListener("beforeunload", () => storage.set(editor.getValue()));   // flush latest on close
+addEventListener("beforeunload", () => { if (!collab.active) storage.set(editor.getValue()); });   // flush latest on close
 
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
   const url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());
@@ -900,15 +911,13 @@ document.getElementById("stopBtn").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------- collaboration (lazy)
-const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
-
-let _amCache = null;
 async function loadAutomerge() {
   if (_amCache) return _amCache;
   const AM = await import("/vendor/automerge-collab.mjs");   // committed bundle, served statically
   if (AM.ensureReady) await AM.ensureReady();                 // no-op for current bundle; future-proof
   _amCache = { Repo: AM.Repo, Presence: AM.Presence,
                WebSocketClientAdapter: AM.WebSocketClientAdapter, updateText: AM.updateText };
+  window.__amLoaded = true;   // sentinel for tests
   return _amCache;
 }
 
@@ -919,11 +928,64 @@ function setLive(state, peers) {
   document.getElementById("peerCount").textContent = peers ?? 1;
 }
 
-document.getElementById("collabBtn").addEventListener("click", async () => {
-  document.getElementById("collabBtn").disabled = true;
-  setLive("connecting", 1);
-  window.__amLoaded = await loadAutomerge().then(() => true, (e) => { console.error(e); return false; });
-  document.getElementById("collabBtn").disabled = false;
+function applyingRemoteSet(fn) { collab.applyingRemote = true; try { fn(); } finally { collab.applyingRemote = false; } }
+function bindEditor() {}      // filled in Task 4
+function startPresence() {}   // filled in Task 5
+
+async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {
+  for (let i = 0; i < tries; i++) {
+    // Create a fresh Repo each attempt: automerge-repo caches "unavailable" state
+    // per Repo instance, so retrying against the same repo returns the cached miss.
+    const repo = new lib.Repo({ network: [new lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
+    try {
+      const h = await repo.find(url);
+      // find() resolves to a ready DocHandle or rejects (unavailable/failed)
+      if (h && !h.isUnavailable?.()) { collab.repo = repo; return h; }
+    } catch (e) { /* relay propagation race — retry */ }
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
+async function startRoom() {
+  collab.lib = await loadAutomerge();
+  collab.repo = new collab.lib.Repo({ network: [new collab.lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
+  collab.handle = collab.repo.create({ code: editor.getValue() });
+  await collab.handle.whenReady();
+  location.hash = "#room=" + collab.handle.url;
+  await enterRoom();
+  copyRoomLink();
+}
+
+async function joinRoom(url) {
+  collab.lib = await loadAutomerge();
+  // findWithRetry creates fresh Repo instances per attempt and assigns collab.repo on success
+  collab.handle = await findWithRetry(collab.lib, url);
+  if (!collab.handle) { console.warn("Room not found or unavailable; staying solo."); setLive("offline", 1); return; }
+  applyingRemoteSet(() => editor.setValue(collab.handle.doc().code ?? ""));
+  await enterRoom();
+}
+
+async function enterRoom() {
+  collab.active = true;
+  setLive("", 1);
+  document.getElementById("collabBtn").textContent = "🔗 Copy room link";
+  bindEditor();
+  startPresence();
+}
+
+function copyRoomLink() {
+  const url = location.origin + location.pathname + location.hash;
+  navigator.clipboard?.writeText(url).then(() => flashBtn("✓ link copied"), () => flashBtn("✓ link in URL bar"));
+}
+function flashBtn(text) {
+  const b = document.getElementById("collabBtn"); b.textContent = text;
+  setTimeout(() => { b.textContent = "🔗 Copy room link"; }, 1500);
+}
+
+document.getElementById("collabBtn").addEventListener("click", () => {
+  if (collab.active) copyRoomLink();
+  else { setLive("connecting", 1); startRoom().catch((e) => { console.error(e); setLive("offline", 1); }); }
 });
 
 // Run the default example as soon as Python is up.

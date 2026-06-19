@@ -916,7 +916,8 @@ document.getElementById("stopBtn").addEventListener("click", () => {
 // ---------------------------------------------------------------- collaboration (lazy)
 async function loadAutomerge() {
   if (_amCache) return _amCache;
-  const AM = await import("/vendor/automerge-collab.mjs");   // committed bundle, served statically
+  // relative (not "/vendor/…") so it resolves under the GitHub Pages project subpath, not the domain root
+  const AM = await import(new URL("./vendor/automerge-collab.mjs", document.baseURI).href);
   if (AM.ensureReady) await AM.ensureReady();                 // no-op for current bundle; future-proof
   _amCache = { Repo: AM.Repo, Presence: AM.Presence,
                WebSocketClientAdapter: AM.WebSocketClientAdapter, updateText: AM.updateText };

@@ -38,8 +38,9 @@ that `@automerge/automerge-repo`'s `Repo` export cannot be loaded from a CDN wit
 no build step — on esm.sh the package's entrypoints form a circular `export *`
 loop that resolves to an empty object, and jsDelivr fails to resolve its WASM.
 The accepted tradeoff: the repo gains a small build setup (`build/`: `package.json`
-+ esbuild entry/config) and a committed `vendor/` artifact (the bundle, plus a
-sibling `automerge.wasm` fetched at runtime). `node_modules/` is gitignored. The
++ esbuild entry/config) and a committed `vendor/` artifact (a single ~2.9 MB
+bundle with the WASM base64-inlined — self-initializing, no runtime fetch).
+`node_modules/` is gitignored. The
 deployed site stays 100% static, no backend; only local development gains a build
 step that regenerates the bundle.
 

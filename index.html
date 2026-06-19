@@ -1000,6 +1000,7 @@ async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {
       // find() resolves to a ready DocHandle or rejects (unavailable/failed)
       if (h && !h.isUnavailable?.()) { collab.repo = repo; return h; }
     } catch (e) { /* relay propagation race — retry */ }
+    try { await repo.shutdown?.(); } catch {}   // close this attempt's socket before retrying
     await new Promise(r => setTimeout(r, delayMs));
   }
   return null;
@@ -1016,20 +1017,24 @@ async function startRoom() {
 }
 
 async function joinRoom(url) {
-  collab.lib = await loadAutomerge();
-  // findWithRetry creates fresh Repo instances per attempt and assigns collab.repo on success
-  collab.handle = await findWithRetry(collab.lib, url);
-  if (!collab.handle) { console.warn("Room not found or unavailable; staying solo."); setLive("offline", 1); return; }
-  applyingRemoteSet(() => editor.setValue(collab.handle.doc().code ?? ""));
-  await enterRoom();
+  collab.starting = true;                       // block a Collaborate click during the join
+  try {
+    collab.lib = await loadAutomerge();
+    // findWithRetry creates fresh Repo instances per attempt and assigns collab.repo on success
+    collab.handle = await findWithRetry(collab.lib, url);
+    if (!collab.handle) { console.warn("Room not found or unavailable; staying solo."); setLive("offline", 1); return; }
+    applyingRemoteSet(() => editor.setValue(collab.handle.doc().code ?? ""));
+    await enterRoom();
+  } finally {
+    collab.starting = false;
+  }
 }
 
 async function enterRoom() {
   collab.active = true;
   setLive("", 1);
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
-  bindEditor();
-  startPresence();
+  if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
 }
 
 function copyRoomLink() {
@@ -1042,8 +1047,12 @@ function flashBtn(text) {
 }
 
 document.getElementById("collabBtn").addEventListener("click", () => {
-  if (collab.active) copyRoomLink();
-  else { setLive("connecting", 1); startRoom().catch((e) => { console.error(e); setLive("offline", 1); }); }
+  if (collab.active) return copyRoomLink();
+  if (collab.starting) return;                 // ignore re-entrant clicks while a room is being set up
+  collab.starting = true;
+  setLive("connecting", 1);
+  startRoom().catch((e) => { console.error(e); setLive("offline", 1); })
+             .finally(() => { collab.starting = false; });
 });
 
 addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });

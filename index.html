@@ -929,7 +929,32 @@ function setLive(state, peers) {
 }
 
 function applyingRemoteSet(fn) { collab.applyingRemote = true; try { fn(); } finally { collab.applyingRemote = false; } }
-function bindEditor() {}      // filled in Task 4
+function bindEditor() {
+  const { updateText } = collab.lib;
+  // local edits -> shared doc
+  editor.on("change", () => {
+    if (!collab.active || collab.applyingRemote) return;
+    const value = editor.getValue();
+    if (value === collab.handle.doc().code) return;
+    collab.handle.change(d => updateText(d, ["code"], value));
+  });
+  // shared doc -> local editor: replaceRange only the changed middle, preserving cursor/scroll
+  collab.handle.on("change", ({ doc }) => {
+    const next = doc.code ?? "";
+    const cur = editor.getValue();
+    if (next === cur) return;
+    applyingRemoteSet(() => {
+      let s = 0;
+      while (s < cur.length && s < next.length && cur[s] === next[s]) s++;
+      let e = 0;
+      while (e < cur.length - s && e < next.length - s &&
+             cur[cur.length - 1 - e] === next[next.length - 1 - e]) e++;
+      const from = editor.posFromIndex(s);
+      const to = editor.posFromIndex(cur.length - e);
+      editor.replaceRange(next.slice(s, next.length - e), from, to, "+remote");
+    });
+  });
+}
 function startPresence() {}   // filled in Task 5
 
 async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {

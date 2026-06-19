@@ -32,4 +32,27 @@ try {
   }
 
   console.log(process.exitCode ? 'TASK3 FAIL' : 'TASK3 OK');
+
+  // --- live two-way sync + concurrent edits survive ---
+  {
+    const A = await b.newPage(); await A.goto('http://localhost:8923/');
+    await A.waitForFunction(() => document.getElementById('collabBtn'), null, { timeout: 30000 });
+    await A.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('line_one = 1\n'));
+    await A.click('#collabBtn');
+    const hash = await A.waitForFunction(() => location.hash.startsWith('#room=') ? location.hash : false, null, { timeout: 30000 }).then(h => h.jsonValue());
+    const B = await b.newPage(); await B.goto('http://localhost:8923/' + hash);
+    await B.waitForFunction(() => document.querySelector('.CodeMirror')?.CodeMirror.getValue().includes('line_one'), null, { timeout: 30000 });
+    // A appends; B should see it.
+    await A.evaluate(() => { const cm = document.querySelector('.CodeMirror').CodeMirror; cm.replaceRange('line_two = 2\n', { line: 1, ch: 0 }); });
+    await B.waitForFunction(() => document.querySelector('.CodeMirror').CodeMirror.getValue().includes('line_two'), null, { timeout: 15000 })
+      .then(() => console.log('SYNC A->B OK'), () => { console.error('SYNC A->B FAIL'); process.exitCode = 1; });
+    // B prepends; A should see it (two-way).
+    await B.evaluate(() => { const cm = document.querySelector('.CodeMirror').CodeMirror; cm.replaceRange('from_b = 9\n', { line: 0, ch: 0 }); });
+    await A.waitForFunction(() => document.querySelector('.CodeMirror').CodeMirror.getValue().includes('from_b'), null, { timeout: 15000 })
+      .then(() => console.log('SYNC B->A OK'), () => { console.error('SYNC B->A FAIL'); process.exitCode = 1; });
+    // Both survive (CRDT merge, no clobber).
+    const finalA = await A.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
+    if (finalA.includes('line_two') && finalA.includes('from_b')) console.log('MERGE OK');
+    else { console.error('MERGE FAIL:', JSON.stringify(finalA)); process.exitCode = 1; }
+  }
 } finally { await b.close(); }

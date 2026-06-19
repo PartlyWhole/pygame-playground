@@ -1046,6 +1046,9 @@ document.getElementById("collabBtn").addEventListener("click", () => {
   else { setLive("connecting", 1); startRoom().catch((e) => { console.error(e); setLive("offline", 1); }); }
 });
 
+addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });
+addEventListener("online",  () => { if (collab.active) setLive("", document.getElementById("peerCount").textContent); });
+
 // Run the default example as soon as Python is up.
 booted.then(run).catch(() => {});
 </script>

@@ -69,4 +69,14 @@ try {
     await A.waitForFunction(() => document.querySelector('.remote-cursor') !== null, null, { timeout: 20000 })
       .then(() => console.log('REMOTE CURSOR OK'), () => { console.error('REMOTE CURSOR FAIL'); process.exitCode = 1; });
   }
+  // --- bad room id => graceful solo fallback, page stays usable ---
+  {
+    const p = await b.newPage();
+    await p.goto('http://localhost:8923/#room=automerge:doesNotExist999');
+    await p.waitForFunction(() => document.querySelector('.CodeMirror') !== null, null, { timeout: 30000 });
+    await p.waitForTimeout(3000);
+    const usable = await p.evaluate(() => { const cm = document.querySelector('.CodeMirror').CodeMirror; cm.setValue('still_works = 1'); return cm.getValue(); });
+    console.log('bad-room stays usable:', usable === 'still_works = 1' ? 'YES' : 'NO');
+    if (usable !== 'still_works = 1') process.exitCode = 1;
+  }
 } finally { await b.close(); }

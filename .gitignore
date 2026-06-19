@@ -1,2 +1,3 @@
 verify-screenshot.png
 .DS_Store
+build/node_modules/

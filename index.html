@@ -959,15 +959,24 @@ function bindEditor() {
     });
   });
 }
+const NAME_ADJ = ["Swift", "Brave", "Clever", "Sly", "Jolly", "Witty", "Cosmic", "Mellow",
+  "Plucky", "Zesty", "Nimble", "Cheery", "Snazzy", "Bouncy", "Dapper", "Breezy", "Sunny", "Funky"];
+const NAME_ANIMAL = ["Otter", "Panda", "Fox", "Heron", "Lynx", "Gecko", "Wombat", "Tapir",
+  "Narwhal", "Puffin", "Koala", "Badger", "Quokka", "Axolotl", "Ferret", "Pangolin", "Manatee", "Stoat"];
+const pickFrom = (a) => a[Math.floor(Math.random() * a.length)];
+const before = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);   // a <= b in doc order
+
 function startPresence() {
-  const me = { name: "anon-" + Math.random().toString(36).slice(2, 6),
+  const me = { name: pickFrom(NAME_ADJ) + " " + pickFrom(NAME_ANIMAL),
                color: "hsl(" + Math.floor(Math.random() * 360) + ",70%,60%)" };
   collab.presence = new collab.lib.Presence({ handle: collab.handle });
   collab.presence.start({ initialState: { cursor: { line: 0, ch: 0 }, user: me },
                           heartbeatMs: 5000, peerTtlMs: 60000 });
   editor.on("cursorActivity", () => {
-    const c = editor.getCursor();
-    collab.presence.broadcast("cursor", { line: c.line, ch: c.ch });
+    const head = editor.getCursor("head"), anchor = editor.getCursor("anchor");
+    collab.presence.broadcast("cursor", {
+      line: head.line, ch: head.ch, anchor: { line: anchor.line, ch: anchor.ch },
+    });
   });
   collab.markers = [];
   // In this bundle getPeerStates() returns a PeerStateView whose .value is
@@ -976,15 +985,28 @@ function startPresence() {
     const peers = Object.values(collab.presence.getPeerStates().value);
     setLive("", peers.length + 1);
     collab.markers.forEach(m => m.clear());
-    collab.markers = peers.filter(p => p.value?.cursor).map(p => {
+    collab.markers = peers.flatMap(p => {
+      const cur = p.value?.cursor;
+      if (!cur) return [];
+      const color = p.value.user?.color || "#fff";
+      const marks = [];
+      // shared highlight: render the peer's selection as a translucent band in their color
+      const a = cur.anchor;
+      if (a && (a.line !== cur.line || a.ch !== cur.ch)) {
+        const [from, to] = before(a, cur) ? [a, cur] : [cur, a];
+        marks.push(editor.markText(from, to,
+          { css: "background-color:" + color.replace("hsl(", "hsla(").replace(")", ",0.25)") }));
+      }
+      // caret + name flag at the head
       const el = document.createElement("span");
       el.className = "remote-cursor";
-      el.style.borderColor = p.value.user?.color || "#fff";
+      el.style.borderColor = color;
       const flag = document.createElement("span");
       flag.className = "remote-flag"; flag.textContent = p.value.user?.name || "peer";
-      flag.style.background = p.value.user?.color || "#fff";
+      flag.style.background = color;
       el.appendChild(flag);
-      return editor.setBookmark({ line: p.value.cursor.line, ch: p.value.cursor.ch }, { widget: el, insertLeft: true });
+      marks.push(editor.setBookmark({ line: cur.line, ch: cur.ch }, { widget: el, insertLeft: true }));
+      return marks;
     });
   };
   collab.presence.on("update", renderPeers);

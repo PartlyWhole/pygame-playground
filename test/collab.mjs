@@ -68,6 +68,16 @@ try {
       .then(() => console.log('PEER COUNT OK'), () => { console.error('PEER COUNT FAIL'); process.exitCode = 1; });
     await A.waitForFunction(() => document.querySelector('.remote-cursor') !== null, null, { timeout: 20000 })
       .then(() => console.log('REMOTE CURSOR OK'), () => { console.error('REMOTE CURSOR FAIL'); process.exitCode = 1; });
+    // fun anon name (adjective + animal, not "anon-xxxx")
+    const flag = await A.evaluate(() => document.querySelector('.remote-flag')?.textContent || '');
+    console.log('peer name:', JSON.stringify(flag), /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(flag) ? '(OK)' : '(BAD)');
+    if (!/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(flag)) { console.error('NAME FAIL'); process.exitCode = 1; }
+    // shared highlighting: B selects a range; A renders a selection band (markText sets the
+    // `background-color` longhand inline — the name flag uses the `background` shorthand, so this
+    // selector matches only the highlight). Chrome serializes the hsla value to rgba in `style`.
+    await B.evaluate(() => { const cm = document.querySelector('.CodeMirror').CodeMirror; cm.setSelection({ line: 0, ch: 0 }, { line: 1, ch: 1 }); });
+    await A.waitForFunction(() => document.querySelector('.CodeMirror span[style*="background-color"]') !== null, null, { timeout: 20000 })
+      .then(() => console.log('SHARED HIGHLIGHT OK'), () => { console.error('SHARED HIGHLIGHT FAIL'); process.exitCode = 1; });
   }
   // --- bad room id => graceful solo fallback, page stays usable ---
   {

@@ -762,7 +762,7 @@ let _amCache = null;
 let loadedExample = EXAMPLES[exampleSel.value];
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
 if (roomFromHash) {
-  editor.setValue(loadedExample);                       // placeholder until the doc arrives
+  editor.setValue("");                                  // blank until the room's code arrives (no default flash)
   joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
 } else {
   editor.setValue(codeFromHash() ?? storage.get() ?? loadedExample);

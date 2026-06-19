@@ -55,4 +55,18 @@ try {
     if (finalA.includes('line_two') && finalA.includes('from_b')) console.log('MERGE OK');
     else { console.error('MERGE FAIL:', JSON.stringify(finalA)); process.exitCode = 1; }
   }
+  // --- presence: peer count + remote cursor marker ---
+  {
+    const A = await b.newPage(); await A.goto('http://localhost:8923/');
+    await A.waitForFunction(() => document.getElementById('collabBtn'), null, { timeout: 30000 });
+    await A.click('#collabBtn');
+    const hash = await A.waitForFunction(() => location.hash.startsWith('#room=') ? location.hash : false, null, { timeout: 30000 }).then(h => h.jsonValue());
+    const B = await b.newPage(); await B.goto('http://localhost:8923/' + hash);
+    await B.waitForFunction(() => document.getElementById('liveDot') && !document.getElementById('liveDot').hidden, null, { timeout: 30000 });
+    await B.evaluate(() => { const cm = document.querySelector('.CodeMirror').CodeMirror; cm.setValue('a\nb\nc'); cm.setCursor({ line: 2, ch: 1 }); });
+    await A.waitForFunction(() => document.getElementById('peerCount').textContent === '2', null, { timeout: 20000 })
+      .then(() => console.log('PEER COUNT OK'), () => { console.error('PEER COUNT FAIL'); process.exitCode = 1; });
+    await A.waitForFunction(() => document.querySelector('.remote-cursor') !== null, null, { timeout: 20000 })
+      .then(() => console.log('REMOTE CURSOR OK'), () => { console.error('REMOTE CURSOR FAIL'); process.exitCode = 1; });
+  }
 } finally { await b.close(); }

@@ -17,6 +17,9 @@ Non-goal: streaming one person's running pygame canvas to others. We sync the
 
 - **CRDT / transport:** Automerge (`@automerge/automerge-repo`) over the free
   public sync server `wss://sync.automerge.org`. Chosen by the user over Yjs.
+- **Loading:** a committed, locally-built **vendor bundle** (`vendor/automerge-collab.mjs`),
+  because automerge-repo cannot load from a CDN no-build (spike-proven). Deployed
+  site stays static; local dev gains a one-time build step.
 - **Collaboration is opt-in:** a "Collaborate" button starts a room from the
   current code. The solo playground path is unchanged and loads no Automerge/WASM.
 - **Identity:** auto-assigned random name + color per session. No login.
@@ -25,9 +28,20 @@ Non-goal: streaming one person's running pygame canvas to others. We sync the
 ## Architecture
 
 A new lazily-loaded `collab` module inside `index.html`. Automerge is imported
-from a CDN **only when collaboration is activated** (button click or opening a
-`#room=` link), so the normal solo path keeps its current load time and ships no
-WASM.
+from a **committed, pre-built vendor bundle** (`vendor/automerge-collab.mjs`,
+built once locally with esbuild; GitHub Pages serves it as a static asset) and
+only when collaboration is activated (button click or opening a `#room=` link),
+so the normal solo path keeps its current load time and pulls in no Automerge/WASM.
+
+**Why a vendor bundle, not a CDN:** the Task 1 spike proved (deterministically)
+that `@automerge/automerge-repo`'s `Repo` export cannot be loaded from a CDN with
+no build step — on esm.sh the package's entrypoints form a circular `export *`
+loop that resolves to an empty object, and jsDelivr fails to resolve its WASM.
+The accepted tradeoff: the repo gains a small build setup (`build/`: `package.json`
++ esbuild entry/config) and a committed `vendor/` artifact (the bundle, plus a
+sibling `automerge.wasm` fetched at runtime). `node_modules/` is gitignored. The
+deployed site stays 100% static, no backend; only local development gains a build
+step that regenerates the bundle.
 
 Shared document shape:
 
@@ -121,24 +135,20 @@ presence.start({
 
 ## Primary risk & de-risking plan
 
-The one genuinely uncertain piece is **loading Automerge's WASM in a no-build
-static file from a CDN**. Before building the feature, a spike will:
-
-1. Try `import { Repo } from "https://esm.sh/@automerge/automerge-repo@<pin>?bundle"`
-   and the matching network adapter, in a real headless browser.
-2. If WASM doesn't auto-initialize, fall back to the slim build with an explicit
-   `initializeWasm(<wasmUrl>)` before first use.
-3. Pin exact versions of `@automerge/automerge`, `@automerge/automerge-repo`, and
-   `@automerge/automerge-repo-network-websocket` once a working combination round-
-   trips a document between two tabs.
-
-The spike is the first implementation step; nothing else is built until a doc
-provably syncs between two browser contexts.
+The CDN-load risk has been **resolved by the spike: it is not possible** — see
+"Why a vendor bundle" above. The remaining risk is the **esbuild + Automerge-WASM
+recipe** for producing the self-contained vendor bundle. De-risking: Task 1 builds
+the bundle and does not let any feature task proceed until a document provably
+round-trips between two browser contexts importing the **committed** bundle. The
+likely-working recipe (subagent to confirm): bundle the `@automerge/automerge`
+**slim** entry with esbuild and call `initializeWasm()` at runtime against a
+sibling `vendor/automerge.wasm` (fetched at runtime — GitHub Pages serves `.wasm`
+with the correct MIME type for `fetch`, the failure mode was only `import`-as-module).
 
 ## Testing
 
-- **Spike test:** two headless contexts, create a doc in A, `find` in B, assert
-  `doc.code` round-trips.
+- **Bundle test:** two headless contexts load the committed `vendor/automerge-collab.mjs`,
+  create a doc in A, `find` in B, assert `doc.code` round-trips.
 - **Feature tests (headless, two contexts joining one `#room=` link):**
   - Type in A → text appears in B within a short window.
   - Concurrent edits in A and B both survive (no clobber).

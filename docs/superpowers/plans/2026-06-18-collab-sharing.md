@@ -59,136 +59,153 @@ git add test/_harness.mjs && git commit -m "test: shared headless-chromium launc
 
 ---
 
-## Task 1: WASM/CDN load spike — discover and pin a working Automerge ESM combo
+## Task 1: Build & verify the Automerge vendor bundle (gating)
 
-**This task's deliverable is a decision, not a feature.** Nothing else in the plan proceeds until an Automerge document provably round-trips between two browser contexts loaded from a CDN with no build step. Record the exact working import URLs at the top of the spike file and in this plan's "Pinned imports" section (Step 6).
+**Context (why this replaced the CDN spike):** the original CDN spike PROVED, deterministically, that `@automerge/automerge-repo`'s `Repo` export cannot be loaded from any CDN with no build step (esm.sh resolves its circular `export *` entrypoints to an empty object; jsDelivr fails to resolve its WASM). User decision: keep Automerge and ship a **committed, locally-built vendor bundle**. The historical CDN spike lives at `test/spike-automerge.mjs` (commit `18873c1`) as the record — leave it.
+
+**This task's deliverable gates everything else.** No feature task proceeds until two browser contexts importing the **committed** `vendor/automerge-collab.mjs` round-trip a document over `wss://sync.automerge.org`.
 
 **Files:**
-- Create: `test/spike-automerge.mjs`
+- Create: `build/package.json`, `build/entry.mjs`, `build/build.mjs` (esbuild script)
+- Create (committed artifacts): `vendor/automerge-collab.mjs` (+ `vendor/automerge.wasm` if external)
+- Create: `.gitignore` (add `build/node_modules/`)
+- Create: `test/spike-bundle.mjs`
 
-- [ ] **Step 1: Write the round-trip spike (attempt A: esm.sh ?bundle)**
+**Library API note:** before writing automerge calls, if unsure verify via `context7:resolve-library-id` then `context7:query-docs` (`/automerge/automerge-repo`). Known-good exports to surface: `Repo`, `Presence` (from `@automerge/automerge-repo`), `WebSocketClientAdapter` (from `@automerge/automerge-repo-network-websocket`), `updateText` (from `@automerge/automerge` — confirmed by the spike to live on the `/next` entry for the 2.x line).
 
-Create `test/spike-automerge.mjs`. It opens two pages, creates a doc in page A, finds it in page B by URL, and asserts the text syncs B→A after an edit. The in-page module text is a template string so we can swap CDN URLs between attempts.
+- [ ] **Step 1: Create the build project**
 
+`build/package.json`:
+```json
+{
+  "name": "collab-vendor-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@automerge/automerge": "2.2.9",
+    "@automerge/automerge-repo": "2.5.6",
+    "@automerge/automerge-repo-network-websocket": "2.5.6"
+  },
+  "devDependencies": { "esbuild": "^0.24.0" },
+  "scripts": { "build": "node build.mjs" }
+}
+```
+`build/entry.mjs` (the single public surface the app imports):
+```js
+export { Repo, Presence } from "@automerge/automerge-repo";
+export { WebSocketClientAdapter } from "@automerge/automerge-repo-network-websocket";
+export { updateText } from "@automerge/automerge/next";
+```
+
+- [ ] **Step 2: Write the esbuild bundler**
+
+`build/build.mjs` bundles `entry.mjs` to `../vendor/automerge-collab.mjs` as an ESM bundle for the browser. Automerge core is WASM; prefer the recipe that yields a self-contained import. Start with the default (auto-initializing) automerge build bundled and the `.wasm` emitted as a sibling asset fetched at runtime:
+```js
+import { build } from "esbuild";
+import { mkdirSync } from "node:fs";
+mkdirSync("../vendor", { recursive: true });
+await build({
+  entryPoints: ["entry.mjs"],
+  bundle: true,
+  format: "esm",
+  outfile: "../vendor/automerge-collab.mjs",
+  loader: { ".wasm": "file" },     // emit automerge.wasm next to the bundle, referenced by URL
+  assetNames: "[name]",            // -> vendor/automerge.wasm (stable name)
+  target: "es2022",
+  logLevel: "info",
+});
+console.log("built vendor/automerge-collab.mjs");
+```
+If the `.wasm=file` loader path does not initialize at runtime, fall back to bundling the **slim** automerge entry and inlining the wasm as base64 (`loader: { ".wasm": "binary" }`) with an `initializeBase64Wasm` call wired into `entry.mjs`. Whichever works, the app-facing import surface (`Repo`, `Presence`, `WebSocketClientAdapter`, `updateText`, and — if needed — an exported `ensureReady()` that performs wasm init) must be stable. **Record the final surface at the top of `vendor/automerge-collab.mjs` as a comment and in the "Vendor bundle import" section below.**
+
+- [ ] **Step 3: Build it**
+
+Run:
+```bash
+cd /Users/alan/Desktop/pygame-playground/build && npm install && npm run build
+```
+Expected: `built vendor/automerge-collab.mjs`, and `ls ../vendor` shows the bundle (+ `automerge.wasm` if external).
+
+- [ ] **Step 4: Write the round-trip test against the COMMITTED bundle**
+
+Create `test/spike-bundle.mjs`. It serves from the same origin (so the bundle's sibling `.wasm` resolves), loads the vendor module in two pages, creates a doc in A, finds it in B, edits in B, asserts A observes it:
 ```js
 import { launch } from './_harness.mjs';
 
-const ATTEMPTS = {
-  // Attempt A: esm.sh, bundled deps, wasm auto-init.
-  A: `
-    import { Repo } from "https://esm.sh/@automerge/automerge-repo@2?bundle";
-    import { WebSocketClientAdapter } from "https://esm.sh/@automerge/automerge-repo-network-websocket@2?bundle";
-    window.__amr = { Repo, WebSocketClientAdapter };
-  `,
-  // Attempt B: slim build + explicit wasm init (filled in only if A fails).
-  B: `
-    import { Repo, initializeWasm } from "https://esm.sh/@automerge/automerge-repo@2/slim?bundle";
-    import wasmUrl from "https://esm.sh/@automerge/automerge@2/dist/automerge.wasm?url";
-    import { WebSocketClientAdapter } from "https://esm.sh/@automerge/automerge-repo-network-websocket@2?bundle";
-    await initializeWasm(wasmUrl);
-    window.__amr = { Repo, WebSocketClientAdapter };
-  `,
-};
-
-const attempt = process.argv[2] || 'A';
-const SRC = ATTEMPTS[attempt];
-
+const SRC = `
+  import * as AM from "/vendor/automerge-collab.mjs";
+  if (AM.ensureReady) await AM.ensureReady();   // no-op if wasm self-initializes
+  window.__amr = AM;
+  window.__amrReady = true;
+`;
 const host = async (page, label) => {
   const errs = [];
   page.on('pageerror', e => errs.push(label + ': ' + e));
-  await page.goto('http://localhost:8923/');               // any same-origin page; we only need a module context
-  await page.addScriptTag({ type: 'module', content: SRC + '\nwindow.__amrReady = true;' });
+  page.on('console', m => { if (m.type() === 'error') errs.push(label + ' console: ' + m.text()); });
+  await page.goto('http://localhost:8923/');
+  await page.addScriptTag({ type: 'module', content: SRC });
   await page.waitForFunction(() => window.__amrReady === true, null, { timeout: 30000 })
-    .catch(() => { throw new Error(label + ' module never loaded; errors: ' + JSON.stringify(errs)); });
-  return errs;
+    .catch(() => { throw new Error(label + ' bundle never loaded; errors: ' + JSON.stringify(errs)); });
 };
-
 const b = await launch();
 try {
-  const A = await b.newPage(); const eA = await host(A, 'A');
-  // Create a repo + doc in A.
+  const A = await b.newPage(); await host(A, 'A');
   const url = await A.evaluate(async () => {
     const { Repo, WebSocketClientAdapter } = window.__amr;
     const repo = new Repo({ network: [new WebSocketClientAdapter('wss://sync.automerge.org')] });
-    const h = repo.create({ code: 'hello' });
-    await h.whenReady();
-    window.__h = h;
-    return h.url;
+    const h = repo.create({ code: 'hello' }); await h.whenReady(); window.__h = h; return h.url;
   });
-  console.log('attempt', attempt, 'created doc:', url);
-
+  console.log('created doc:', url);
   const B = await b.newPage(); await host(B, 'B');
-  // Find the same doc in B, read code, then edit it.
   const found = await B.evaluate(async (u) => {
     const { Repo, WebSocketClientAdapter } = window.__amr;
     const repo = new Repo({ network: [new WebSocketClientAdapter('wss://sync.automerge.org')] });
-    const h = await repo.find(u);
-    await h.whenReady();
-    window.__h = h;
-    return h.doc().code;
+    const h = await repo.find(u); await h.whenReady(); window.__h = h; return h.doc().code;
   }, url);
   console.log('B sees code:', JSON.stringify(found));
-
-  // Edit in B, expect A to observe it.
-  await B.evaluate(async () => {
-    const A = await import("https://esm.sh/@automerge/automerge@2?bundle");
-    window.__h.change(d => A.updateText(d, ['code'], 'hello world'));
-  });
-  const sawIt = await A.waitForFunction(() => window.__h.doc().code === 'hello world', null, { timeout: 15000 })
-    .then(() => true, () => false);
+  await B.evaluate(() => { const { updateText } = window.__amr; window.__h.change(d => updateText(d, ['code'], 'hello world')); });
+  const sawIt = await A.waitForFunction(() => window.__h.doc().code === 'hello world', null, { timeout: 15000 }).then(() => true, () => false);
   console.log('A observed B edit:', sawIt);
-  if (found !== 'hello' || !sawIt) { console.error('SPIKE FAILED'); process.exitCode = 1; }
-  else console.log('SPIKE OK (attempt ' + attempt + ')');
-} finally {
-  await b.close();
-}
+  if (found !== 'hello' || !sawIt) { console.error('BUNDLE SPIKE FAILED'); process.exitCode = 1; }
+  else console.log('BUNDLE SPIKE OK');
+} finally { await b.close(); }
 ```
 
-- [ ] **Step 2: Run attempt A**
+- [ ] **Step 5: Run it**
 
-Run: `cd /Users/alan/Desktop/pygame-playground && node test/spike-automerge.mjs A`
-Expected: `SPIKE OK (attempt A)`. (`B sees code: "hello"` and `A observed B edit: true`.)
+Run: `cd /Users/alan/Desktop/pygame-playground && node test/spike-bundle.mjs`
+Expected: `B sees code: "hello"`, `A observed B edit: true`, `BUNDLE SPIKE OK`.
 
-- [ ] **Step 3: If A fails, run attempt B**
+- [ ] **Step 6: If it fails, iterate on the bundler (Step 2 fallback), not the app**
 
-Run: `node test/spike-automerge.mjs B`
-Expected: `SPIKE OK (attempt B)`.
+Try the slim+base64 wasm recipe. If after a reasonable effort the bundle cannot round-trip, STOP and report BLOCKED with the captured errors — do not hand-edit the app to paper over a broken bundle.
 
-- [ ] **Step 4: If both fail, escalate**
+- [ ] **Step 7: gitignore node_modules + record the import surface**
 
-If neither attempt round-trips (WASM won't init from CDN, or the public sync server is unreachable), STOP and report to the user with the captured `pageerror` output. Do not proceed; the fallback discussed in the spec is switching to Yjs, which is the user's call.
+Create/append `.gitignore` with `build/node_modules/`. Edit the "Vendor bundle import" section below to record the exact exported surface and whether `ensureReady()` is required.
 
-- [ ] **Step 5: Confirm the `updateText` import path**
-
-Whichever attempt passed proves the `@automerge/automerge` URL used in the edit step (`https://esm.sh/@automerge/automerge@2?bundle`, export `updateText`). If `updateText` was undefined, retry the edit step importing from `https://esm.sh/@automerge/automerge@2/next?bundle` and record which worked.
-
-- [ ] **Step 6: Record the pinned imports in this plan**
-
-Edit the "Pinned imports" section below, replacing the `<!-- spike fills -->` markers with the exact working URLs (resolve `@2` to the concrete version esm.sh reports, e.g. `@2.x.y`, by reading the `x-typescript-types`/redirect or the network log). All later tasks MUST use these exact strings.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit (artifacts included)**
 
 ```bash
-git add test/spike-automerge.mjs docs/superpowers/plans/2026-06-18-collab-sharing.md
-git commit -m "spike: pin a working no-build CDN load for Automerge (doc round-trips between tabs)"
+git add build/package.json build/entry.mjs build/build.mjs vendor/ test/spike-bundle.mjs .gitignore docs/superpowers/plans/2026-06-18-collab-sharing.md
+git commit -m "build: committed Automerge vendor bundle (round-trips a doc between tabs)"
 ```
+(Commit the built `vendor/` artifacts — they are what GitHub Pages serves.)
 
 ---
 
-## Pinned imports (filled by Task 1)
+## Vendor bundle import (filled by Task 1)
 
-> Until Task 1 runs, these are the *intended* strings; Task 1 Step 6 replaces them with the concrete working versions and the chosen init path.
+The app imports Automerge **only** from the committed bundle (never a CDN):
 
 ```js
-// Repo + network adapter (and Presence) — chosen attempt from the spike:
-const REPO_URL    = "https://esm.sh/@automerge/automerge-repo@2?bundle";          // <!-- spike fills exact version -->
-const WS_URL      = "https://esm.sh/@automerge/automerge-repo-network-websocket@2?bundle"; // <!-- spike fills -->
-const AUTOMERGE_URL = "https://esm.sh/@automerge/automerge@2?bundle";             // <!-- spike fills: base or /next -->
-const NEEDS_WASM_INIT = false; // <!-- spike fills: true => also import+call initializeWasm with the slim build -->
+const VENDOR_URL  = "/vendor/automerge-collab.mjs";   // committed, served statically by Pages
 const SYNC_SERVER = "wss://sync.automerge.org";
+// Surface: { Repo, Presence, WebSocketClientAdapter, updateText[, ensureReady] }
+const NEEDS_ENSURE_READY = false; // <!-- Task 1 sets true if the slim+init recipe was used -->
 ```
 
-`Repo`, `Presence` come from `REPO_URL`; `WebSocketClientAdapter` from `WS_URL`; `updateText` from `AUTOMERGE_URL`.
+`Repo`, `Presence`, `WebSocketClientAdapter`, `updateText` are all named exports of the bundle. If `NEEDS_ENSURE_READY`, call `await ensureReady()` once after import before constructing a `Repo`.
 
 ---
 
@@ -221,14 +238,14 @@ In the main `<script>`, near the run/stop wiring, add:
 // ---------------------------------------------------------------- collaboration (lazy)
 const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
 
+let _amCache = null;
 async function loadAutomerge() {
-  const REPO_URL = "<from Pinned imports>";
-  const WS_URL = "<from Pinned imports>";
-  const AUTOMERGE_URL = "<from Pinned imports>";
-  const [{ Repo, Presence }, { WebSocketClientAdapter }, A] =
-    await Promise.all([import(REPO_URL), import(WS_URL), import(AUTOMERGE_URL)]);
-  // If NEEDS_WASM_INIT (per spike), initialize here before first use.
-  return { Repo, Presence, WebSocketClientAdapter, updateText: A.updateText };
+  if (_amCache) return _amCache;
+  const AM = await import("/vendor/automerge-collab.mjs");   // committed bundle, served statically
+  if (AM.ensureReady) await AM.ensureReady();                 // wasm init if the slim recipe was used (Task 1)
+  _amCache = { Repo: AM.Repo, Presence: AM.Presence,
+               WebSocketClientAdapter: AM.WebSocketClientAdapter, updateText: AM.updateText };
+  return _amCache;
 }
 
 function setLive(state, peers) {
@@ -238,7 +255,7 @@ function setLive(state, peers) {
   document.getElementById("peerCount").textContent = peers ?? 1;
 }
 ```
-Replace the `<from Pinned imports>` strings with the exact pinned URLs from Task 1.
+The import path is the committed vendor bundle from Task 1 — never a CDN.
 
 - [ ] **Step 2b: Wire the button to a stub (proves lazy-load, no room yet)**
 

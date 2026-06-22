@@ -81,7 +81,7 @@ await page.evaluate(() => {
     'print("PLAY_OK", ch is not None, round(s.get_length(), 2))',
   ].join('\n'));
 });
-await page.click('#runBtn');   // a real user gesture -> resumeAudio()
+await page.click('#runBtn');   // a real user gesture; resumeAudio() resumes SDL's context (created on mixer.init)
 await page.waitForFunction(() => /finished|error/.test(document.getElementById('status').textContent),
   null, { timeout: 20_000 }).catch(() => {});
 const soundConsole = await page.evaluate(() =>
@@ -91,8 +91,10 @@ else fail('sound play path failed: ' + soundConsole.slice(0, 200));
 const acCount = await page.evaluate(() => (window.__audioContexts || []).length);
 if (acCount > 0) ok('AudioContext captured: ' + acCount);
 else fail('no AudioContext captured (shim not installed?)');
+// Informational only: headless Chromium is permissive so the context is already
+// 'running'; the headed-browser resume-on-gesture path is the documented manual check.
 const acState = await page.evaluate(() => (window.__audioContexts || []).map(c => c.state));
-ok('AudioContext states after Run gesture: ' + acState.join(','));
+console.log('info - AudioContext states after Run gesture: ' + acState.join(','));
 
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

@@ -771,15 +771,13 @@ const UNSUPPORTED_AUDIO = /\.(mp3|m4a|aac|flac|wma)$/i;  // SDL_mixer here decod
 
 const assetStore = {
   _db: null,
-  async _open() {
-    if (this._db) return this._db;
-    this._db = await new Promise((resolve, reject) => {
+  _open() {
+    return this._db ??= new Promise((resolve, reject) => {
       const r = indexedDB.open('pygame-playground', 1);
       r.onupgradeneeded = () => r.result.createObjectStore('assets', { keyPath: 'name' });
       r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
     });
-    return this._db;
   },
   async _tx(mode, fn) {
     const db = await this._open();
@@ -791,7 +789,7 @@ const assetStore = {
     });
   },
   async getAll() { try { return await this._tx('readonly', s => { const rq = s.getAll(); return new Promise(r => rq.onsuccess = () => r(rq.result)); }); } catch { return []; } },
-  async put(rec) { try { await this._tx('readwrite', s => s.put(rec)); } catch {} },
+  async put(rec) { try { await this._tx('readwrite', s => s.put(rec)); return true; } catch { return false; } },
   async remove(name) { try { await this._tx('readwrite', s => s.delete(name)); } catch {} },
   async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
 };
@@ -813,7 +811,8 @@ const assetFS = {
     if (this.totalSize() - (existing?.size || 0) + file.size > ASSET_MAX_TOTAL)
       return assetMsg(`Adding "${file.name}" would exceed the 64 MB total budget. Remove something first.`);
     const bytes = new Uint8Array(await file.arrayBuffer());
-    await assetStore.put({ name: file.name, bytes: bytes.buffer, type: file.type, size: bytes.length, addedAt: Date.now() });
+    const saved = await assetStore.put({ name: file.name, bytes: bytes.buffer, type: file.type, size: bytes.length, addedAt: Date.now() });
+    if (!saved) assetMsg(`Couldn't save "${file.name}" to persist for next time (storage full or unavailable) — it'll work this session only.`);
     this._memfs(file.name, bytes);
     this.list = this.list.filter(a => a.name !== file.name);
     this.list.push({ name: file.name, size: bytes.length, type: file.type, warn: UNSUPPORTED_AUDIO.test(file.name) });

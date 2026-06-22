@@ -32,5 +32,39 @@ const inFs = await page.evaluate(() => pyodide.FS.analyzePath('dot.png').exists)
 if (inFs) ok('uploaded file written to MEMFS');
 else fail('uploaded file not in MEMFS');
 
+// 3. Persistence: reload, asset rehydrates from IndexedDB into MEMFS.
+await page.reload({ waitUntil: 'load' });
+await page.waitForFunction(
+  () => ['running', 'ready', 'finished'].includes(document.getElementById('status').textContent),
+  null, { timeout: 120_000 }).catch(() => fail('did not reboot'));
+await page.waitForTimeout(200);
+const chipReload = await page.textContent('#assetChip');
+const fsReload = await page.evaluate(() => pyodide.FS.analyzePath('dot.png').exists);
+if (/1/.test(chipReload) && fsReload) ok('asset persisted across reload (IndexedDB -> MEMFS)');
+else fail(`asset did not persist (chip=${JSON.stringify(chipReload)} memfs=${fsReload})`);
+
+// 4. Real user path: load the uploaded sprite, blit it, check the canvas pixel.
+await page.evaluate(() => {
+  document.querySelector('.CodeMirror').CodeMirror.setValue([
+    'import pygame',
+    'pygame.init()',
+    'screen = pygame.display.set_mode((200, 150))',
+    'screen.fill((0, 0, 0))',
+    'sprite = pygame.image.load("dot.png").convert_alpha()',
+    'screen.blit(sprite, (50, 50))',
+    'pygame.display.flip()',
+  ].join('\n'));
+});
+await page.click('#runBtn');
+await page.waitForFunction(() => /finished|error/.test(document.getElementById('status').textContent),
+  null, { timeout: 20_000 }).catch(() => {});
+const spritePx = await page.evaluate(() => {
+  const g = document.getElementById('canvas').getContext('2d');
+  return Array.from(g.getImageData(58, 58, 1, 1).data);  // inside the blit, magenta
+});
+// fixture is magenta (R high, G low, B high)
+if (spritePx[0] > 150 && spritePx[1] < 100 && spritePx[2] > 150) ok('uploaded sprite blits to canvas: ' + spritePx);
+else fail('sprite pixel wrong: ' + spritePx);
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

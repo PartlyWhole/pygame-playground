@@ -21,5 +21,16 @@ const chip = await page.textContent('#assetChip').catch(() => null);
 if (chip && chip.includes('📁')) ok('asset chip present: ' + chip);
 else fail('no #assetChip with 📁 (got ' + JSON.stringify(chip) + ')');
 
+// 2. Upload a PNG via the real hidden file input -> MEMFS file + chip count.
+await page.setInputFiles('#assetInput',
+  { name: 'dot.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
+await page.waitForTimeout(200);
+const chipAfter = await page.textContent('#assetChip');
+if (/1/.test(chipAfter)) ok('chip shows count after upload: ' + chipAfter);
+else fail('chip did not show 1 after upload (got ' + JSON.stringify(chipAfter) + ')');
+const inFs = await page.evaluate(() => pyodide.FS.analyzePath('dot.png').exists);
+if (inFs) ok('uploaded file written to MEMFS');
+else fail('uploaded file not in MEMFS');
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

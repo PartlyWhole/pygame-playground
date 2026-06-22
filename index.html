@@ -761,6 +761,89 @@ const storage = {
   get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
   set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch {} },
 };
+// ---------------------------------------------------------------- assets (uploadable sprites & sounds)
+// Bytes live in IndexedDB (assetStore) and are mirrored into Pyodide's MEMFS
+// (assetFS) so plain pygame code resolves them by name. Lazy + additive: the
+// solo path touches none of this. See docs/specs/2026-06-22-assets-sprites-sound-design.md
+const ASSET_MAX_FILE = 10 * 1024 * 1024;   // 10 MB per file
+const ASSET_MAX_TOTAL = 64 * 1024 * 1024;  // 64 MB total
+const UNSUPPORTED_AUDIO = /\.(mp3|m4a|aac|flac|wma)$/i;  // SDL_mixer here decodes only WAV/OGG
+
+const assetStore = {
+  _db: null,
+  async _open() {
+    if (this._db) return this._db;
+    this._db = await new Promise((resolve, reject) => {
+      const r = indexedDB.open('pygame-playground', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('assets', { keyPath: 'name' });
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    return this._db;
+  },
+  async _tx(mode, fn) {
+    const db = await this._open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('assets', mode);
+      const out = fn(tx.objectStore('assets'));
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+  async getAll() { try { return await this._tx('readonly', s => { const rq = s.getAll(); return new Promise(r => rq.onsuccess = () => r(rq.result)); }); } catch { return []; } },
+  async put(rec) { try { await this._tx('readwrite', s => s.put(rec)); } catch {} },
+  async remove(name) { try { await this._tx('readwrite', s => s.delete(name)); } catch {} },
+  async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
+};
+
+const assetFS = {
+  list: [],   // [{name, size, type, warn}]
+  _memfs(name, bytes) { if (pyodide) try { pyodide.FS.writeFile(name, bytes); } catch (e) { console.warn('memfs write', name, e); } },
+  _unlink(name) { if (pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {} },
+  async hydrateAll() {
+    const recs = await assetStore.getAll();
+    this.list = recs.map(r => ({ name: r.name, size: r.size, type: r.type, warn: UNSUPPORTED_AUDIO.test(r.name) }));
+    for (const r of recs) this._memfs(r.name, new Uint8Array(r.bytes));
+    renderAssets();
+  },
+  totalSize() { return this.list.reduce((n, a) => n + a.size, 0); },
+  async add(file) {
+    if (file.size > ASSET_MAX_FILE) return assetMsg(`"${file.name}" is ${(file.size/1048576).toFixed(1)} MB — over the 10 MB per-file limit.`);
+    const existing = this.list.find(a => a.name === file.name);
+    if (this.totalSize() - (existing?.size || 0) + file.size > ASSET_MAX_TOTAL)
+      return assetMsg(`Adding "${file.name}" would exceed the 64 MB total budget. Remove something first.`);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await assetStore.put({ name: file.name, bytes: bytes.buffer, type: file.type, size: bytes.length, addedAt: Date.now() });
+    this._memfs(file.name, bytes);
+    this.list = this.list.filter(a => a.name !== file.name);
+    this.list.push({ name: file.name, size: bytes.length, type: file.type, warn: UNSUPPORTED_AUDIO.test(file.name) });
+    renderAssets();
+  },
+  async remove(name) {
+    await assetStore.remove(name); this._unlink(name);
+    this.list = this.list.filter(a => a.name !== name); renderAssets();
+  },
+  async clearAll() {
+    await assetStore.clear();
+    for (const a of this.list) this._unlink(a.name);
+    this.list = []; renderAssets();
+  },
+  async addFiles(files) { for (const f of files) await this.add(f); },
+};
+
+const assetChipEl = document.getElementById('assetChip');
+function assetMsg(text) { logLine(text, 'sys'); }
+function renderAssets() {
+  const n = assetFS.list.length;
+  assetChipEl.textContent = n ? `📁 ${n}` : '📁';
+  assetChipEl.classList.toggle('has', n > 0);
+  renderAssetPanel();   // defined in Task 6; harmless no-op stub until then
+}
+function renderAssetPanel() {}   // replaced in Task 6
+
+document.getElementById('assetInput').addEventListener('change', (e) => {
+  assetFS.addFiles([...e.target.files]); e.target.value = '';
+});
 // ---------------------------------------------------------------- collaboration (lazy) — declared early so joinRoom() can reference collab before the collab section below
 const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
 let _amCache = null;
@@ -886,6 +969,7 @@ async function boot() {
   setStatus("boot", "loading pygame…");
   await pyodide.loadPackage("pygame-ce");
   await pyodide.runPythonAsync(BOOT_PY);
+  await assetFS.hydrateAll();   // rehydrate any persisted uploads into MEMFS
   setStatus("ready", "ready");
 }
 const booted = boot().catch((e) => {

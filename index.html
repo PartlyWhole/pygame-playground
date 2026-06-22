@@ -79,6 +79,10 @@
   .remote-cursor { position: relative; border-left: 2px solid; margin-left: -1px; }
   .remote-flag { position: absolute; top: -1.1em; left: -1px; font-size: 10px; padding: 0 3px;
                  white-space: nowrap; color: #0b0d12; border-radius: 3px 3px 3px 0; }
+  #assetChip { font-size: 12.5px; color: var(--dim); padding: 4px 8px; cursor: pointer;
+               border-radius: 99px; border: 1px solid transparent; user-select: none; }
+  #assetChip:hover { border-color: var(--edge); color: var(--text); }
+  #assetChip.has { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -90,6 +94,8 @@
   <button id="shareBtn" title="Copy a link that opens this code">🔗 Share</button>
   <button id="collabBtn" title="Start a live collaboration room">👥 Collaborate</button>
   <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
+  <span id="assetChip" title="Uploaded assets — drop files anywhere, or click to add">📁</span>
+  <input id="assetInput" type="file" multiple hidden>
   <span class="hint"><kbd>⌘</kbd><kbd>↩</kbd> run · <kbd>⌘</kbd><kbd>/</kbd> comment · <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> indent · click canvas for keys · 👥 = live share</span>
   <span id="status" class="boot">starting…</span>
 </header>

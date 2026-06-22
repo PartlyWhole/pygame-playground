@@ -951,6 +951,17 @@ let pyodide = null;
 let runTask = null;
 
 async function boot() {
+  // Capture SDL's Web Audio context(s) so the Run click (a user gesture) can resume
+  // them — headed browsers start an AudioContext suspended until a gesture. Inert
+  // unless the user's program calls pygame.mixer. (Proxy returns real instances.)
+  window.__audioContexts = window.__audioContexts || [];
+  for (const key of ["AudioContext", "webkitAudioContext"]) {
+    const Orig = window[key];
+    if (!Orig || Orig.__wrapped) continue;
+    const Wrapped = new Proxy(Orig, { construct(T, a) { const c = new T(...a); window.__audioContexts.push(c); return c; } });
+    Wrapped.__wrapped = true;
+    window[key] = Wrapped;
+  }
   setStatus("boot", "loading Python…");
   const mod = await import(PYODIDE_BASE + "pyodide.mjs");
   pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
@@ -982,6 +993,7 @@ async function run() {
   try { await booted; } catch { return; }
   clearConsole();
   canvasEl.focus();
+  resumeAudio();
   const start = pyodide.globals.get("_start");
   const task = start(editor.getValue());
   start.destroy();
@@ -996,6 +1008,14 @@ async function run() {
     if (runTask === task) setStatus("ready", "stopped");
   });
 }
+
+// Resume any SDL-created Web Audio context on a user gesture (autoplay policy).
+function resumeAudio() {
+  for (const c of window.__audioContexts || []) {
+    if (c.state === "suspended") c.resume().catch(() => {});
+  }
+}
+canvasEl.addEventListener("click", resumeAudio);
 
 document.getElementById("runBtn").addEventListener("click", run);
 document.getElementById("stopBtn").addEventListener("click", () => {

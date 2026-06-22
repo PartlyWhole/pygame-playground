@@ -66,5 +66,33 @@ const spritePx = await page.evaluate(() => {
 if (spritePx[0] > 150 && spritePx[1] < 100 && spritePx[2] > 150) ok('uploaded sprite blits to canvas: ' + spritePx);
 else fail('sprite pixel wrong: ' + spritePx);
 
+// 5. Sound API path: upload WAV, play it, assert no exception + AudioContext exists.
+await page.setInputFiles('#assetInput',
+  { name: 'beep.wav', mimeType: 'audio/wav', buffer: buf(WAV_B64) });
+await page.waitForTimeout(150);
+await page.evaluate(() => {
+  document.querySelector('.CodeMirror').CodeMirror.setValue([
+    'import pygame',
+    'pygame.init()',
+    'pygame.display.set_mode((120, 90))',
+    'pygame.mixer.init()',
+    's = pygame.mixer.Sound("beep.wav")',
+    'ch = s.play()',
+    'print("PLAY_OK", ch is not None, round(s.get_length(), 2))',
+  ].join('\n'));
+});
+await page.click('#runBtn');   // a real user gesture -> resumeAudio()
+await page.waitForFunction(() => /finished|error/.test(document.getElementById('status').textContent),
+  null, { timeout: 20_000 }).catch(() => {});
+const soundConsole = await page.evaluate(() =>
+  Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n'));
+if (/PLAY_OK True/.test(soundConsole)) ok('Sound.play() returned a channel, no exception');
+else fail('sound play path failed: ' + soundConsole.slice(0, 200));
+const acCount = await page.evaluate(() => (window.__audioContexts || []).length);
+if (acCount > 0) ok('AudioContext captured: ' + acCount);
+else fail('no AudioContext captured (shim not installed?)');
+const acState = await page.evaluate(() => (window.__audioContexts || []).map(c => c.state));
+ok('AudioContext states after Run gesture: ' + acState.join(','));
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

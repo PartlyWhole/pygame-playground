@@ -96,5 +96,33 @@ else fail('no AudioContext captured (shim not installed?)');
 const acState = await page.evaluate(() => (window.__audioContexts || []).map(c => c.state));
 console.log('info - AudioContext states after Run gesture: ' + acState.join(','));
 
+// 6. Oversize file (>10 MB) is rejected: no MEMFS file, chip count unchanged.
+const chipBefore = await page.textContent('#assetChip');
+await page.setInputFiles('#assetInput',
+  { name: 'big.png', mimeType: 'image/png', buffer: Buffer.alloc(11 * 1024 * 1024) });
+await page.waitForTimeout(150);
+const chipAfterBig = await page.textContent('#assetChip');
+const bigInFs = await page.evaluate(() => pyodide.FS.analyzePath('big.png').exists);
+if (chipBefore === chipAfterBig && !bigInFs) ok('oversize file rejected');
+else fail(`oversize not rejected (chip ${chipBefore}->${chipAfterBig}, memfs=${bigInFs})`);
+
+// 7. MP3 upload shows a warning flag in the popover.
+await page.setInputFiles('#assetInput',
+  { name: 'tune.mp3', mimeType: 'audio/mpeg', buffer: buf(MP3_B64) });
+await page.waitForTimeout(150);
+await page.click('#assetChip');   // open popover
+const warnShown = await page.evaluate(() =>
+  !!document.querySelector('#assetPanel [data-name="tune.mp3"] .asset-warn'));
+if (warnShown) ok('MP3 shows unsupported-format warning');
+else fail('no warning badge on MP3 row');
+
+// 8. Remove via popover -> MEMFS unlinked.
+await page.click('#assetPanel [data-name="tune.mp3"] .asset-remove');
+await page.waitForTimeout(150);
+const goneFs = await page.evaluate(() => pyodide.FS.analyzePath('tune.mp3').exists);
+const chipNow = (await page.textContent('#assetChip')).trim();
+if (!goneFs) ok('removed asset unlinked from MEMFS; chip=' + chipNow);
+else fail('removed file still in MEMFS');
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

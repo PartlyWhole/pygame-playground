@@ -40,11 +40,16 @@ Load-bearing facts this design is built on:
   imported infinite loop, pauses honored as real time (1686 ms, no busy-wait),
   edited module re-run picks up new code. Negative control: a *sync* imported
   busy-loop froze the thread 2022 ms.
-- **The transform the spike proved is the BLANKET one:** `_AsyncifyAll` converts
-  **every** module-level function to `async def`, and `_AwaitCalls` wraps **every**
-  call node in `await __maybe_await__(...)` (awaits if the result is a coroutine,
-  else passes the value through). This design uses that proven blanket transform
-  (see the run-model section for why, and the one optional perf lever).
+- **Call-site wrapping is BLANKET; function conversion is SELECTIVE** (refined
+  during implementation — see the run-model section). `_AwaitCalls` wraps **every**
+  call node in `await __maybe_await__(...)` (awaits a coroutine, else passes the
+  value through) — this is the proven "never miss an await" property. But functions
+  are converted to `async` **selectively** (only those containing a game loop or a
+  sleep/wait), NOT blanket: a blanket conversion makes *every* module function a
+  coroutine, which breaks the dominant multi-file pattern — a class method or
+  module-level constant calling a pure helper (`self.image = load("p.png")`) gets a
+  coroutine, not a value. Selective conversion keeps pure helpers synchronous so
+  they return real values to sync callers.
 - **Two hard lessons:** (1) entry/user code must `eval` into a **dedicated globals
   dict, never `pyodide.globals`** — a stray global `_start = …` clobbered the
   page's `_start()` and broke Run. (2) `_start_project` must return the asyncio
@@ -86,11 +91,18 @@ instance-level and carry across swaps.
   on the next non-room load). Multi-file never *regresses* collab. **Trade-off:**
   no multi-file collaboration yet — revisit as its own project.
 - **Cooperative guarantee (v1):** the entry (top level + its loop-functions) and
-  **all module-level functions** of imported files are cooperative. **Class
-  methods are not async-converted** — a game loop inside a method is an
-  unsupported edge (friendly error). The common pattern (loop in the entry,
-  classes with quick per-frame `update()/draw()`, helpers in modules) is fully
-  supported.
+  the **loop/pause-bearing module-level functions** of imported files are
+  cooperative (made `async` + awaited). **Pure module helpers stay synchronous**
+  (so a class method / module-level constant can call them and use the value).
+  **Class methods are not async-converted** — a game loop inside a method is an
+  unsupported edge (friendly error). The common patterns (loop in the entry;
+  classes with `update()/draw()` methods that call pure helpers; module-level
+  resource constants like `IMG = load(...)`; a module "run the game" function with
+  a loop, called from the entry) are all supported. Calling a loop/pause-bearing
+  function from a sync context (module top level, a class method, a non-cooperative
+  function) by **bare same-module name** raises a friendly error; doing so via a
+  cross-module attribute (`other.run()`) or an alias is a narrow documented edge
+  (the coroutine is silently dropped — see Known edges).
 - **Persistence & sharing become project-aware**, single canonical (de)serialize,
   legacy single-file path preserved (see Persistence).
 
@@ -146,13 +158,16 @@ editor-init, before boot).
 
 A second Python boot string appended after `BOOT_PY`, adding **only new names**.
 It **reuses, read-only**, BOOT_PY's `_SyncBarrier`, `_is_gameloop`, `_shallow`,
-`_Awaiter`, `_InjectYield`, `_time_names`, `_YIELD`, `__yield__`, `__sleep__`,
-`_state`. It **defines its own** `_AsyncifyAll`, `_AwaitCalls`, `__maybe_await__`,
-`_transform_module`, `_transform_entry_project`, `_ProjectFinder`/`_ProjectLoader`,
-`_install_finder`, `_run_project`, `_start_project`, and a `_PROJECT_FILES` set.
-It **does not touch** `_Asyncify`, `_transform`, `_start`, `_run` — so the
-single-file path is provably byte-identical (a TDD case locks a solo sync helper
-that contains only `time.sleep`).
+`_Asyncify`, `_Awaiter`, `_InjectYield`, `_time_names`, `_YIELD`, `__yield__`,
+`__sleep__`, `_state`. It **defines its own** `_needs_async`/`_AsyncifyCoop`
+(selective conversion), `_AwaitCalls` (blanket call wrapping), `__maybe_await__`,
+`_ModuleCoop` (apply the cooperative passes inside async function bodies only),
+`_check_loop_placement` + `_CoopCallCheck` + `_ProjectError` (friendly errors),
+`_transform_module`, `_transform_entry`, `_ProjectFinder`/`_ProjectLoader`,
+`_install_finder`, `_run_project`, `_start_project`, and `_PROJECT_FILES`/
+`_PROJECT_PATHS`. It **does not touch** `_Asyncify`, `_transform`, `_start`,
+`_run` — so the single-file path is provably byte-identical (a TDD case locks a
+solo sync helper that contains only `time.sleep`).
 
 `_start_project(files: dict[str,str], entry: str)`:
 1. Reconcile MEMFS: `pyodide.FS.writeFile` every current `name → text`; unlink any
@@ -162,7 +177,7 @@ that contains only `time.sleep`).
 2. `_install_finder()` (idempotent: one `_ProjectFinder` on `sys.meta_path`).
 3. `importlib.invalidate_caches()`; `sys.modules.pop(name, None)` for each module.
 4. Ensure `'' in sys.path` (insert at 0 if missing).
-5. Transform the **entry** via `_transform_entry_project`, compile with
+5. Transform the **entry** via `_transform_entry`, compile with
    `PyCF_ALLOW_TOP_LEVEL_AWAIT`, `eval` into a **fresh dedicated globals dict**
    (mirroring `_run`'s `glb`), `ensure_future` it into `_state["task"]`, and
    return that Future. Same ok/error/stopped/exit protocol & `_stop()` as `_run`.
@@ -171,31 +186,47 @@ that contains only `time.sleep`).
 injects the helpers (`__yield__`, `__sleep__`, `__maybe_await__`) into the module
 dict before `exec`.
 
-#### The cross-module await problem — use the PROVEN blanket transform
+#### The cross-module cooperation model (selective conversion + blanket await)
 
-An imported module's loop/sleep function becomes `async def`; the entry must
-`await` a call into it, but can't statically know the callee is a coroutine. The
-spike solved this by **converting every module function to async (`_AsyncifyAll`)
-and wrapping every call in `await __maybe_await__(call)` (`_AwaitCalls`)**. This
-design ships exactly that, because its failure mode (a missed await → imported
-game logic silently doesn't run, no error) is unacceptable and the blanket
-version is the one with real headless proof. Key properties:
+An imported module's loop/pause function becomes `async def`; a caller must
+`await` it, but can't statically know the callee is a coroutine. Two separable
+decisions (the second was corrected during implementation after a code review):
 
-- `__maybe_await__(v)` → `await v if inspect.iscoroutine(v) else v`. Semantically
-  transparent for non-coroutines (`await __maybe_await__(len(x))` == `len(x)`).
-- `_AsyncifyAll` converts every **module-level** `def` to `async def` (via
-  `_SyncBarrier`, never descending into classes/nested defs — methods stay sync).
-  This makes `_Awaiter`'s `time.sleep → await __sleep__` / `pygame.time.wait →
-  await __sleep__` rewrites always valid (the function is async), so module pauses
-  are honored where written. No hand-waved sleep-predicate; conversion and
-  rewrite can't desync.
-- `_AwaitCalls` wraps **every** `Call` node (all positions: Expr/assign/arg/
-  return) in async scopes, closing the returned-then-called and non-Expr gaps.
-- Module pipeline: `_AsyncifyAll` → `_Awaiter`(this module's converted set + its
-  `_time_names`) → `_AwaitCalls` → `_InjectYield`.
-- Entry pipeline (`_transform_entry_project`): the existing entry passes
-  (`_Asyncify` loop-only → `_Awaiter` → `_InjectYield`) **plus** `_AwaitCalls`,
-  composed here from the read-only classes (the shared `_transform` is untouched).
+1. **Call sites: BLANKET.** `_AwaitCalls` wraps **every** `Call` node (all
+   positions) in `await __maybe_await__(call)` inside async scopes.
+   `__maybe_await__(v)` → `await v if inspect.iscoroutine(v) else v`, so it awaits
+   a coroutine and passes any plain value straight through. This gives the
+   "never miss an await" property (the failure mode of a *scoped* inclusion-list
+   was a silent missed await). `__maybe_await__(len(x))` == `len(x)`.
+2. **Function conversion: SELECTIVE.** `_AsyncifyCoop` converts a module-level
+   `def` to `async def` **only if `_needs_async()`** — it directly contains a game
+   loop *or* a sleep/wait that `_Awaiter` rewrites (the predicate mirrors
+   `_Awaiter`'s exact conditions, so conversion and rewrite can't desync). Pure
+   helpers stay **sync**, so `self.image = load("p.png")` in a class method, or a
+   module-level `IMG = load(...)`, gets a real value — not a dropped coroutine.
+   (Blanket conversion broke this dominant pattern; selective fixes it.) Methods
+   inside classes are never converted.
+
+Key passes and pipeline:
+
+- `_ModuleCoop` applies `_Awaiter` → `_AwaitCalls` → `_InjectYield` **only inside
+  the (now-async) function bodies**, never at module top level — a module is
+  imported *synchronously* (no `PyCF_ALLOW_TOP_LEVEL_AWAIT`), so an injected
+  top-level await would be a `SyntaxError`. This is why a module may freely run
+  top-level calls (`SIZE = len(...)`, `logging.getLogger(__name__)`, import-time
+  setup) — they stay plain sync.
+- `_AwaitCalls.visit_Await` collapses `await f()` (already produced by `_Awaiter`
+  for a converted name) into a single `await __maybe_await__(f())` rather than a
+  double `await (await …)` (which would `await None` → `TypeError`); it skips the
+  helper calls `__maybe_await__`/`__yield__`/`__sleep__`.
+- Module pipeline: `_check_loop_placement` → `_AsyncifyCoop` → `_CoopCallCheck`
+  (friendly error if a converted/cooperative fn is called by bare same-module name
+  from a sync context, where its coroutine would be silently dropped) → `_ModuleCoop`.
+- Entry pipeline (`_transform_entry`): the existing entry passes (`_Asyncify`
+  loop-only → `_Awaiter` → `_InjectYield`) **plus** `_AwaitCalls`, over the whole
+  tree (the entry *is* compiled with `PyCF_ALLOW_TOP_LEVEL_AWAIT`, so its top level
+  may await), composed from the read-only classes (the shared `_transform` is
+  untouched).
 
 **Perf lever (optional, gated):** blanket wrapping adds an `await __maybe_await__`
 per call in multi-file hot loops (single-file is untouched). If perf test #8
@@ -206,8 +237,19 @@ asname-aware). Excluded targets are never project async functions, so the
 never-miss-an-await property holds. This lever ships **only** with the full
 cross-module correctness matrix green (see tests 1–4, 8): `mod.fn()`,
 `import mod as m; m.fn()`, `from mod import fn; fn()`, `f = fn; f()`, same-module
-converted call in arg/return position. Exotic higher-order indirection
-(`funcs[0]()`, `get()()`) is documented unsupported.
+converted call in arg/return position.
+
+**Known edges (documented, narrow):** calling a loop/pause-bearing function from a
+sync context raises a friendly error for a bare same-module name (`_CoopCallCheck`),
+but **drops the coroutine** (Python prints a *coroutine was never awaited*
+warning naming the function) when reached via a cross-module attribute
+(`other.run()` from a class method) or a local alias (`f = run; f()`) — these need
+cross-module/dataflow analysis the single-module transform can't do, and are rare
+(you don't normally call a game-loop/pause function from a method). Also unsupported:
+a game loop at a non-entry module's top level or inside a class method (both raise a
+friendly error), and exotic higher-order indirection of a converted function
+(`funcs[0]()`). The workaround for all: call cooperative functions from the entry
+or from another cooperative (looping/waiting) function.
 
 ### Dispatch (JS `run()`)
 
@@ -349,8 +391,8 @@ not in a room.
 
 ## Appendix — hardening from the 4-lens adversarial review
 
-Resolved before coding: blanket (proven) transform instead of an unproven scoped
-inclusion-list (closes silent missed-await); PROJECT_PY owns its transform classes
+Resolved before coding: blanket call-site await (not a scoped inclusion-list →
+closes silent missed-await); PROJECT_PY owns its transform classes
 (no shared-name mutation → solo byte-identity); single `loadInitialProject()`
 bootstrap + tolerant `deserialize`; one project-aware autosave writer
 (`serialize()` reads every Doc; legacy key mirrored only single-file; paused in
@@ -359,6 +401,16 @@ room); `main.py` Doc adopted from `editor.getDoc()`; `#editorPane` → column +
 + validated + size-guarded; rename name-only + warning; collab single-file with
 the no-leave reality stated (no phantom "restore on leaving"); MEMFS reconcile +
 unlink-on-delete; friendly transform-time errors for both bad loop placements;
-`_start_project` returns the Future (no spike destroy-and-return). Documented
-unsupported: higher-order indirection of converted functions, game loops inside
-methods / at non-entry top level, multi-file collaboration.
+`_start_project` returns the Future (no spike destroy-and-return).
+
+Corrected during implementation (after the code-quality review of Task 2): a
+module is exec'd synchronously, so `_ModuleCoop` confines the cooperative passes
+to async-function bodies (module top-level calls stay sync — C1); `_AwaitCalls`
+collapses the `await`/`_Awaiter` double-await (C2); and **function conversion went
+from blanket to selective** (`_AsyncifyCoop`/`_needs_async`) so pure helpers stay
+sync and class methods / module-level constants can use their results — with
+`_CoopCallCheck` raising a friendly error when a cooperative function is called by
+bare same-module name from a sync context. Documented unsupported: cooperative
+function called from a sync context via cross-module attribute or alias (silent
+drop), higher-order indirection of converted functions, game loops inside methods
+/ at non-entry top level, multi-file collaboration.

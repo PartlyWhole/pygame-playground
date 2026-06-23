@@ -20,7 +20,7 @@
   header {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--edge);
-    flex: 0 0 auto;
+    flex: 0 0 auto; position: relative;   /* anchor the #assetPanel popover */
   }
   header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
   header h1 span { color: var(--accent); }
@@ -860,15 +860,18 @@ function renderAssets() {
   const n = assetFS.list.length;
   assetChipEl.textContent = n ? `📁 ${n}` : '📁';
   assetChipEl.classList.toggle('has', n > 0);
-  renderAssetPanel();   // defined in Task 6; harmless no-op stub until then
+  renderAssetPanel();   // keep the open panel in sync with the list
 }
 const assetPanelEl = document.getElementById('assetPanel');
 const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(0) + ' KB' : (n/1048576).toFixed(1) + ' MB';
+// Escape filenames before interpolating into innerHTML: a name with " or < would
+// otherwise break the data-name attribute (and thus remove) or the markup.
+const esc = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function renderAssetPanel() {
   if (assetPanelEl.hidden) return;
   const rows = assetFS.list.map(a => `
-    <div class="asset-row" data-name="${a.name}">
-      <span class="asset-name">${a.name}</span>
+    <div class="asset-row" data-name="${esc(a.name)}">
+      <span class="asset-name">${esc(a.name)}</span>
       ${a.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : ''}
       <span class="asset-size">${fmtSize(a.size)}</span>
       <button class="asset-remove" title="Remove">✕</button>
@@ -888,9 +891,12 @@ assetPanelEl.addEventListener('click', (e) => {
   else if (e.target.classList.contains('asset-remove'))
     assetFS.remove(e.target.closest('.asset-row').dataset.name);
 });
-// Close the popover when clicking elsewhere.
+// Close the popover when clicking elsewhere. The hidden file input is exempt:
+// "+ add files" synthesizes a click on it that bubbles here, and that must not
+// self-close the panel before the picker returns.
 document.addEventListener('click', (e) => {
-  if (!assetPanelEl.hidden && !assetPanelEl.contains(e.target) && e.target !== assetChipEl)
+  if (!assetPanelEl.hidden && !assetPanelEl.contains(e.target) &&
+      e.target !== assetChipEl && e.target.id !== 'assetInput')
     { assetPanelEl.hidden = true; }
 });
 

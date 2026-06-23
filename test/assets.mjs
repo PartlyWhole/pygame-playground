@@ -124,5 +124,34 @@ const chipNow = (await page.textContent('#assetChip')).trim();
 if (!goneFs) ok('removed asset unlinked from MEMFS; chip=' + chipNow);
 else fail('removed file still in MEMFS');
 
+// 9. A filename containing a double-quote must still remove correctly
+// (data-name must be escaped so dataset.name round-trips the real name).
+await page.setInputFiles('#assetInput',
+  { name: 'q"x.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
+await page.waitForTimeout(150);
+const removeResult = await page.evaluate(() => {
+  const panel = document.getElementById('assetPanel');
+  panel.hidden = false;
+  if (typeof renderAssetPanel === 'function') renderAssetPanel();   // ensure rows rendered
+  const row = [...panel.querySelectorAll('.asset-row')].find(r => r.dataset.name === 'q"x.png');
+  if (!row) return 'no-row';
+  row.querySelector('.asset-remove').click();
+  return 'clicked';
+});
+await page.waitForTimeout(150);
+const quoteGone = await page.evaluate(() => !pyodide.FS.analyzePath('q"x.png').exists);
+if (removeResult === 'clicked' && quoteGone) ok('quoted filename removes correctly (data-name escaped)');
+else fail(`quoted filename remove broken (row=${removeResult}, gone=${quoteGone})`);
+
+// 10. A click originating on the hidden file input must not close the panel
+// (otherwise "+ add files" self-closes the popover before the picker returns).
+await page.evaluate(() => { document.getElementById('assetPanel').hidden = false; });
+await page.evaluate(() =>
+  document.getElementById('assetInput').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+await page.waitForTimeout(50);
+const panelStillOpen = await page.evaluate(() => !document.getElementById('assetPanel').hidden);
+if (panelStillOpen) ok('file-input click does not close the panel');
+else fail('panel closed on file-input click (browse would self-close)');
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

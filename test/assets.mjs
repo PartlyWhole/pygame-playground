@@ -153,5 +153,22 @@ const panelStillOpen = await page.evaluate(() => !document.getElementById('asset
 if (panelStillOpen) ok('file-input click does not close the panel');
 else fail('panel closed on file-input click (browse would self-close)');
 
+// 11. Drop-anywhere path adds an asset.
+await page.evaluate(({ name, b64, type }) => {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const dt = new DataTransfer();
+  dt.items.add(new File([bytes], name, { type }));
+  document.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+}, { name: 'ship.ogg', b64: OGG_B64, type: 'audio/ogg' });
+await page.waitForTimeout(200);
+const dropped = await page.evaluate(() => pyodide.FS.analyzePath('ship.ogg').exists);
+if (dropped) ok('drop-anywhere wrote asset to MEMFS');
+else fail('dropped file not added');
+
+// Final: no unexpected JS errors throughout.
+const realErrors = jsErrors.filter(e => !/favicon/.test(e));
+if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));
+else ok('no JS console errors');
+
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

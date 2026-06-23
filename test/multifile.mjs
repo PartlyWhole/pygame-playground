@@ -261,12 +261,18 @@ await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'a = 1\n' } });    // reset to single
   window.renderTabs();
 });
-let tabsHiddenSolo = await page.evaluate(() => {
+// S1 always-on explorer (IA flip): the explorer (#tabs) is now always visible and
+// lists the project's file(s) even in single-file mode — assert it shows exactly the
+// one main.py row (was: "tab strip absent in single-file mode").
+let soloExplorer = await page.evaluate(() => {
   const t = document.getElementById('tabs');
-  return !t || t.offsetParent === null || t.children.length === 0;
+  if (!t || t.offsetParent === null) return { visible: false };
+  const rows = Array.from(t.querySelectorAll('.tab[data-name]'));
+  return { visible: true, names: rows.map(r => r.dataset.name) };
 });
-if (tabsHiddenSolo) ok('tab strip absent in single-file mode');
-else fail('tab strip showing for a single file');
+if (soloExplorer.visible && JSON.stringify(soloExplorer.names) === '["main.py"]')
+  ok('explorer always shows the file row(s) in single-file mode');
+else fail('explorer not always-on for a single file: ' + JSON.stringify(soloExplorer));
 
 await page.evaluate(() => {
   window.project.add('enemy.py', '# enemy\ndef spawn():\n    return 1\n');

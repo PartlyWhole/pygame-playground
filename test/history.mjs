@@ -61,7 +61,7 @@ await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('a = 1\nb = 99\nc = 3\n'));
 await page.click('#runBtn'); await page.waitForTimeout(600);
 
-await page.click('#historyBtn');
+await page.click('[data-view="history"]');   // S1: History opens via the rail icon, not #historyBtn
 await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
 const rows = await page.evaluate(() => document.querySelectorAll('#historyPanel .hist-row').length);
 if (rows === 2) ok('history panel lists both versions'); else fail('rows wrong: ' + rows);
@@ -89,7 +89,7 @@ await page.evaluate(() => window.project.load({ files: { 'main.py': 'import e\n'
   order: ['main.py','e.py'], entry: 'main.py', active: 'main.py' }));
 await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'solo = 1\n' } }));   // collapse to one file
-await page.click('#historyBtn'); await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
+await page.click('[data-view="history"]'); await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
 await page.evaluate(() => { window.confirm = () => true; });
 await page.click('#historyPanel .hist-row:last-child');
 await page.waitForSelector('#historyPanel .hp-restore', { timeout: 10_000 });
@@ -104,7 +104,7 @@ await page.evaluate(() => { document.getElementById('historyPanel').hidden = tru
 await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('v = 2\n'));
 await page.click('#runBtn'); await page.waitForTimeout(600);
-await page.click('#historyBtn');
+await page.click('[data-view="history"]');   // S1: History opens via the rail icon
 await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
 await page.click('#historyPanel .hist-row:last-child');          // select the oldest -> opens its diff
 await page.waitForSelector('#historyPanel .hp-diffbody', { timeout: 10_000 });

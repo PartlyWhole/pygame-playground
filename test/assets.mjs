@@ -96,7 +96,15 @@ else fail('no AudioContext captured (shim not installed?)');
 const acState = await page.evaluate(() => (window.__audioContexts || []).map(c => c.state));
 console.log('info - AudioContext states after Run gesture: ' + acState.join(','));
 
-// 6. No hard cap: a >10 MB file is accepted, and the popover shows a real
+// S1: assets are re-homed into the always-on Explorer. Open the Explorer rail view to
+// surface the asset section (#assetChip/#assetPanel + .asset-row selectors preserved).
+const openExplorer = () => page.evaluate(() => {
+  const tab = document.querySelector('[data-view="explorer"]');
+  if (tab) tab.click();
+  if (typeof renderAssetPanel === 'function') renderAssetPanel();
+});
+
+// 6. No hard cap: a >10 MB file is accepted, and the Explorer shows a real
 //    browser-storage metric (used vs available).
 await page.setInputFiles('#assetInput',
   { name: 'big.png', mimeType: 'image/png', buffer: Buffer.alloc(11 * 1024 * 1024) });
@@ -104,30 +112,26 @@ await page.waitForTimeout(250);
 const bigInFs = await page.evaluate(() => pyodide.FS.analyzePath('big.png').exists);
 if (bigInFs) ok('large (11 MB) file accepted — no hard cap');
 else fail('large file rejected — cap not removed');
-await page.evaluate(() => {
-  const p = document.getElementById('assetPanel'); p.hidden = false;
-  if (typeof renderAssetPanel === 'function') renderAssetPanel();
-});
+await openExplorer();
 await page.waitForFunction(() => {
   const el = document.getElementById('apStorage');
   return el && /storage/i.test(el.textContent) && /\d/.test(el.textContent);
 }, null, { timeout: 5000 }).catch(() => {});
 const storageText = await page.evaluate(() => document.getElementById('apStorage')?.textContent || '');
-if (/storage/i.test(storageText) && /\d/.test(storageText)) ok('popover shows browser-storage metric: ' + storageText.trim());
-else fail('no storage metric in popover (got ' + JSON.stringify(storageText) + ')');
-await page.evaluate(() => { document.getElementById('assetPanel').hidden = true; });  // reset for test 7's chip toggle
+if (/storage/i.test(storageText) && /\d/.test(storageText)) ok('Explorer shows browser-storage metric: ' + storageText.trim());
+else fail('no storage metric in Explorer (got ' + JSON.stringify(storageText) + ')');
 
-// 7. MP3 upload shows a warning flag in the popover.
+// 7. MP3 upload shows a warning flag on its asset row.
 await page.setInputFiles('#assetInput',
   { name: 'tune.mp3', mimeType: 'audio/mpeg', buffer: buf(MP3_B64) });
 await page.waitForTimeout(150);
-await page.click('#assetChip');   // open popover
+await openExplorer();   // assets live in the always-on Explorer (no popover toggle)
 const warnShown = await page.evaluate(() =>
   !!document.querySelector('#assetPanel [data-name="tune.mp3"] .asset-warn'));
 if (warnShown) ok('MP3 shows unsupported-format warning');
 else fail('no warning badge on MP3 row');
 
-// 8. Remove via popover -> MEMFS unlinked.
+// 8. Remove via the asset row -> MEMFS unlinked.
 await page.click('#assetPanel [data-name="tune.mp3"] .asset-remove');
 await page.waitForTimeout(150);
 const goneFs = await page.evaluate(() => pyodide.FS.analyzePath('tune.mp3').exists);

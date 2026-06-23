@@ -168,5 +168,18 @@ Limitations (v1):
 
 `test/multifile.mjs` is the headless battery for this feature.
 
+## Save
+
+Click **💾 Save** (or press **⌘**/**Ctrl**+**S** with the editor focused) to download
+your program. A lone file downloads as a plain `.py` (named after the entry file).
+A multi-file project — or *any* project with uploaded assets — downloads as a
+`pygame-project.zip` bundling all your `.py` files and assets together, so it runs
+as an ordinary desktop pygame project with no missing pieces. Everything happens
+client-side: the zip library ([JSZip](https://stuk.github.io/jszip/)) loads lazily
+from a CDN only the first time a zip is produced, so the common single-file path
+and first paint stay library-free.
+
+`test/save.mjs` is the headless battery for this feature.
+
 `verify.mjs` is a local headless-Chromium smoke test (boot, animation, input, error paths);
 it expects a local server on port 8923 and a machine with Playwright's Chromium cache.

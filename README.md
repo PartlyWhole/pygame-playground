@@ -195,5 +195,22 @@ first paint and the run-a-game path load nothing extra. If the checker can't loa
 
 `test/lint.mjs` is the headless battery for this feature.
 
+## History
+
+The 🕘 History button shows past versions of your project — a snapshot is saved
+each time you press ▶ Run (so every version is one you actually ran). Click a
+version to see what changed (a colored line diff of the file you're currently
+viewing, that version → now, with a note of how many *other* files differ), and
+**Restore** to bring it back. Snapshots are deduped (re-running unchanged code
+adds nothing) and capped at the 100 most recent.
+
+History is **local to your browser** — both solo and in a room, it's your own
+runs, not a shared multi-user timeline (that's a deferred v1 fork). It's stored in
+its own IndexedDB database (separate from assets), uses no network, and the diff
+view loads its diff library (jsdiff) lazily from a CDN only when you first open a
+diff. Capturing a snapshot is fire-and-forget, so it never blocks or breaks a Run.
+
+`test/history.mjs` is the headless battery for this feature.
+
 `verify.mjs` is a local headless-Chromium smoke test (boot, animation, input, error paths);
 it expects a local server on port 8923 and a machine with Playwright's Chromium cache.

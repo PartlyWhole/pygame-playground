@@ -1453,7 +1453,12 @@ async function saveProject() {
   const zip = new JSZip();
   const files = project.serialize().files;
   for (const name of Object.keys(files)) zip.file(name, files[name]);
-  for (const rec of await assetStore.getAll()) zip.file(rec.name, new Uint8Array(rec.bytes));
+  for (const rec of await assetStore.getAll()) {
+    // Never let an asset clobber a code file of the same name (zip.file overwrites).
+    const name = files[rec.name] ? "asset_" + rec.name : rec.name;
+    if (name !== rec.name) logLine(`Asset "${rec.name}" clashes with a code file — zipped as "${name}".`, "sys");
+    zip.file(name, new Uint8Array(rec.bytes));
+  }
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(blob, "pygame-project.zip");
 }

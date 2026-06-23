@@ -95,7 +95,9 @@ else fail('zip .py content wrong: ' + JSON.stringify(Object.keys(z1)));
 const { PNG_B64, buf } = await import('./fixtures.mjs');
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'import pygame\n' } }));   // lone file...
 await page.setInputFiles('#assetInput', { name: 'dot.png', mimeType: 'image/png', buffer: buf(PNG_B64) });  // ...plus an asset
-await page.waitForTimeout(200);
+// Deterministic wait: the chip shows a count only after assetFS.add awaits the
+// IndexedDB put (so assetStore.getAll() — the zip's byte source — has it).
+await page.waitForFunction(() => /1/.test(document.getElementById('assetChip').textContent), null, { timeout: 5000 });
 const [adl] = await Promise.all([ page.waitForEvent('download'), page.click('#saveBtn') ]);
 if (adl.suggestedFilename() === 'pygame-project.zip') ok('lone file + an asset still zips');
 else fail('asset-zip name wrong: ' + adl.suggestedFilename());
@@ -104,6 +106,27 @@ const pngBytes = Array.from(buf(PNG_B64));
 if (z2['main.py'] && JSON.stringify(z2['dot.png']) === JSON.stringify(pngBytes))
   ok('zip bundles the asset bytes intact');
 else fail('asset bytes wrong in zip: ' + (z2['dot.png'] ? 'mismatch' : 'missing'));
+
+// 8. Multi-file project + an asset together (the real-world game-with-sprites case).
+await page.evaluate(() => window.project.load({ files: { 'main.py': 'import sprites\n', 'sprites.py': 'P = 1\n' },
+  order: ['main.py','sprites.py'], entry: 'main.py', active: 'main.py' }));   // asset dot.png still uploaded
+const [mdl] = await Promise.all([ page.waitForEvent('download'), page.click('#saveBtn') ]);
+const z3 = await readZip(mdl);
+if (toStr(z3['main.py']).includes('import sprites') && z3['sprites.py'] &&
+    JSON.stringify(z3['dot.png']) === JSON.stringify(pngBytes))
+  ok('multi-file + asset zips code and asset together');
+else fail('multi-file+asset zip wrong: ' + JSON.stringify(Object.keys(z3)));
+
+// 9. An asset whose name collides with a code file does NOT clobber the code.
+await page.evaluate(() => window.project.load({ files: { 'main.py': 'M = 1\n', 'data.py': 'CODE = 99\n' },
+  order: ['main.py','data.py'], entry: 'main.py', active: 'main.py' }));
+await page.setInputFiles('#assetInput', { name: 'data.py', mimeType: 'image/png', buffer: buf(PNG_B64) });  // asset named like a code file
+await page.waitForFunction(() => /2/.test(document.getElementById('assetChip').textContent), null, { timeout: 5000 });
+const [cdl] = await Promise.all([ page.waitForEvent('download'), page.click('#saveBtn') ]);
+const z4 = await readZip(cdl);
+if (toStr(z4['data.py']).includes('CODE = 99') && JSON.stringify(z4['asset_data.py']) === JSON.stringify(pngBytes))
+  ok('asset name collision: code preserved, asset zipped as asset_data.py');
+else fail('collision handling wrong: ' + JSON.stringify(Object.keys(z4)));
 
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));

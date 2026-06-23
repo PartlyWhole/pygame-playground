@@ -523,7 +523,7 @@ import os, ast, asyncio, traceback, copy, time as _time
 
 import pygame
 
-_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0}
+_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0, "via_project": False}
 
 def _flag_flip(fn):
     def wrapper(*a, **k):
@@ -728,6 +728,157 @@ def _stop():
         t.cancel()
         return True
     return False
+`;
+
+// ---------------------------------------------------------------- multi-file run model (additive)
+// Appended after BOOT_PY. Adds ONLY new names; reuses BOOT_PY's _SyncBarrier,
+// _is_gameloop, _Asyncify, _Awaiter, _InjectYield, _time_names, __yield__,
+// __sleep__, _state, _stop. Never touches _start/_run/_transform. The blanket
+// transform (every module fn -> async, every call -> await __maybe_await__) is
+// the version proven in test/spike-multifile.mjs.
+const PROJECT_PY = String.raw`
+import sys, ast, importlib, importlib.abc, importlib.util, inspect, traceback, os
+
+class _ProjectError(Exception):
+    pass
+
+async def __maybe_await__(value):
+    if inspect.iscoroutine(value):
+        return await value
+    return value
+
+class _AwaitCalls(_SyncBarrier):
+    def _wrap(self, call):
+        return ast.copy_location(ast.Await(value=ast.Call(
+            func=ast.Name('__maybe_await__', ast.Load()), args=[call], keywords=[])), call)
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id in ('__maybe_await__', '__yield__', '__sleep__'):
+            return node
+        return self._wrap(node)
+
+class _AsyncifyAll(ast.NodeTransformer):
+    def __init__(self):
+        self.converted = set()
+    def visit_FunctionDef(self, node):
+        self.generic_visit(node)
+        node.__class__ = ast.AsyncFunctionDef
+        self.converted.add(node.name)
+        return node
+    def visit_ClassDef(self, node):
+        return node          # methods stay sync (see friendly-error check below)
+
+def _check_loop_placement(tree, filename):
+    for stmt in tree.body:
+        if isinstance(stmt, ast.While) and _is_gameloop(stmt):
+            raise _ProjectError(filename + ': a game loop must be in the entry file '
+                                'or a module-level function — not at module top level.')
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for n in ast.walk(node):
+                if isinstance(n, ast.While) and _is_gameloop(n):
+                    raise _ProjectError(filename + ': a game loop inside a class method '
+                                        "isn't supported — move it to a module-level function or the entry file.")
+
+def _transform_module(src, filename):
+    tree = ast.parse(src)
+    _check_loop_placement(tree, filename)
+    asyncify = _AsyncifyAll()
+    tree = asyncify.visit(tree)
+    tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
+    tree = _AwaitCalls().visit(tree)
+    tree = _InjectYield().visit(tree)
+    ast.fix_missing_locations(tree)
+    return compile(tree, filename, 'exec')
+
+_PROJECT_FILES = {}      # stem -> abs path in MEMFS
+_PROJECT_PATHS = set()   # abs paths written last run (for unlink reconcile)
+_MOD_HELPERS = {'__maybe_await__': __maybe_await__, '__yield__': __yield__, '__sleep__': __sleep__}
+
+class _ProjectLoader(importlib.abc.Loader):
+    def __init__(self, modname, path):
+        self.modname, self.path = modname, path
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        with open(self.path, 'r') as f:
+            src = f.read()
+        code = _transform_module(src, self.path)
+        module.__dict__.update(_MOD_HELPERS)
+        exec(code, module.__dict__)
+
+class _ProjectFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname in _PROJECT_FILES:
+            return importlib.util.spec_from_loader(fullname, _ProjectLoader(fullname, _PROJECT_FILES[fullname]))
+        return None
+
+def _install_finder():
+    if not any(isinstance(f, _ProjectFinder) for f in sys.meta_path):
+        sys.meta_path.insert(0, _ProjectFinder())
+
+def _transform_entry(src):
+    tree = ast.parse(src)
+    asyncify = _Asyncify()
+    tree = asyncify.visit(tree)
+    tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
+    tree = _AwaitCalls().visit(tree)
+    tree = _InjectYield().visit(tree)
+    ast.fix_missing_locations(tree)
+    return compile(tree, '<entry>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+
+async def _run_project(files, entry):
+    cwd = os.getcwd()
+    new_paths = set()
+    _PROJECT_FILES.clear()
+    for fname, msrc in files.items():
+        stem = fname[:-3] if fname.endswith('.py') else fname
+        path = os.path.join(cwd, fname)
+        with open(path, 'w') as f:
+            f.write(msrc)
+        _PROJECT_FILES[stem] = path
+        new_paths.add(path)
+    for old in _PROJECT_PATHS - new_paths:
+        try:
+            if os.path.exists(old): os.unlink(old)
+        except Exception:
+            pass
+    _PROJECT_PATHS.clear(); _PROJECT_PATHS.update(new_paths)
+
+    _install_finder()
+    importlib.invalidate_caches()
+    for fname in files:
+        sys.modules.pop(fname[:-3] if fname.endswith('.py') else fname, None)
+    if '' not in sys.path:
+        sys.path.insert(0, '')
+
+    glb = {'__name__': '__main__', '__yield__': __yield__, '__sleep__': __sleep__,
+           '__maybe_await__': __maybe_await__, '__builtins__': __builtins__}
+    try:
+        code = _transform_entry(files[entry])
+    except SyntaxError:
+        traceback.print_exc(limit=0); return 'error'
+    try:
+        if pygame.get_init():
+            pygame.event.clear()
+        res = eval(code, glb)
+        if asyncio.iscoroutine(res):
+            await res
+        return 'ok'
+    except asyncio.CancelledError:
+        return 'stopped'
+    except SystemExit:
+        return 'exit'
+    except _ProjectError as e:
+        print(str(e)); return 'error'
+    except BaseException:
+        traceback.print_exc(); return 'error'
+
+def _start_project(files, entry):
+    _stop()
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True)
+    _state['task'] = asyncio.ensure_future(_run_project(dict(files), str(entry)))
+    return _state['task']
 `;
 
 // ---------------------------------------------------------------- UI plumbing
@@ -1181,6 +1332,7 @@ async function boot() {
   setStatus("boot", "loading pygame…");
   await pyodide.loadPackage("pygame-ce");
   await pyodide.runPythonAsync(BOOT_PY);
+  await pyodide.runPythonAsync(PROJECT_PY);
   await assetFS.hydrateAll();   // rehydrate any persisted uploads into MEMFS
   setStatus("ready", "ready");
 }
@@ -1196,9 +1348,18 @@ async function run() {
   clearConsole();
   canvasEl.focus();
   resumeAudio();
-  const start = pyodide.globals.get("_start");
-  const task = start(editor.getValue());
-  start.destroy();
+  let task;
+  if (collab.active || !project.isMulti()) {
+    pyodide.runPython("_state['via_project'] = False");
+    const start = pyodide.globals.get("_start");
+    task = start(editor.getValue());          // existing single-file path, verbatim
+    start.destroy();
+  } else {
+    const startP = pyodide.globals.get("_start_project");
+    const filesPy = pyodide.toPy(project.serialize().files);
+    task = startP(filesPy, project.entry);
+    startP.destroy(); filesPy.destroy();
+  }
   runTask = task;
   setStatus("running", "running");
   task.then((kind) => {

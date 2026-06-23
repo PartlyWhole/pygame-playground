@@ -1066,7 +1066,7 @@ const project = {
     this.active = order.includes(rec.active) ? rec.active : this.entry;
     editor.swapDoc(this.files[this.active]);
   },
-  setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); } },
+  setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); editor.performLint?.(); } },
   add(name, text = "") {
     if (!isModuleName(name) || this.files[name]) return false;
     this.files[name] = new CodeMirror.Doc(text, "python");
@@ -1094,6 +1094,45 @@ const project = {
   setEntry(name) { if (this.files[name]) this.entry = name; },
 };
 window.project = project;   // test seam
+
+// ---------------------------------------------------------------- auto-lint (lazy, off-thread)
+// ruff-wasm checks Python off the main thread; loaded with the CM lint addon only
+// on the first edit, so first paint and running a game stay library-free.
+const RUFF_CDN = "https://esm.sh/@astral-sh/ruff-wasm-web@0.15.18";
+const CM_LINT_JS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.js";
+const CM_LINT_CSS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.css";
+const LINT_ERROR = new Set(["invalid-syntax", "F821"]);   // undefined name + syntax = error; other F = warning
+let _linter = null;
+function loadLinter() {
+  return _linter ??= (async () => {
+    await new Promise((res, rej) => { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = CM_LINT_CSS; l.onload = res; l.onerror = () => rej(new Error("lint css")); document.head.appendChild(l); });
+    await new Promise((res, rej) => { const s = document.createElement("script"); s.src = CM_LINT_JS; s.onload = res; s.onerror = () => rej(new Error("lint js")); document.head.appendChild(s); });
+    const mod = await import(RUFF_CDN);
+    await mod.default();                                          // wasm init
+    return new mod.Workspace({ lint: { select: ["F"] } });       // F-codes + syntax; no E/W style noise
+  })().catch((e) => { _linter = null; throw e; });
+}
+function lintAnnotations(workspace, text) {
+  let diags;
+  try { diags = workspace.check(text); } catch { return []; }    // a linter hiccup must never block editing
+  return diags.map((d) => ({
+    from: CodeMirror.Pos(d.start_location.row - 1, d.start_location.column - 1),   // ruff is 1-based; CM is 0-based
+    to: CodeMirror.Pos(d.end_location.row - 1, d.end_location.column - 1),
+    message: (d.code ? d.code + ": " : "") + d.message,
+    severity: LINT_ERROR.has(d.code) ? "error" : "warning",
+  }));
+}
+let lintArmed = false;
+function armLint() {
+  if (lintArmed) return;
+  lintArmed = true;
+  loadLinter().then((workspace) => {
+    editor.setOption("gutters", ["CodeMirror-linenumbers", "CodeMirror-lint-markers"]);
+    editor.setOption("lint", { getAnnotations: (text) => lintAnnotations(workspace, text), delay: 350 });
+    editor.performLint();
+  }).catch(() => { lintArmed = false; logLine("Linting unavailable — couldn't load the checker.", "sys"); });
+}
+editor.on("change", armLint);   // first edit arms it; the CM lint addon re-lints on later changes
 
 // Tolerant deserialize for saved-project / #project= / migration seed.
 function deserializeProject(obj) {

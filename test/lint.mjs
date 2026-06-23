@@ -37,10 +37,11 @@ const ann = await page.evaluate(() => {
 });
 if (ann > 0) ok('lint produced inline annotations'); else fail('no inline lint annotations');
 
-// 3. Syntax error -> a marker.
+// 3. Syntax error -> an ERROR marker (pins the invalid-syntax->error severity, so a
+//    future ruff bump that renamed the code can't silently downgrade it to a warning).
 await setCode('import pygame\ndef run(:\n    pass\n');
-await page.waitForSelector('.CodeMirror-lint-marker', { timeout: 20_000 })
-  .then(() => ok('syntax error shows a marker')).catch(() => fail('no marker for syntax error'));
+await page.waitForSelector('.CodeMirror-lint-marker-error, .CodeMirror-lint-marker-multiple', { timeout: 20_000 })
+  .then(() => ok('syntax error shows an error marker')).catch(() => fail('no error marker for syntax error'));
 
 // 4. Unused import -> a warning marker.
 await setCode('import random\nx = 1\n');
@@ -66,8 +67,10 @@ await page.evaluate(() => {
                         order: ['main.py','good.py'], entry: 'main.py', active: 'main.py' });
   window.renderTabs();
 });
-await page.waitForTimeout(800);   // main.py ('import good' -> good is a project module, ruff flags F401? it's used? actually unused)
-await page.click('#tabs .tab[data-name="good.py"]');   // switch -> re-lint good.py
+await page.waitForTimeout(800);   // let main.py settle (its only finding is an F401 warning, never an error marker)
+await page.click('#tabs .tab[data-name="good.py"]');   // switch -> setActive re-lints good.py
+// good.py has an undefined name (F821 -> error); main.py never produces an error marker,
+// so an error marker here proves the switch re-linted the newly-shown file.
 await page.waitForSelector('.CodeMirror-lint-marker-error, .CodeMirror-lint-marker-multiple', { timeout: 20_000 })
   .then(() => ok('switching tabs lints the newly-shown file')).catch(() => fail('tab switch did not re-lint'));
 

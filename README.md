@@ -187,8 +187,9 @@ The editor checks your Python as you type — undefined names (typos), unused
 imports, and syntax errors show up as gutter markers with a hover message
 (powered by [ruff-wasm](https://github.com/astral-sh/ruff), loaded lazily from a
 CDN only on your first edit; style/formatting nits are intentionally *not*
-flagged, so good game code stays marker-free). It runs off the main thread, so it
-never interrupts a running game, and stays out of the way until you start typing —
+flagged, so good game code stays marker-free). It runs in its own wasm module
+(independent of the Python runtime, and a check is ~2 ms), so it never interrupts a
+running game, and stays out of the way until you start typing —
 first paint and the run-a-game path load nothing extra. If the checker can't load
 (offline / CDN down), linting silently stays off and the editor works as usual.
 

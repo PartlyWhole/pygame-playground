@@ -1095,9 +1095,11 @@ const project = {
 };
 window.project = project;   // test seam
 
-// ---------------------------------------------------------------- auto-lint (lazy, off-thread)
-// ruff-wasm checks Python off the main thread; loaded with the CM lint addon only
-// on the first edit, so first paint and running a game stay library-free.
+// ---------------------------------------------------------------- auto-lint (lazy, independent of Pyodide)
+// ruff-wasm checks Python in its own wasm module — it doesn't use the Pyodide
+// interpreter, so it never competes with a running game for the Python runtime
+// (and a check is ~2ms). Loaded with the CM lint addon only on the first edit, so
+// first paint and running a game stay library-free.
 const RUFF_CDN = "https://esm.sh/@astral-sh/ruff-wasm-web@0.15.18";
 const CM_LINT_JS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.js";
 const CM_LINT_CSS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.css";
@@ -1122,7 +1124,7 @@ function lintAnnotations(workspace, text) {
     severity: LINT_ERROR.has(d.code) ? "error" : "warning",
   }));
 }
-let lintArmed = false;
+let lintArmed = false, lintNoteShown = false;
 function armLint() {
   if (lintArmed) return;
   lintArmed = true;
@@ -1130,7 +1132,11 @@ function armLint() {
     editor.setOption("gutters", ["CodeMirror-linenumbers", "CodeMirror-lint-markers"]);
     editor.setOption("lint", { getAnnotations: (text) => lintAnnotations(workspace, text), delay: 350 });
     editor.performLint();
-  }).catch(() => { lintArmed = false; logLine("Linting unavailable — couldn't load the checker.", "sys"); });
+  }).catch(() => {
+    // Re-arm so a later edit retries when the network returns, but only note it once.
+    lintArmed = false;
+    if (!lintNoteShown) { lintNoteShown = true; logLine("Linting unavailable — couldn't load the checker.", "sys"); }
+  });
 }
 editor.on("change", armLint);   // first edit arms it; the CM lint addon re-lints on later changes
 

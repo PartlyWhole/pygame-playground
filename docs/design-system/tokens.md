@@ -125,6 +125,75 @@ is **`--text-muted` (#8a8fa3) ≈ 4.7:1 on `--bg`** — passes AA for normal tex
 the 4.5:1 floor; muted-on-`--panel` is slightly lower. Flagged for the later
 `design:accessibility-review` pass; **do not "fix" by changing the raw here** (formalization only).
 
+### 1.3 S1 shell component tokens (additive — the rail/tooltip/pane/row groups)
+
+> Added for the **S1 shell restyle** (`docs/specs/2026-06-23-shell-restyle-design.md` §9).
+> Each is a **semantic alias over the 8 raws or a promoted proto literal** — the raws are
+> unchanged. New components reference the semantic name. Landed one group at a time below.
+
+#### Rail (the vertical activity rail — new component group)
+
+| Semantic token                 | → resolves to            | Hex                  | Used by                              |
+|--------------------------------|--------------------------|----------------------|--------------------------------------|
+| `--color-rail-bg`              | `#181a21`                | `#181a21`            | `.rail` background (darker than panel) |
+| `--color-rail-item-hover`      | `#23262f`                | `#23262f`            | `.acttab:hover` bg                   |
+| `--color-rail-item-active`     | `rgba(123,216,143,.12)`  | accent @12%          | `.acttab.active` bg tint             |
+| `--color-rail-item-active-bar` | `var(--accent)`          | `#7bd88f`            | the 3px active-edge bar (`::before`) |
+| `--color-rail-icon`            | `var(--dim)`             | `#8a8fa3`            | default icon color                   |
+| `--color-rail-icon-active`     | `var(--accent)`          | `#7bd88f`            | active icon color                    |
+
+#### Tooltip (the shared `data-tip` floating label — new)
+
+| Token                  | → resolves to              | Hex       | Used by              |
+|------------------------|----------------------------|-----------|----------------------|
+| `--color-tooltip-bg`   | `var(--panel)`             | `#1c1e26` | `.tooltip` bg        |
+| `--color-tooltip-text` | `var(--text)`              | `#d8dae5` | `.tooltip` text      |
+| `--color-tooltip-border`| `var(--edge)`             | `#2c2f3a` | `.tooltip` border    |
+| `--shadow-tooltip`     | `0 6px 18px rgba(0,0,0,.4)`| —         | `.tooltip` shadow    |
+
+#### Status — paused placeholder (S3 will emit; S1 only styles, never emitted)
+
+| Token                   | → resolves to     | Hex       | Used by                                       |
+|-------------------------|-------------------|-----------|-----------------------------------------------|
+| `--color-status-paused` | `var(--accent)`   | `#7bd88f` | `#status.paused` (reserved; not emitted in S1) |
+
+> Keep the load-bearing trio intact (accent=run/ok, warn=boot, bad=error). `paused` is
+> **additive** — a "live but suspended" state; reusing accent keeps it readable. Final hue is
+> a §S3 decision. `setStatus` never writes `paused` in S1.
+
+#### Pane chrome (viewer / stage / console pane headers — new)
+
+| Token                   | → resolves to   | Hex       | Used by                            |
+|-------------------------|-----------------|-----------|------------------------------------|
+| `--color-pane-head-bg`  | `var(--panel)`  | `#1c1e26` | `.pane-head` / `.drawer-head` bg    |
+| `--color-pane-head-text`| `var(--dim)`    | `#8a8fa3` | pane-head label text               |
+| `--color-pane-name`     | `var(--text)`   | `#d8dae5` | the file/stage name in a pane head |
+| `--color-chev-hover`    | `#23262f`       | `#23262f` | `.chev-btn:hover` bg               |
+
+#### Run/control tints (promote the proto's remaining literals)
+
+| Token                            | → resolves to | Hex       | Used by                          |
+|----------------------------------|---------------|-----------|----------------------------------|
+| `--color-tint-run-border-strong` | `#2f6a44`     | `#2f6a44` | `.btn.primary` border (== existing `--color-tint-run-border`) |
+| `--color-text-on-tint`           | (exists) `#b8f0c6` | `#b8f0c6` | `▶ Start` label, primary buttons |
+
+> `--color-tint-run-border` already == `#2f6a44`, so `--color-tint-run-border-strong` is an
+> alias of the same value (named for the design's §9.5 list); `--color-text-on-tint` already
+> exists in §1.2 (reused, not redefined).
+
+#### Explorer / tree row (extends §5.6 file-row primitive)
+
+| Token                       | → resolves to | Hex       | Used by                          |
+|-----------------------------|---------------|-----------|----------------------------------|
+| `--color-row-hover`         | `#23262f`     | `#23262f` | `.row:hover` / `.tab:hover` bg    |
+| `--color-row-selected`      | `#23303a`     | `#23303a` | selected row bg (proto `.row.sel`)|
+| `--color-row-selected-text` | `#cdeccf`     | `#cdeccf` | selected row text (greenish)     |
+| `--color-py-icon`           | `#6fb3e0`     | `#6fb3e0` | `.py` file icon tint (proto `.pyico`) |
+
+> Methodology: these are additive aliases in `:root`; new components reference the semantic
+> name; the 8 raws stay the physical anchor (unchanged). `--color-status-paused` is styled but
+> **not emitted** in S1.
+
 ---
 
 ## 2. Type scale
@@ -392,11 +461,41 @@ layout-agnostic and stable; these will move):
   --color-tint-run-bg:       #234430;
   --color-tint-run-bg-hover: #2b5a3d;
   --color-tint-run-border:   #2f6a44;
+  --color-tint-run-border-strong: #2f6a44;
   --color-tint-add-band:     rgba(123,216,143,.14);
   --color-tint-del-band:     rgba(255,110,127,.14);
   --color-overlay-drop:      rgba(20,30,40,.78);
   --color-overlay-popover:   rgba(0,0,0,.4);
   --color-overlay-fsbtn:     rgba(38,41,54,.65);
+
+  /* ── S1 shell: rail ── */
+  --color-rail-bg:              #181a21;
+  --color-rail-item-hover:      #23262f;
+  --color-rail-item-active:     rgba(123,216,143,.12);
+  --color-rail-item-active-bar: var(--accent);
+  --color-rail-icon:            var(--dim);
+  --color-rail-icon-active:     var(--accent);
+
+  /* ── S1 shell: tooltip ── */
+  --color-tooltip-bg:     var(--panel);
+  --color-tooltip-text:   var(--text);
+  --color-tooltip-border: var(--edge);
+  --shadow-tooltip:       0 6px 18px rgba(0,0,0,.4);
+
+  /* ── S1 shell: status paused placeholder (styled, NOT emitted in S1) ── */
+  --color-status-paused: var(--accent);
+
+  /* ── S1 shell: pane chrome ── */
+  --color-pane-head-bg:   var(--panel);
+  --color-pane-head-text: var(--dim);
+  --color-pane-name:      var(--text);
+  --color-chev-hover:     #23262f;
+
+  /* ── S1 shell: tree row extensions ── */
+  --color-row-hover:         #23262f;
+  --color-row-selected:      #23303a;
+  --color-row-selected-text: #cdeccf;
+  --color-py-icon:           #6fb3e0;
 
   /* ── type ── */
   --font-display: 22px; --font-h1: 15px; --font-body: 14px;

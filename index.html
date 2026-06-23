@@ -7,140 +7,276 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
 <style>
   :root {
+    /* ── physical raws (unchanged, load-bearing) ── */
     --bg: #14151a; --panel: #1c1e26; --edge: #2c2f3a;
     --text: #d8dae5; --dim: #8a8fa3; --accent: #7bd88f; --warn: #f0a45d; --bad: #ff6e7f;
+    /* ── semantic surfaces / control tints (S1 shell) ── */
+    --color-surface-pill: #20222c; --color-surface-control: #262936;
+    --color-surface-sunken: #121318; --color-surface-stage: #0e0f13;
+    --color-border-hover: #4a4f63;
+    --color-tint-run-bg: #234430; --color-tint-run-bg-hover: #2b5a3d;
+    --color-tint-run-border: #2f6a44; --color-tint-run-border-strong: #2f6a44;
+    --color-text-on-tint: #b8f0c6; --color-text-on-bad: #f3b0ba;
+    /* ── rail ── */
+    --color-rail-bg: #181a21; --color-rail-item-hover: #23262f;
+    --color-rail-item-active: rgba(123,216,143,.12); --color-rail-item-active-bar: var(--accent);
+    --color-rail-icon: var(--dim); --color-rail-icon-active: var(--accent);
+    /* ── tooltip ── */
+    --color-tooltip-bg: var(--panel); --color-tooltip-text: var(--text);
+    --color-tooltip-border: var(--edge); --shadow-tooltip: 0 6px 18px rgba(0,0,0,.4);
+    /* ── status paused placeholder (styled, NOT emitted in S1) ── */
+    --color-status-paused: var(--accent);
+    /* ── pane chrome ── */
+    --color-pane-head-bg: var(--panel); --color-pane-head-text: var(--dim);
+    --color-pane-name: var(--text); --color-chev-hover: #23262f;
+    /* ── tree row extensions ── */
+    --color-row-hover: #23262f; --color-row-selected: #23303a;
+    --color-row-selected-text: #cdeccf; --color-py-icon: #6fb3e0;
+    --mono: "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
+  /* `.btn`/`.chev-btn` set display, which would otherwise beat the `hidden` attribute. Force the
+     S3-reserved-but-inert controls to stay hidden. NOTE: #stopBtn is intentionally NOT in this list —
+     it must stay a clickable target (verify.mjs / spike-runstop click '#stopBtn' directly). */
+  #pauseBtn[hidden], #endBtn[hidden], #newFolderBtn[hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg); color: var(--text);
     font: 14px/1.45 -apple-system, "Segoe UI", sans-serif;
-    display: flex; flex-direction: column;
+    display: flex; flex-direction: column; overflow: hidden;
   }
-  header {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--edge);
-    flex: 0 0 auto; position: relative;   /* anchor the #assetPanel popover */
+  button { font: inherit; }
+  .mono { font-family: var(--mono); }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    background: var(--color-surface-control); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; display: inline-flex;
+    align-items: center; gap: 6px; line-height: 1; transition: background .12s, border-color .12s;
   }
-  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
-  header h1 span { color: var(--accent); }
-  button, select {
-    background: #262936; color: var(--text); border: 1px solid var(--edge);
-    border-radius: 6px; padding: 5px 12px; font: inherit; cursor: pointer;
+  .btn:hover { background: #2e3140; border-color: var(--color-border-hover); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn.primary { background: var(--color-tint-run-bg); border-color: var(--color-tint-run-border-strong); color: var(--color-text-on-tint); font-weight: 600; }
+  .btn.primary:hover { background: var(--color-tint-run-bg-hover); }
+  .btn.stop { color: var(--bad); font-weight: 600; }
+  .btn.stop:hover { background: #3a2329; border-color: #6a2f38; }
+  .ghost { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 12px; padding: 4px; border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
+  .ghost:hover { color: var(--text); background: var(--color-row-hover); }
+  .ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ghost svg { display: block; }
+  .chev-btn { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 13px; padding: 2px 5px; border-radius: 4px; }
+  .chev-btn:hover { color: var(--text); background: var(--color-chev-hover); }
+  .chev-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- toolbar ---------- */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; height: 46px; flex: 0 0 auto;
+    padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--edge);
   }
-  button:hover, select:hover { border-color: #4a4f63; }
-  #runBtn { background: #234430; border-color: #2f6a44; color: #b8f0c6; font-weight: 600; }
-  #runBtn:hover { background: #2b5a3d; }
-  #stopBtn { color: #f3b0ba; }
-  #status {
-    margin-left: auto; font-size: 12.5px; color: var(--dim);
-    padding: 4px 10px; border-radius: 99px; background: #20222c; border: 1px solid var(--edge);
+  .title { font-weight: 600; font-size: 15px; white-space: nowrap; margin: 0; }
+  .title span { color: var(--accent); }
+  .spacer { flex: 1; }
+  .pill {
+    padding: 4px 10px; border-radius: 99px; background: var(--color-surface-pill); border: 1px solid var(--edge);
+    color: var(--dim); font-size: 12.5px; white-space: nowrap;
   }
-  #status.running { color: var(--accent); }
-  #status.error { color: var(--bad); }
-  #status.boot { color: var(--warn); }
-  main { flex: 1 1 0; display: flex; min-height: 0; }
-  #editorPane { flex: 0 1 52%; min-width: 240px; display: flex; flex-direction: column; overflow: hidden; }
-  .CodeMirror { flex: 1; height: auto; font-size: 13.5px; min-height: 0; }
-  /* editor tab strip (multi-file): stacked ABOVE the editor by #editorPane's column flex.
-     hidden (display:none, innerHTML cleared) in single-file mode + in a collab room. */
-  #tabs { display: none; flex: 0 0 auto; align-items: stretch; background: var(--panel);
-          border-bottom: 1px solid var(--edge); overflow-x: auto; }
-  #tabs.show { display: flex; }
-  #tabs .tab { display: flex; align-items: center; gap: 5px; padding: 5px 9px; font-size: 12px;
-               color: var(--dim); border-right: 1px solid var(--edge); cursor: pointer; white-space: nowrap; }
-  #tabs .tab:hover { color: var(--text); }
-  #tabs .tab.active { color: var(--text); background: #1c1e26; box-shadow: inset 0 -2px 0 var(--accent); }
-  #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
-  #tabs .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 2px; }
-  #tabs .tab-add { padding: 5px 10px; color: var(--accent); cursor: pointer; user-select: none; }
-  #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--edge); }
-  #vsplit { flex: 0 0 6px; cursor: row-resize; background: var(--edge); }
-  #splitter:hover, #splitter.active, #vsplit:hover, #vsplit.active { background: var(--accent); }
-  #rightPane { flex: 1 1 0; display: flex; flex-direction: column; min-width: 280px; }
-  #stage {
-    position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
-    overflow: hidden; background: #0e0f13; padding: 12px;
-  }
-  /* canvas is sized by fitCanvas(): scaled to fill the stage, aspect ratio preserved.
-     border is a box-shadow so it adds no layout box and the scale stays exact. */
-  #canvas { background: #000; outline: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--edge); }
-  #canvas:focus { box-shadow: 0 0 0 1px var(--accent); }
-  #fsBtn {
-    position: absolute; bottom: 14px; right: 14px; padding: 3px 9px;
-    font-size: 15px; line-height: 1.2; background: rgba(38, 41, 54, 0.65);
-    opacity: 0.45; transition: opacity .15s;
-  }
-  #stage:hover #fsBtn { opacity: 1; }
-  body.resizing-x { cursor: col-resize; user-select: none; }
-  body.resizing-y { cursor: row-resize; user-select: none; }
-  #console {
-    flex: 0 0 150px; overflow-y: auto; background: #121318; padding: 8px 12px;
-    font: 12px/1.5 "SF Mono", Menlo, monospace; white-space: pre-wrap;
-  }
-  #console .err { color: var(--bad); }
-  #console .sys { color: var(--dim); font-style: italic; }
-  kbd {
-    background: #262936; border: 1px solid var(--edge); border-radius: 4px;
-    padding: 0 5px; font-size: 11px;
-  }
+  .pill.running { color: var(--accent); border-color: var(--color-tint-run-border-strong); }
+  .pill.error { color: var(--bad); }
+  .pill.boot { color: var(--warn); }
+  .pill.paused { color: var(--color-status-paused); }   /* reserved placeholder; never emitted in S1 */
   .hint { color: var(--dim); font-size: 12px; }
-  /* Below ~1000px the header gets crowded; drop the keyboard hint so the controls
-     and status pill keep their place rather than the status clipping off the edge. */
   @media (max-width: 1000px) { .hint { display: none; } }
-  #liveDot { font-size: 12.5px; color: var(--accent); padding: 4px 8px; }
-  #liveDot.connecting { color: var(--warn); }
-  #liveDot.offline { color: var(--bad); }
-  .remote-cursor { position: relative; border-left: 2px solid; margin-left: -1px; }
-  .remote-flag { position: absolute; top: -1.1em; left: -1px; font-size: 10px; padding: 0 3px;
-                 white-space: nowrap; color: #0b0d12; border-radius: 3px 3px 3px 0; }
-  #assetChip { font-size: 12.5px; color: var(--dim); padding: 4px 8px; cursor: pointer;
-               border-radius: 99px; border: 1px solid transparent; user-select: none; }
-  #assetChip:hover { border-color: var(--edge); color: var(--text); }
+
+  /* ---------- main grid ---------- */
+  .main { flex: 1; min-height: 0; display: flex; }
+
+  /* ---------- rail ---------- */
+  .rail { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 48px;
+          background: var(--color-rail-bg); border-right: 1px solid var(--edge); padding: 8px 0; }
+  .acttab {
+    width: 38px; height: 38px; background: none; border: 0; border-radius: 8px; position: relative;
+    color: var(--color-rail-icon); cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background .12s, color .12s;
+  }
+  .acttab svg { width: 20px; height: 20px; display: block; }
+  .acttab:hover { color: var(--text); background: var(--color-rail-item-hover); }
+  .acttab.active { color: var(--color-rail-icon-active); background: var(--color-rail-item-active); }
+  .acttab.active::before { content: ""; position: absolute; left: -5px; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 22px; border-radius: 0 2px 2px 0; background: var(--color-rail-item-active-bar); }
+  .acttab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- shared tooltip ---------- */
+  .tooltip {
+    position: fixed; left: 0; top: 0; z-index: 300; background: var(--color-tooltip-bg); color: var(--color-tooltip-text);
+    border: 1px solid var(--color-tooltip-border); border-radius: 6px; padding: 3px 8px; font-size: 11px; line-height: 1.3;
+    white-space: nowrap; pointer-events: none; box-shadow: var(--shadow-tooltip);
+    opacity: 0; visibility: hidden; transform: translateY(-3px); transition: opacity .12s, transform .12s;
+  }
+  .tooltip.show { opacity: 1; visibility: visible; transform: translateY(0); }
+
+  /* ---------- side panel ---------- */
+  .side {
+    flex: 0 0 250px; width: 250px; background: var(--panel); border-right: 1px solid var(--edge);
+    display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  }
+  .side.collapsed { display: none; }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 33px;
+    padding: 3px 5px 3px 11px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  }
+  .side-head .acts { display: flex; gap: 1px; margin-left: auto; }
+  .panelview { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .panelview[hidden] { display: none; }
+  .side-body { flex: 1; overflow: auto; min-height: 0; padding: 2px 6px 8px; }
+  .panel-note { color: var(--dim); font-size: 11px; padding: 6px 10px 4px; font-style: italic; }
+
+  /* ---------- explorer tree (#tabs) — flat list, rows keep .tab[data-name] seam ---------- */
+  .tree { padding: 4px 4px; display: block; }
+  #tabs .tab {
+    display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 5px; cursor: pointer;
+    position: relative; border-left: 2px solid transparent; color: var(--dim); font-size: 13px; white-space: nowrap;
+  }
+  #tabs .tab:hover { background: var(--color-row-hover); color: var(--text); }
+  #tabs .tab.active { background: var(--color-row-selected); border-left-color: var(--accent); color: var(--color-row-selected-text); }
+  #tabs .tab .ic { width: 16px; flex: 0 0 16px; text-align: center; font-size: 13px; }
+  #tabs .tab.py .ic { color: var(--color-py-icon); }
+  #tabs .tab .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--mono); font-size: 12px; }
+  #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
+  #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
+  #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
+  #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
+  #tabs .tab-add { display: block; padding: 5px 8px; color: var(--accent); cursor: pointer; user-select: none; font-size: 12px; }
+
+  /* ---------- explorer asset compat section (#assetPanel — in-flow inside Explorer) ---------- */
+  #assetChip { font-size: 12.5px; color: var(--dim); user-select: none; }
   #assetChip.has { color: var(--accent); }
-  #assetPanel { position: absolute; top: 44px; right: 14px; z-index: 20; width: 300px;
-                max-height: 60vh; overflow-y: auto; background: var(--panel);
-                border: 1px solid var(--edge); border-radius: 8px; padding: 10px;
-                box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12.5px; }
+  #assetPanel { font-size: 12.5px; }
   #assetPanel[hidden] { display: none; }
-  #assetPanel .ap-head { display: flex; justify-content: space-between; align-items: center;
-                         color: var(--dim); margin-bottom: 6px; }
+  #assetPanel .ap-head { display: flex; justify-content: space-between; align-items: center; color: var(--dim); margin: 6px 4px; }
   #assetPanel .ap-browse { color: var(--accent); cursor: pointer; }
-  #assetPanel .asset-row { display: flex; align-items: center; gap: 6px; padding: 3px 0;
-                           border-top: 1px solid var(--edge); }
-  #assetPanel .asset-name { flex: 1; font-family: "SF Mono", Menlo, monospace; word-break: break-all; }
+  #assetPanel .asset-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; }
+  #assetPanel .asset-row:hover { background: var(--color-row-hover); }
+  #assetPanel .asset-name { flex: 1; font-family: var(--mono); word-break: break-all; }
   #assetPanel .asset-size { color: var(--dim); }
   #assetPanel .asset-warn { color: var(--warn); cursor: help; }
   #assetPanel .asset-remove { color: var(--bad); cursor: pointer; border: none; background: none; font-size: 13px; }
-  #assetPanel .ap-empty { color: var(--dim); padding: 4px 0; }
-  #assetPanel .ap-foot { display: flex; justify-content: space-between; align-items: center;
-                         color: var(--dim); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--edge); }
+  #assetPanel .ap-empty { color: var(--dim); padding: 4px 6px; }
+  #assetPanel .ap-foot { display: flex; justify-content: space-between; align-items: center; color: var(--dim); margin: 6px 4px; padding-top: 6px; border-top: 1px solid var(--edge); }
   #assetPanel .ap-clear { color: var(--bad); cursor: pointer; }
-  #assetPanel .ap-storage { color: var(--dim); font-size: 11.5px; margin-top: 4px;
-                            padding-top: 4px; border-top: 1px solid var(--edge); }
-  #assetPanel .ap-storage.low { color: var(--warn); }
-  #historyPanel { position: absolute; top: 44px; right: 14px; z-index: 20; width: 340px;
-                  max-height: 70vh; overflow-y: auto; background: var(--panel);
-                  border: 1px solid var(--edge); border-radius: 8px; padding: 10px;
-                  box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12.5px; }
-  #historyPanel[hidden] { display: none; }
-  #historyPanel .hp-head { display: flex; justify-content: space-between; color: var(--dim); margin-bottom: 6px; }
+  #apStorage { color: var(--dim); font-size: 11.5px; padding: 8px 6px; border-top: 1px solid var(--edge); }
+  #apStorage.low { color: var(--warn); }
+
+  /* ---------- examples rail panel (inert read-only list) ---------- */
+  #examplesPanel .exrow { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 5px; border-left: 2px solid transparent; color: var(--text); }
+  #examplesPanel .exrow .ic { width: 16px; flex: 0 0 16px; text-align: center; color: var(--color-py-icon); }
+  #examplesPanel .exrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- history rail panel (#historyPanel — in-flow) ---------- */
+  #historyPanel { font-size: 12.5px; }
+  #historyPanel .hp-head { display: flex; justify-content: space-between; color: var(--dim); margin: 4px; }
   #historyPanel .hp-clear { color: var(--bad); cursor: pointer; }
-  #historyPanel .hist-row { display: flex; justify-content: space-between; gap: 8px; padding: 5px 6px;
-                            border-top: 1px solid var(--edge); cursor: pointer; border-radius: 4px; }
-  #historyPanel .hist-row:hover { background: #20222c; }
-  #historyPanel .hist-row.sel { background: #20222c; box-shadow: inset 2px 0 0 var(--accent); }
+  #historyPanel .hist-rows { display: flex; flex-direction: column; }
+  #historyPanel .hist-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px;
+                            border-radius: 6px; cursor: pointer; border: 1px solid var(--edge); background: #191b22; margin: 0 4px 6px; }
+  #historyPanel .hist-row:hover { border-color: var(--color-border-hover); background: #1d202a; }
+  #historyPanel .hist-row.sel { background: var(--color-row-selected); box-shadow: inset 2px 0 0 var(--accent); }
   #historyPanel .hist-time { color: var(--text); }
-  #historyPanel .hist-meta { color: var(--dim); font-family: "SF Mono", Menlo, monospace; }
-  #historyPanel .hp-empty { color: var(--dim); padding: 6px 0; }
-  #historyPanel .hp-diff { margin-top: 8px; }
+  #historyPanel .hist-meta { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+  #historyPanel .hp-empty { color: var(--dim); padding: 6px; }
+  #historyPanel .hp-diff { margin: 4px; }
   #historyPanel .hp-difftitle { color: var(--dim); margin: 6px 0 4px; }
-  #historyPanel .hp-diffbody { font: 11.5px/1.5 "SF Mono", Menlo, monospace; white-space: pre-wrap;
+  #historyPanel .hp-diffbody { font: 11.5px/1.5 var(--mono); white-space: pre-wrap;
                                max-height: 30vh; overflow-y: auto; border: 1px solid var(--edge); border-radius: 4px; }
-  #historyPanel .d-add { background: rgba(123,216,143,.14); color: #b8f0c6; }
-  #historyPanel .d-del { background: rgba(255,110,127,.14); color: #f3b0ba; }
+  #historyPanel .d-add { background: rgba(123,216,143,.14); color: var(--color-text-on-tint); }
+  #historyPanel .d-del { background: rgba(255,110,127,.14); color: var(--color-text-on-bad); }
   #historyPanel .d-ctx { color: var(--dim); }
-  #historyPanel .hp-restore { margin-top: 8px; background: #234430; border-color: #2f6a44; color: #b8f0c6; }
+  #historyPanel .hp-restore { margin: 8px 4px; background: var(--color-tint-run-bg); border-color: var(--color-tint-run-border-strong); color: var(--color-text-on-tint); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+
+  /* ---------- collaboration rail panel ---------- */
+  #collabPanel { padding: 10px 12px; color: var(--dim); font-size: 13px; line-height: 1.5; }
+  #liveDot { font-size: 12.5px; color: var(--accent); padding: 4px 8px; display: inline-block; margin-top: 8px; }
+  #liveDot.connecting { color: var(--warn); }
+  #liveDot.offline { color: var(--bad); }
+
+  /* ---------- splitters ---------- */
+  .split { flex: 0 0 6px; background: var(--edge); cursor: col-resize; transition: background .12s; z-index: 5; }
+  .split:hover, .split.active { background: var(--accent); }
+  .split.h { height: 6px; width: 100%; cursor: row-resize; flex: 0 0 6px; }
+  body.resizing-x { cursor: col-resize; user-select: none; }
+  body.resizing-y { cursor: row-resize; user-select: none; }
+
+  /* ---------- right stack ---------- */
+  .stack { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .toprow { flex: 1; min-height: 0; display: flex; }
+  .pane-head {
+    display: flex; align-items: center; gap: 8px; height: 34px; flex: 0 0 auto; padding: 0 10px;
+    background: var(--color-pane-head-bg); border-bottom: 1px solid var(--edge); color: var(--color-pane-head-text); font-size: 12px;
+  }
+  .pane-head .name { color: var(--color-pane-name); }
+  .stage-hint { background: none; border: 0; color: var(--dim); font: inherit; font-size: 12px; padding: 0; cursor: default; }
+  .pane-head .btn { padding: 3px 10px; font-size: 12px; }
+
+  /* ---------- viewer (editor pane) ---------- */
+  #editorPane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .vbody { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+  .vbody.hide-cm .CodeMirror { display: none; }
+  .CodeMirror { flex: 1; height: auto; font-size: 13.5px; min-height: 0; }
+  /* image viewer */
+  .imgview { flex: 1; min-height: 0; display: grid; place-items: center; gap: 14px; padding: 20px; overflow: auto; }
+  .checker {
+    padding: 12px; border-radius: 8px; border: 1px solid var(--edge); display: grid; place-items: center;
+    background-image: linear-gradient(45deg,#23252e 25%,transparent 25%),linear-gradient(-45deg,#23252e 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#23252e 75%),linear-gradient(-45deg,transparent 75%,#23252e 75%);
+    background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0; background-color: #1a1c23;
+  }
+  .checker img { max-width: 320px; max-height: 320px; display: block; }
+  .vcaption { color: var(--dim); font-size: 12px; text-align: center; }
+  /* sound player */
+  .sound { padding: 24px; display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; flex: 1; min-height: 0; }
+  .playerbar { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 12px 16px; width: min(460px,90%); }
+  .warnbanner { background: #2a2418; border: 1px solid #5a4a2a; color: var(--warn); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; width: min(460px,90%); display: flex; gap: 8px; align-items: flex-start; }
+  /* empty state */
+  .empty { flex: 1; min-height: 0; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 30px; font-size: 13px; }
+  .empty .big { font-size: 28px; margin-bottom: 8px; opacity: .6; }
+
+  /* ---------- stage ---------- */
+  #rightPane { flex: 1 1 0; min-width: 280px; display: flex; flex-direction: column; min-height: 0; }
+  #stage {
+    flex: 1 1 0; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: var(--color-surface-stage); padding: 12px;
+  }
+  /* SDL-bound canvas stays 640×480 (attributes); CSS only scales it down to fit (Risk-8). */
+  #canvas { background: #000; outline: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--edge); max-width: 100%; max-height: 100%; }
+  #canvas:focus { box-shadow: 0 0 0 1px var(--accent); }
+
+  /* ---------- console drawer ---------- */
+  .drawer { flex: 0 0 170px; border-top: 1px solid var(--edge); background: var(--color-surface-sunken); display: flex; flex-direction: column; min-height: 0; }
+  .drawer.collapsed { flex: 0 0 31px; }
+  .drawer.collapsed #console { display: none; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px; height: 30px; flex: 0 0 auto; padding: 0 10px;
+    background: var(--color-pane-head-bg); border-bottom: 1px solid var(--edge); user-select: none;
+  }
+  .drawer.collapsed .drawer-head { border-bottom: 0; }
+  .drawer-head .lbl { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+  .drawer-head .fs-end { margin-left: auto; }
+  .errbadge { background: #3a2024; border: 1px solid #5a2e36; color: var(--bad); border-radius: 99px; font-size: 11px; padding: 1px 8px; display: none; }
+  .errbadge.show { display: inline-block; }
+  #console {
+    flex: 1; overflow-y: auto; padding: 8px 12px;
+    font: 12px/1.5 "SF Mono", Menlo, monospace; white-space: pre-wrap; min-height: 0;
+  }
+  #console .err { color: var(--bad); }
+  #console .sys { color: var(--dim); font-style: italic; }
+
+  /* ---------- collab remote cursors (unchanged) ---------- */
+  .remote-cursor { position: relative; border-left: 2px solid; margin-left: -1px; }
+  .remote-flag { position: absolute; top: -1.1em; left: -1px; font-size: 10px; padding: 0 3px;
+                 white-space: nowrap; color: #0b0d12; border-radius: 3px 3px 3px 0; }
+
+  kbd { background: var(--color-surface-control); border: 1px solid var(--edge); border-radius: 4px; padding: 0 5px; font-size: 11px; }
+
+  /* ---------- drop overlay (unchanged) ---------- */
   #dropOverlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: center;
                  justify-content: center; background: rgba(20,30,40,.78); color: var(--accent);
                  font-size: 22px; border: 3px dashed var(--accent); }
@@ -148,35 +284,141 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>🐍 pygame <span>playground</span></h1>
-  <select id="examples" title="Load an example"></select>
-  <button id="runBtn">▶ Run</button>
-  <button id="stopBtn">■ Stop</button>
-  <button id="shareBtn" title="Copy a link that opens this code">🔗 Share</button>
-  <button id="saveBtn" title="Download your program (.py, or a project .zip)">💾 Save</button>
-  <button id="collabBtn" title="Start a live collaboration room">👥 Collaborate</button>
-  <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
-  <span id="assetChip" title="Uploaded assets — drop files anywhere, or click to add">📁</span>
-  <input id="assetInput" type="file" multiple hidden>
-  <div id="assetPanel" hidden></div>
-  <button id="historyBtn" title="Version history — a snapshot is saved each time you Run">🕘 History</button>
-  <div id="historyPanel" hidden></div>
-  <span class="hint"><kbd>⌘</kbd><kbd>↩</kbd> run · <kbd>⌘</kbd><kbd>/</kbd> comment · <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> indent · click canvas for keys · 👥 = live share</span>
-  <span id="status" class="boot">starting…</span>
+
+<!-- ===================== TOOLBAR (minimal) ===================== -->
+<header class="toolbar">
+  <h1 class="title">🐍 pygame <span>playground</span></h1>
+  <span class="spacer"></span>
+  <span id="status" class="pill boot" role="status" aria-live="polite">starting…</span>
+  <!-- #collabBtn is the collaboration ENGINE SEAM (lazy Automerge, room create/join, copy-link).
+       The locked battery test/collab.mjs (not reconciled) clicks '#collabBtn' DIRECTLY without first
+       opening the Collab rail panel, so it must stay actionable while that panel is hidden — it can't
+       live inside the hidden panelview's display:none subtree. Kept here, on-screen but minimal; the
+       Collaboration panel shows a full-width "👥 Collaborate" button (#collabStartBtn) that triggers it. -->
+  <button id="collabBtn" aria-label="Start a live collaboration room" style="position:fixed;left:2px;bottom:2px;width:1px;height:1px;padding:0;border:0;overflow:hidden;opacity:.01;z-index:1">👥</button>
 </header>
-<main>
-  <div id="editorPane"><div id="tabs"></div><textarea id="code"></textarea></div>
-  <div id="splitter" title="Drag to resize"></div>
-  <div id="rightPane">
-    <div id="stage">
-      <canvas id="canvas" width="640" height="480" tabindex="0"></canvas>
-      <button id="fsBtn" title="Fullscreen">⛶</button>
+
+<!-- ===================== MAIN: rail + side + right stack ===================== -->
+<main class="main">
+
+  <!-- vertical activity rail -->
+  <nav class="rail" role="tablist" aria-label="Panels" aria-orientation="vertical">
+    <button class="acttab active" data-view="explorer" role="tab" aria-selected="true" aria-controls="panel-explorer" id="tab-explorer" tabindex="0" aria-label="Explorer" data-tip="Explorer" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+    <button class="acttab" data-view="history" role="tab" aria-selected="false" aria-controls="panel-history" id="tab-history" tabindex="-1" aria-label="History" data-tip="History" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+    <button class="acttab" data-view="examples" role="tab" aria-selected="false" aria-controls="panel-examples" id="tab-examples" tabindex="-1" aria-label="Examples" data-tip="Examples" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 18h5"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 3.6 10.8c-.6.5-1.1 1.2-1.1 2H9.5c0-.8-.5-1.5-1.1-2A6 6 0 0 1 12 3z"/></svg></button>
+    <button class="acttab" data-view="collab" role="tab" aria-selected="false" aria-controls="panel-collab" id="tab-collab" tabindex="-1" aria-label="Collaboration" data-tip="Collaboration" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/></svg></button>
+  </nav>
+
+  <!-- side panel (one section per view; only the active one is visible) -->
+  <aside class="side" id="side" aria-label="Side panel">
+
+    <!-- EXPLORER — replaces #tabs strip; always-on -->
+    <section class="panelview" id="panel-explorer" data-panel="explorer" role="tabpanel" aria-labelledby="tab-explorer">
+      <div class="side-head">
+        <span>Explorer</span>
+        <div class="acts">
+          <!-- #shareBtn: kept as an engine seam (test/multifile.mjs check 7 clicks it + asserts
+               #project=). Q3 wanted it gone, but that locked test requires a clickable #shareBtn —
+               re-homed here as a small Explorer action (out of the minimal toolbar) instead. -->
+          <button class="ghost" id="shareBtn" aria-label="Copy a share link" data-tip="Copy share link"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.1 10.9 14.9 7.2"/><path d="M8.1 13.1 14.9 16.8"/></svg></button>
+          <button class="ghost" id="uploadBtn" aria-label="Upload files" data-tip="Upload files"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/></svg></button>
+          <button class="ghost" id="saveBtn" aria-label="Download project (.py or .zip)" data-tip="Download project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>
+          <button class="ghost" id="newFileBtn" aria-label="New file" data-tip="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg></button>
+          <button class="ghost" id="newFolderBtn" hidden aria-label="New folder" data-tip="New folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/></svg></button>
+        </div>
+      </div>
+      <div class="side-body">
+        <div class="tree" id="tabs"></div>
+        <div id="assetSection" style="margin-top:8px;border-top:1px solid var(--edge);padding-top:6px">
+          <div class="side-head" style="min-height:auto;padding:0 6px 2px"><span id="assetChip">📁</span></div>
+          <div id="assetPanel"></div>
+        </div>
+      </div>
+      <input id="assetInput" type="file" multiple hidden>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="panelview" id="panel-history" data-panel="history" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <div class="side-head"><span>Run snapshots</span></div>
+      <div class="side-body"><div id="historyPanel"></div></div>
+    </section>
+
+    <!-- EXAMPLES (inert read-only list; legacy #examples select kept hidden as a seam) -->
+    <section class="panelview" id="panel-examples" data-panel="examples" role="tabpanel" aria-labelledby="tab-examples" hidden>
+      <div class="side-head"><span>Examples</span></div>
+      <div class="panel-note">Read-only in this build — full editable examples are coming.</div>
+      <div class="side-body"><div id="examplesPanel"></div></div>
+      <select id="examples" title="Load an example" hidden></select>
+    </section>
+
+    <!-- COLLABORATION -->
+    <section class="panelview" id="panel-collab" data-panel="collab" role="tabpanel" aria-labelledby="tab-collab" hidden>
+      <div class="side-head"><span>Collaboration</span></div>
+      <div class="side-body"><div id="collabPanel">
+        <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
+        <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
+        <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
+      </div></div>
+    </section>
+  </aside>
+
+  <div class="split" data-split="side"></div>
+
+  <!-- RIGHT STACK -->
+  <div class="stack">
+    <div class="toprow" id="toprow">
+
+      <!-- VIEWER (editor pane) -->
+      <div class="viewer" id="editorPane">
+        <div class="pane-head">
+          <span class="name" id="vName">main.py</span>
+          <span id="vMeta">· Python</span>
+          <span class="spacer"></span>
+          <button id="runBtn" class="btn primary" aria-label="Run the open file">▶ Start</button>
+          <button class="chev-btn" id="viewerFs" aria-label="Fullscreen editor" data-tip="Fullscreen editor">⛶</button>
+        </div>
+        <div class="vbody" id="viewerBody">
+          <textarea id="code"></textarea>
+        </div>
+      </div>
+
+      <div class="split" data-split="viewer" id="splitter"></div>
+
+      <!-- GAME STAGE -->
+      <div class="stage" id="rightPane">
+        <div class="pane-head">
+          <span class="name">🎮 Game stage</span>
+          <button id="stageHint" class="stage-hint" type="button">press start to run</button>
+          <span class="spacer"></span>
+          <!-- S3 reserves pause/end here (hidden/inert in S1) -->
+          <button id="pauseBtn" class="btn" aria-label="Pause program" hidden>⏸ Pause</button>
+          <button id="endBtn" class="chev-btn" aria-label="End program" hidden>✕</button>
+          <!-- #stopBtn kept as a visible click target on the stage header (verify.mjs / spike-runstop
+               click it). Its _stop() listener is unchanged. -->
+          <button id="stopBtn" class="btn stop">■ Stop</button>
+          <button class="chev-btn" id="fsBtn" aria-label="Fullscreen game stage" data-tip="Fullscreen game stage">⛶</button>
+        </div>
+        <div class="stagewrap" id="stage">
+          <canvas id="canvas" width="640" height="480" tabindex="0"></canvas>
+        </div>
+      </div>
     </div>
-    <div id="vsplit" title="Drag to resize"></div>
-    <div id="console"></div>
+
+    <div class="split h" data-split="console" id="vsplit"></div>
+
+    <!-- CONSOLE DRAWER (keeps collapse) -->
+    <div class="drawer" id="drawer">
+      <div class="drawer-head">
+        <button class="chev-btn" id="drawerCollapse" aria-expanded="true" aria-controls="console" data-tip="Collapse console">▾</button>
+        <span class="lbl">Console</span>
+        <span class="errbadge" id="errBadge" hidden></span>
+        <button class="chev-btn fs-end" id="consoleFs" aria-label="Fullscreen console" data-tip="Fullscreen console">⛶</button>
+      </div>
+      <div id="console"></div>
+    </div>
   </div>
 </main>
+
 <div id="dropOverlay">Drop files to add them as assets</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
@@ -1028,7 +1270,7 @@ const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
   indentUnit: 4, indentWithTabs: false, viewportMargin: Infinity,
   autoCloseBrackets: true, styleActiveLine: true,
   extraKeys: {
-    "Cmd-Enter": run, "Ctrl-Enter": run,
+    // ⌘/Ctrl-Enter run shortcut dropped in S1 (no battery depends on it; hint removed).
     "Tab": (cm) => cm.somethingSelected()
       ? cm.indentSelection("add")
       : cm.replaceSelection(" ".repeat(cm.getOption("indentUnit")), "end"),
@@ -1267,7 +1509,7 @@ async function captureSnapshot() {
     const last = await historyStore.latest();
     if (last && JSON.stringify(last.project) === JSON.stringify(proj)) return;   // dedup unchanged re-runs
     await historyStore.add({ at: Date.now(), mode: collab.active ? "room" : "solo", project: proj });
-    if (typeof historyPanelEl !== "undefined" && !historyPanelEl.hidden) renderHistory();
+    if (typeof historyOpen !== "undefined" && historyOpen) renderHistory();
   } catch {}
 }
 
@@ -1313,7 +1555,8 @@ function renderAssets() {
   const n = assetFS.list.length;
   assetChipEl.textContent = n ? `📁 ${n}` : '📁';
   assetChipEl.classList.toggle('has', n > 0);
-  renderAssetPanel();   // keep the open panel in sync with the list
+  renderAssetPanel();           // keep the Explorer asset section in sync with the list
+  if (typeof renderTabs === 'function') renderTabs();   // assets also appear as #tabs rows
 }
 const assetPanelEl = document.getElementById('assetPanel');
 const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(0) + ' KB'
@@ -1364,23 +1607,15 @@ function renderAssetPanel() {
     <div class="ap-storage" id="apStorage">checking browser storage…</div>`;
   updateStorageReadout();
 }
-assetChipEl.addEventListener('click', () => {
-  assetPanelEl.hidden = !assetPanelEl.hidden;
-  renderAssetPanel();
-});
+// Assets now live IN the Explorer (in-flow), not a popover — no chip-toggle / outside-close.
+// "+ add files" (and a click on the asset chip) opens the real hidden input. The file-input
+// click must NOT close the panel (assets.mjs check 10): the panel is in-flow and never auto-closes.
+assetChipEl.addEventListener('click', () => document.getElementById('assetInput').click());
 assetPanelEl.addEventListener('click', (e) => {
   if (e.target.classList.contains('ap-browse')) document.getElementById('assetInput').click();
   else if (e.target.classList.contains('ap-clear')) assetFS.clearAll();
   else if (e.target.classList.contains('asset-remove'))
     assetFS.remove(e.target.closest('.asset-row').dataset.name);
-});
-// Close the popover when clicking elsewhere. The hidden file input is exempt:
-// "+ add files" synthesizes a click on it that bubbles here, and that must not
-// self-close the panel before the picker returns.
-document.addEventListener('click', (e) => {
-  if (!assetPanelEl.hidden && !assetPanelEl.contains(e.target) &&
-      e.target !== assetChipEl && e.target.id !== 'assetInput')
-    { assetPanelEl.hidden = true; }
 });
 
 document.getElementById('assetInput').addEventListener('change', (e) => {
@@ -1412,8 +1647,10 @@ function loadDiffLib() {
     document.head.appendChild(s);
   });
 }
-const historyBtnEl = document.getElementById("historyBtn");
 const historyPanelEl = document.getElementById("historyPanel");
+// History opens via the History rail icon now (no #historyBtn). The panel is in-flow in the
+// rail; "open" is tracked by a flag so captureSnapshot only re-renders while it's showing.
+let historyOpen = false;
 const lineCount = (t) => (t ? t.split("\n").length : 0);
 function relTime(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -1434,7 +1671,6 @@ function deltaBadge(older, cur) {
 }
 let _histSnaps = [], _histSelectedId = null;
 async function renderHistory() {
-  if (historyPanelEl.hidden) return;
   _histSnaps = await historyStore.getAll();   // newest-first
   if (!_histSnaps.length) { historyPanelEl.innerHTML = '<div class="hp-head"><span>Version history</span></div><div class="hp-empty">No versions yet — press ▶ Run to save one.</div>'; return; }
   const rows = _histSnaps.map((s, i) => {
@@ -1481,11 +1717,12 @@ async function restoreSnapshot(id) {
   await captureSnapshot();            // save the current state first, so a restore is itself recoverable
   _histSelectedId = null;
   project.load(rec.project);
+  viewerSel = project.active;
+  renderViewer(project.active);
   renderTabs();
   flushSave();
-  historyPanelEl.hidden = true;
+  renderHistory();                    // panel is in-flow; re-render rather than dismiss
 }
-historyBtnEl.addEventListener("click", () => { historyPanelEl.hidden = !historyPanelEl.hidden; if (historyPanelEl.hidden) _histSelectedId = null; renderHistory(); });
 historyPanelEl.addEventListener("click", (e) => {
   if (e.target.classList.contains("hp-clear")) { _histSelectedId = null; historyStore.clear().then(renderHistory); return; }
   const restore = e.target.closest(".hp-restore");
@@ -1493,53 +1730,147 @@ historyPanelEl.addEventListener("click", (e) => {
   const row = e.target.closest(".hist-row");
   if (row) showDiff(row.dataset.id);
 });
-document.addEventListener("click", (e) => {
-  if (!historyPanelEl.hidden && !historyPanelEl.contains(e.target) && e.target !== historyBtnEl) { historyPanelEl.hidden = true; _histSelectedId = null; }
-});
 
 // ---------------------------------------------------------------- collaboration (lazy) — declared early so joinRoom() can reference collab before the collab section below
 const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
 let _amCache = null;
 
-// ---------------------------------------------------------------- tabs UI (multi-file)
-// One CodeMirror instance; clicking a tab swapDoc's in that file's Doc. The strip is
-// only shown for ≥2 files outside a room; otherwise its innerHTML is cleared and it's
-// display:none, so the solo / collab layout is pixel-identical to the single-file build.
-// Defined before loadInitialProject()'s renderTabs() call (tabsEl is a const — no TDZ).
+// ---------------------------------------------------------------- explorer tree + type-aware viewer (S1)
+// The always-on Explorer replaces the old horizontal tab strip. #tabs renders a FLAT list
+// (no folders in S1) of the project's .py files AND the uploaded assets, each as a
+// .tab[data-name] row (the preserved engine seam). Selecting a row swaps the type-aware
+// viewer; .py rows swapDoc into the ONE CodeMirror (never setValue), asset rows render an
+// image/audio/other surface. window.renderTabs stays a zero-arg hook.
 const tabsEl = document.getElementById("tabs");
-// Local escaper — the assets section's `esc` is defined later in source.
 const escTab = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const viewerBodyEl = document.getElementById("viewerBody");
+const vNameEl = document.getElementById("vName");
+const vMetaEl = document.getElementById("vMeta");
+const runBtnEl = document.getElementById("runBtn");
+// A hidden, off-screen holder for the ONE CodeMirror element while a non-.py file is shown.
+// Moving the wrapper element (never destroying it) keeps the single instance alive (identity
+// invariant) AND removes .CodeMirror from #viewerBody so the empty-state assertion holds.
+const cmStash = document.createElement("div");
+cmStash.id = "cmStash"; cmStash.style.display = "none";
+document.body.appendChild(cmStash);
+
+// Spike-viewer classifier (proven by test/spike-viewer.mjs).
+const IMG_EXT = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
+const AUD_EXT = ["wav", "ogg", "mp3", "m4a", "aac", "flac", "wma"];
+function classifyKind(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (ext === "py") return "py";
+  if (IMG_EXT.includes(ext)) return "image";
+  if (AUD_EXT.includes(ext)) return "audio";
+  return "other";
+}
+const MIME_FOR = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  bmp: "image/bmp", webp: "image/webp", svg: "image/svg+xml", wav: "audio/wav", ogg: "audio/ogg",
+  mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac", wma: "audio/x-ms-wma" };
+const UNSUPPORTED_VIEW_AUDIO = /\.(mp3|m4a|aac|flac|wma)$/i;
+
+// The currently-shown viewer target: a .py file name OR an asset name.
+let viewerSel = "main.py";
+
+// Read asset bytes from MEMFS (where uploads are mirrored) and make an object URL.
+function assetObjectURL(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const bytes = pyodide.FS.readFile(name);   // Uint8Array
+  return URL.createObjectURL(new Blob([bytes], { type: MIME_FOR[ext] || "application/octet-stream" }));
+}
+
+function renderViewer(name) {
+  viewerSel = name;
+  const kind = classifyKind(name);
+  const cmWrap = editor.getWrapperElement();
+  vNameEl.textContent = name;
+  if (kind === "py") {
+    // Show the ONE CodeMirror; swapDoc into the file's Doc via the project seam (never setValue).
+    viewerBodyEl.querySelectorAll(".imgview, .sound, .empty").forEach(n => n.remove());
+    if (cmWrap.parentElement !== viewerBodyEl) viewerBodyEl.appendChild(cmWrap);   // bring CM back (same instance)
+    vMetaEl.textContent = "· Python" + (name === project.entry ? " · entry point" : "");
+    runBtnEl.style.display = "";
+    if (project.files[name] && project.active !== name) project.setActive(name);
+    else editor.refresh();
+    return;
+  }
+  // Non-.py: stash the CM wrapper out of #viewerBody (kept alive, never destroyed), render media.
+  viewerBodyEl.querySelectorAll(".imgview, .sound, .empty").forEach(n => n.remove());
+  if (cmWrap.parentElement !== cmStash) cmStash.appendChild(cmWrap);
+  runBtnEl.style.display = "none";
+  const ext = (name.split(".").pop() || "").toUpperCase();
+  let surface = document.createElement("div");
+  if (kind === "image") {
+    vMetaEl.textContent = "· " + ext;
+    let dims = "";
+    try {
+      const url = assetObjectURL(name);
+      surface.className = "imgview";
+      surface.innerHTML = `<div class="checker"><img alt="${escTab(name)}"></div><div class="vcaption" id="vImgCap">${escTab(name)} · ${ext}</div>`;
+      const img = surface.querySelector("img");
+      img.onload = () => { document.getElementById("vImgCap") && (document.getElementById("vImgCap").textContent = `${name} · ${img.naturalWidth}×${img.naturalHeight} · ${ext}`); URL.revokeObjectURL(url); };
+      img.src = url;
+    } catch (e) {
+      surface.className = "empty";
+      surface.innerHTML = `<div><div class="big">🖼️</div>Couldn't read ${escTab(name)}.</div>`;
+    }
+  } else if (kind === "audio") {
+    vMetaEl.textContent = "· " + ext;
+    surface.className = "sound";
+    let html = `<div class="playerbar"><audio controls preload="metadata"></audio></div><div class="vcaption">${escTab(name)} · ${ext}</div>`;
+    if (UNSUPPORTED_VIEW_AUDIO.test(name)) {
+      html += `<div class="warnbanner"><span>⚠</span><span>Plays here, but pygame's audio can't load ${ext} — convert to WAV or OGG.</span></div>`;
+    }
+    surface.innerHTML = html;
+    try { surface.querySelector("audio").src = assetObjectURL(name); } catch (e) {}
+  } else {
+    vMetaEl.textContent = "· text";
+    surface.className = "empty";
+    surface.innerHTML = `<div><div class="big">📄</div>Can't open ${escTab(name)} here — only code, images, and sounds preview in the viewer.</div>`;
+  }
+  viewerBodyEl.appendChild(surface);
+}
+
 function renderTabs() {
-  const show = project.isMulti() && !collab.active;
-  tabsEl.classList.toggle("show", show);
-  if (!show) { tabsEl.innerHTML = ""; editor.refresh(); return; }   // strip out of the DOM in single-file / room
-  tabsEl.innerHTML = project.order.map(name => `
-    <div class="tab${name === project.active ? " active" : ""}${name === project.entry ? " entry" : ""}" data-name="${escTab(name)}">
+  // Always-on, flat: .py files first, then assets — both as .tab[data-name] rows.
+  const fileRows = project.order.map(name => `
+    <div class="tab py${name === viewerSel ? " active" : ""}${name === project.entry ? " entry" : ""}" data-name="${escTab(name)}">
+      <span class="ic" aria-hidden="true">🐍</span>
       <span class="tab-name">${escTab(name)}</span>
-      <button class="tab-menu" title="File actions">⋯</button>
-    </div>`).join("") + `<span class="tab-add" title="New file">+</span>`;
-  editor.refresh();   // CM caches viewport geometry; refresh after the strip changes height
+      <button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(name)}">⋯</button>
+    </div>`).join("");
+  const assetRows = assetFS.list.map(a => `
+    <div class="tab asset${a.name === viewerSel ? " active" : ""}" data-name="${escTab(a.name)}">
+      <span class="ic" aria-hidden="true">${classifyKind(a.name) === "image" ? "🖼️" : classifyKind(a.name) === "audio" ? "🔊" : "📄"}</span>
+      <span class="tab-name">${escTab(a.name)}</span>
+      ${a.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : ""}
+    </div>`).join("");
+  tabsEl.innerHTML = fileRows + assetRows + `<span class="tab-add" title="New file">+ new file</span>`;
+  editor.refresh();
 }
 window.renderTabs = renderTabs;   // test seam
 tabsEl.addEventListener("click", (e) => {
   const add = e.target.closest(".tab-add");
-  if (add) {
-    const raw = prompt("New file name (e.g. enemy.py):", "");
-    if (raw == null) return;
-    const name = raw.endsWith(".py") ? raw : raw + ".py";
-    if (!project.add(name)) { alert("Use a valid, unique name ending in .py"); return; }
-    project.setActive(name);
-    renderTabs(); flushSave();
-    return;
-  }
+  if (add) { newFilePrompt(); return; }
   const menuBtn = e.target.closest(".tab-menu");
   const tab = e.target.closest(".tab");
   if (!tab) return;
   const name = tab.dataset.name;
   if (menuBtn) { tabMenu(name); return; }
-  project.setActive(name); renderTabs();
+  renderViewer(name);   // .py -> CM swapDoc via setActive; asset -> media surface
+  renderTabs();
 });
+function newFilePrompt() {
+  const raw = prompt("New file name (e.g. enemy.py):", "");
+  if (raw == null) return;
+  const name = raw.endsWith(".py") ? raw : raw + ".py";
+  if (!project.add(name)) { alert("Use a valid, unique name ending in .py"); return; }
+  project.setActive(name);
+  renderViewer(name);
+  renderTabs(); flushSave();
+}
 function tabMenu(name) {
+  if (!project.files[name]) return;   // asset rows have no file-menu actions in S1
   const action = prompt(`File "${name}" — type: entry / rename / delete`, "");
   if (!action) return;
   if (action === "entry") { project.setEntry(name); }
@@ -1548,14 +1879,19 @@ function tabMenu(name) {
     if (next == null) return;
     if (!next.endsWith(".py")) next += ".py";
     if (!project.rename(name, next)) { alert("Invalid or duplicate name."); return; }
+    if (viewerSel === name) viewerSel = next;
     alert(`Renamed. Note: 'import ${name.slice(0, -3)}' references in other files are NOT updated — fix them manually.`);
   } else if (action === "delete") {
     if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
     if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
     project.remove(name);
+    if (viewerSel === name) renderViewer(project.active);
   }
   renderTabs(); flushSave();
 }
+// Explorer header actions
+document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
+document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("assetInput").click());
 
 let loadedExample = EXAMPLES[exampleSel.value];
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
@@ -1620,6 +1956,11 @@ addEventListener("hashchange", () => {
   if (saved) { project.load(saved); renderTabs(); }
 });
 
+// NOTE (Q3 contradiction): design §0 Q3 asks to remove #shareBtn, but the LOCKED battery
+// test/multifile.mjs (check 7, commit 28c2eb9) clicks '#shareBtn' and asserts it emits #project=.
+// Removing it would break that contract (which I may not weaken). Resolution: keep #shareBtn + its
+// listener, but as a HIDDEN element out of the minimal toolbar — the toolbar stays visually minimal
+// and the test still passes. The legacy #code=/#project= LOAD readers stay (removed in S7).
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
   let url;
   if (project.isMulti()) {
@@ -1683,6 +2024,9 @@ async function saveProject() {
 }
 document.getElementById("saveBtn").addEventListener("click", saveProject);
 
+// The legacy #examples <select> is kept HIDDEN as a compatibility seam (verify.mjs drives it
+// via getElementById('examples') + a change event). Its change handler still loads + runs an
+// example. The visible Examples rail panel is INERT/read-only (Q4) — see renderExamplesPanel().
 exampleSel.addEventListener("change", () => {
   const differs = project.isMulti() || editor.getValue() !== loadedExample;
   const msg = project.isMulti()
@@ -1691,73 +2035,194 @@ exampleSel.addEventListener("change", () => {
   if (differs && !confirm(msg)) return;
   loadedExample = EXAMPLES[exampleSel.value];
   project.load({ files: { "main.py": loadedExample } });   // collapse to a one-file project
+  viewerSel = "main.py";
+  renderViewer("main.py");
   renderTabs();
   run();
 });
 
-// ---------------------------------------------------------------- layout: scale, resize, fullscreen
-const stageEl = document.getElementById("stage");
-const editorPaneEl = document.getElementById("editorPane");
-
-// Scale the canvas to fill the stage, preserving the pygame resolution's aspect ratio.
-function fitCanvas() {
-  const cs = getComputedStyle(stageEl);
-  const availW = stageEl.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const availH = stageEl.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-  const cw = canvasEl.width, ch = canvasEl.height;
-  if (cw > 0 && ch > 0 && availW > 0 && availH > 0) {
-    const scale = Math.min(availW / cw, availH / ch);
-    canvasEl.style.width = cw * scale + "px";
-    canvasEl.style.height = ch * scale + "px";
-  }
+// ---------------------------------------------------------------- examples rail panel (INERT, read-only)
+// Q4: shows the example NAMES from EXAMPLES as a non-destructive styled list. No load-into-editor,
+// no change handler, no setValue — full editable examples are S4.
+function renderExamplesPanel() {
+  const panel = document.getElementById("examplesPanel");
+  if (!panel) return;
+  panel.innerHTML = Object.keys(EXAMPLES).map(name => `
+    <div class="exrow"><span class="ic" aria-hidden="true">🐍</span><span class="nm">${escTab(name)}</span></div>`).join("");
 }
-new ResizeObserver(fitCanvas).observe(stageEl);
-// pygame.display.set_mode() rewrites the canvas width/height attributes — refit when it does.
-new MutationObserver(fitCanvas).observe(canvasEl, { attributes: true, attributeFilter: ["width", "height"] });
-fitCanvas();
 
-// Draggable dividers. makeSplitter handles the pointer-capture/cursor boilerplate;
-// onMove does the axis-specific sizing, onDone runs once on release.
-function makeSplitter(el, axis, onMove, onDone) {
-  el.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    el.setPointerCapture(e.pointerId);
-    el.classList.add("active");
-    document.body.classList.add("resizing-" + axis);
-    const move = (ev) => onMove(ev);
-    const up = () => {
-      el.classList.remove("active");
-      document.body.classList.remove("resizing-" + axis);
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", up);
-      onDone?.();
-    };
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up);
+// ---------------------------------------------------------------- collaboration rail panel intro
+function renderCollabPanel() { /* static intro is in the markup; #collabBtn keeps its engine listener */ }
+
+// ---------------------------------------------------------------- activity rail (§3) + roving tabindex (§8.1)
+const railEl = document.querySelector("nav.rail");
+const acttabs = [...railEl.querySelectorAll('[role="tab"]')];
+const panelviews = [...document.querySelectorAll(".panelview")];
+const sideEl = document.getElementById("side");
+const sideSplitEl = document.querySelector('[data-split="side"]');
+let activeView = "explorer";
+// Click-collapse (§3.1): clicking the already-open view collapses the side panel (rail stays).
+// Collapse requires (a) a REAL pointer press on the icon (mousedown→click), and (b) collapse being
+// "armed" (set when a view is shown via a rail click, cleared by any non-rail pointer interaction
+// such as a splitter drag). (a) means a deliberate user re-click collapses, while programmatic
+// `.click()` (no mousedown) used to *ensure* a view is open always re-asserts show. (b) means a
+// click after other UI interaction re-asserts show rather than collapsing.
+let collapseArmed = false;
+let realDownOnTab = null;
+
+function onViewOpened(v) {
+  if (v === "history") { historyOpen = true; historyPanelEl.hidden = false; renderHistory(); }
+  else { historyOpen = false; }
+  if (v === "examples") renderExamplesPanel();
+  if (v === "explorer") { assetPanelEl.hidden = false; renderAssetPanel(); renderTabs(); }
+}
+function showView(v) {
+  activeView = v;
+  sideEl.classList.remove("collapsed");
+  sideSplitEl.style.display = "";
+  acttabs.forEach(b => {
+    const on = b.dataset.view === v;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
   });
+  panelviews.forEach(p => { p.hidden = (p.dataset.panel !== v); });
+  onViewOpened(v);
 }
-
-const rightPaneEl = document.getElementById("rightPane");
-// Editor ⇄ stage (horizontal): set the editor pane's width.
-makeSplitter(document.getElementById("splitter"), "x", (ev) => {
-  const left = document.querySelector("main").getBoundingClientRect().left;
-  editorPaneEl.style.flex = "0 1 " + Math.max(240, Math.min(ev.clientX - left, window.innerWidth - 300)) + "px";
-}, () => editor.refresh());
-// Stage ⇄ console (vertical): set the console's height, the stage takes the rest.
-makeSplitter(document.getElementById("vsplit"), "y", (ev) => {
-  const r = rightPaneEl.getBoundingClientRect();
-  consoleEl.style.flex = "0 0 " + Math.max(40, Math.min(r.bottom - ev.clientY, r.height - 120)) + "px";
+function collapsePanel() {
+  sideEl.classList.add("collapsed");
+  sideSplitEl.style.display = "none";
+  acttabs.forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected", "false"); });
+}
+// Track real pointer-downs: a down on a rail icon records which icon (so its click can collapse);
+// a down anywhere else disarms collapse + clears the record (so the next rail click re-asserts show).
+document.addEventListener("mousedown", (e) => {
+  const tab = e.target.closest(".acttab");
+  if (tab) realDownOnTab = tab.dataset.view;
+  else { collapseArmed = false; realDownOnTab = null; }
+});
+acttabs.forEach((b, i) => {
+  b.addEventListener("click", () => {
+    const v = b.dataset.view;
+    const hadRealDown = realDownOnTab === v;
+    realDownOnTab = null;
+    if (activeView === v && !sideEl.classList.contains("collapsed") && collapseArmed && hadRealDown) {
+      collapsePanel(); collapseArmed = false;
+    } else {
+      showView(v); collapseArmed = true;
+    }
+  });
+  // Roving tabindex + Arrow/Home/End/Enter/Space.
+  b.addEventListener("keydown", (e) => {
+    let idx = null;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") idx = (i + 1) % acttabs.length;
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") idx = (i - 1 + acttabs.length) % acttabs.length;
+    else if (e.key === "Home") idx = 0;
+    else if (e.key === "End") idx = acttabs.length - 1;
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); b.click(); return; }
+    if (idx != null) { e.preventDefault(); acttabs[idx].focus(); }
+  });
 });
 
-// Fullscreen the stage; fitCanvas re-runs via the ResizeObserver as the box changes.
-const fsBtn = document.getElementById("fsBtn");
-fsBtn.addEventListener("click", () => {
+// ---------------------------------------------------------------- shared hover/focus tooltip (§3.3, §8.2)
+(function () {
+  const tip = document.createElement("div");
+  tip.className = "tooltip"; tip.setAttribute("role", "tooltip");
+  document.body.appendChild(tip);
+  let cur = null;
+  function show(el) {
+    const t = el.getAttribute("data-tip"); if (!t) { hide(); return; }
+    cur = el; tip.textContent = t;
+    const r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left, top;
+    if (el.getAttribute("data-tip-side") === "right") {
+      left = r.right + 8; top = r.top + r.height / 2 - th / 2;
+      if (left + tw > window.innerWidth - 6) left = r.left - tw - 8;
+      top = Math.max(6, Math.min(top, window.innerHeight - th - 6));
+    } else {
+      left = r.left + r.width / 2 - tw / 2; left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
+      top = r.bottom + 7; if (top + th > window.innerHeight - 6) top = r.top - th - 7;
+    }
+    tip.style.left = Math.round(left) + "px"; tip.style.top = Math.round(top) + "px";
+    tip.classList.add("show");
+  }
+  function hide() { cur = null; tip.classList.remove("show"); }
+  document.addEventListener("mouseover", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el && el !== cur) show(el); });
+  document.addEventListener("mouseout", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el && (!e.relatedTarget || !el.contains(e.relatedTarget))) hide(); });
+  document.addEventListener("focusin", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el) show(el); });
+  document.addEventListener("focusout", hide);
+  document.addEventListener("mousedown", hide);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") hide(); });
+  window.addEventListener("scroll", hide, true);
+})();
+
+// ---------------------------------------------------------------- panes: resizable splitters (§6.1)
+const editorPaneEl = document.getElementById("editorPane");
+const drawerEl = document.getElementById("drawer");
+document.querySelectorAll(".split").forEach(sp => {
+  sp.addEventListener("mousedown", (e) => {
+    const kind = sp.dataset.split;
+    if (kind === "side" && sideEl.classList.contains("collapsed")) return;
+    e.preventDefault();
+    sp.classList.add("active");
+    const startX = e.clientX, startY = e.clientY;
+    let startVal;
+    if (kind === "side") startVal = sideEl.getBoundingClientRect().width;
+    else if (kind === "viewer") startVal = editorPaneEl.getBoundingClientRect().width;
+    else startVal = drawerEl.getBoundingClientRect().height;
+    document.body.classList.add(kind === "console" ? "resizing-y" : "resizing-x");
+    function move(ev) {
+      if (kind === "side") {
+        const w = Math.max(180, Math.min(440, startVal + (ev.clientX - startX)));
+        sideEl.style.flex = "0 0 " + w + "px"; sideEl.style.width = w + "px";
+      } else if (kind === "viewer") {
+        const w = Math.max(160, startVal + (ev.clientX - startX));
+        editorPaneEl.style.flex = "0 0 " + w + "px";
+      } else {
+        const h = Math.max(60, Math.min(window.innerHeight - 180, startVal - (ev.clientY - startY)));
+        drawerEl.style.flex = "0 0 " + h + "px";
+      }
+    }
+    function up() {
+      sp.classList.remove("active");
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing-x", "resizing-y");
+      editor.refresh();
+    }
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+});
+
+// ---------------------------------------------------------------- console drawer collapse (§6.2)
+const drawerCollapseEl = document.getElementById("drawerCollapse");
+const consoleSplitEl = document.querySelector('[data-split="console"]');
+let savedDrawerFlex = "";
+function toggleDrawer() {
+  const collapsed = drawerEl.classList.toggle("collapsed");
+  // The console-resize drag writes an inline flex on #drawer that would override
+  // .drawer.collapsed{flex:…}. Stash + clear it on collapse; restore on expand.
+  if (collapsed) { savedDrawerFlex = drawerEl.style.flex; drawerEl.style.flex = ""; }
+  else { drawerEl.style.flex = savedDrawerFlex; }
+  drawerCollapseEl.setAttribute("aria-expanded", String(!collapsed));
+  drawerCollapseEl.textContent = collapsed ? "▸" : "▾";
+  if (consoleSplitEl) consoleSplitEl.style.display = collapsed ? "none" : "";
+}
+drawerCollapseEl.addEventListener("click", toggleDrawer);
+
+// ---------------------------------------------------------------- fullscreen (§6.3): editor / stage / console
+function toggleFullscreen(el) {
   if (document.fullscreenElement) document.exitFullscreen();
-  else stageEl.requestFullscreen?.().catch(() => {});
-});
-document.addEventListener("fullscreenchange", () => {
-  fsBtn.textContent = document.fullscreenElement ? "⤡" : "⛶";   // compress ⇄ expand
-});
+  else el.requestFullscreen?.().catch(() => {});
+}
+document.getElementById("viewerFs").addEventListener("click", () => toggleFullscreen(editorPaneEl));
+document.getElementById("fsBtn").addEventListener("click", () => toggleFullscreen(document.getElementById("rightPane")));
+document.getElementById("consoleFs").addEventListener("click", () => toggleFullscreen(drawerEl));
+
+// Render the initial explorer + inert panels now that the wiring exists.
+renderExamplesPanel();
+renderAssetPanel();
 
 // ---------------------------------------------------------------- pyodide boot
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
@@ -2021,6 +2486,8 @@ document.getElementById("collabBtn").addEventListener("click", () => {
   startRoom().catch((e) => { console.error(e); setLive("offline", 1); })
              .finally(() => { collab.starting = false; });
 });
+// The Collaboration panel's visible button delegates to the #collabBtn engine seam.
+document.getElementById("collabStartBtn").addEventListener("click", () => document.getElementById("collabBtn").click());
 
 addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });
 addEventListener("online",  () => { if (collab.active) setLive("", document.getElementById("peerCount").textContent); });

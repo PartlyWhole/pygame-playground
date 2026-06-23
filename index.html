@@ -1382,6 +1382,14 @@ addEventListener("hashchange", () => {
   const h = location.hash;
   if (h.startsWith("#room=")) return;
   if (!h.startsWith("#project=") && !h.startsWith("#code=")) return;
+  // A same-tab share link would replace the current project; confirm when there's
+  // work to lose (a multi-file project or unsaved edits). On cancel, strip the hash
+  // so the URL matches the unchanged editor (replaceState doesn't re-fire hashchange).
+  if ((project.isMulti() || dirty) &&
+      !confirm("Open this shared link? It replaces your current project. (Your project stays saved until you edit.)")) {
+    history.replaceState(null, "", location.pathname + location.search);
+    return;
+  }
   const fromProject = projectFromHash();
   if (fromProject) { project.load(fromProject); renderTabs(); return; }
   const fromCode = codeFromHash();
@@ -1407,11 +1415,11 @@ document.getElementById("shareBtn").addEventListener("click", async (e) => {
   setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
 });
 exampleSel.addEventListener("change", () => {
-  const dirty = project.isMulti() || editor.getValue() !== loadedExample;
+  const differs = project.isMulti() || editor.getValue() !== loadedExample;
   const msg = project.isMulti()
     ? `Replace your whole project (${project.order.length} files) with this example?`
     : "Replace your current code with the example?";
-  if (dirty && !confirm(msg)) return;
+  if (differs && !confirm(msg)) return;
   loadedExample = EXAMPLES[exampleSel.value];
   project.load({ files: { "main.py": loadedExample } });   // collapse to a one-file project
   renderTabs();

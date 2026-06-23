@@ -214,6 +214,48 @@ if (!usedProjectPath) ok('single file uses _start (not _start_project)');
 else fail('single file wrongly took the project path');
 await page.evaluate(() => pyodide.runPython('_stop()'));
 
+// SELECTIVE ASYNCIFY — the headline fix. A pure module helper stays sync so a
+// class method can call it and use the real return value (not a coroutine).
+await page.evaluate(() => pyodide.runPython('_stop()'));
+await runProject({
+  'main.py': 'import pygame, entities\npygame.init()\nscreen=pygame.display.set_mode((200,150))\np = entities.Player((10,20))\nprint("KIND", type(p.size).__name__, p.size)\n',
+  'entities.py': 'def scale(n):\n    return n * 2\nclass Player:\n    def __init__(self, pos):\n        self.size = scale(8)\n        self.pos = pos\n    def grow(self):\n        self.size = scale(self.size)\n',
+}, 'main.py');
+await page.waitForFunction(() => /KIND int 16/.test(
+  Array.from(document.getElementById('console').children).map(c=>c.textContent).join('\n')),
+  null, { timeout: 15000 }).then(() => ok('class method uses a pure module helper result (selective asyncify)'))
+  .catch(async () => fail('canonical method-uses-helper pattern broke: ' + await consoleText()));
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
+// Module-level constant computed via a pure helper resolves to the value (not a coroutine).
+await page.evaluate(() => { document.getElementById('console').textContent=''; });
+await runProject({
+  'main.py': 'import pygame, conf2\npygame.init()\nscreen=pygame.display.set_mode((200,150))\nprint("CONST", type(conf2.SIZE).__name__, conf2.SIZE)\n',
+  'conf2.py': 'def compute():\n    return 7 * 6\nSIZE = compute()\n',
+}, 'main.py');
+await page.waitForFunction(() => /CONST int 42/.test(
+  Array.from(document.getElementById('console').children).map(c=>c.textContent).join('\n')),
+  null, { timeout: 15000 }).then(() => ok('module-level constant via a pure helper resolves to a value'))
+  .catch(async () => fail('module-level helper constant broke: ' + await consoleText()));
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
+// Friendly error: a cooperative (pause/loop) function called by bare name from a SYNC
+// context (a class method) — its coroutine would be silently dropped, so we raise instead.
+await page.evaluate(() => { document.getElementById('console').textContent=''; });
+await runProject({
+  'main.py': 'import bad\nbad.Thing().go()\n',
+  'bad.py': 'import pygame\ndef pause_a_bit():\n    pygame.time.wait(200)\nclass Thing:\n    def go(self):\n        pause_a_bit()\n',   // method calls a cooperative fn -> friendly error
+}, 'main.py');
+await page.waitForFunction(() => /pause_a_bit/.test(
+  Array.from(document.getElementById('console').children).map(c=>c.textContent).join('\n')),
+  null, { timeout: 15000 }).then(() => ok('friendly error: cooperative fn called from a sync method'))
+  .catch(async () => fail('no friendly error for coop-from-sync: ' + await consoleText()));
+// must be the friendly message, NOT a raw traceback
+const coopErr = await consoleText();
+if (!/Traceback/.test(coopErr)) ok('coop-from-sync error is friendly (no raw traceback)');
+else fail('coop-from-sync produced a raw traceback: ' + coopErr);
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));
 else ok('no JS console errors');

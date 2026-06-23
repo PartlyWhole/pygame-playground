@@ -733,9 +733,10 @@ def _stop():
 // ---------------------------------------------------------------- multi-file run model (additive)
 // Appended after BOOT_PY. Adds ONLY new names; reuses BOOT_PY's _SyncBarrier,
 // _is_gameloop, _Asyncify, _Awaiter, _InjectYield, _time_names, __yield__,
-// __sleep__, _state, _stop. Never touches _start/_run/_transform. The blanket
-// transform (every module fn -> async, every call -> await __maybe_await__) is
-// the version proven in test/spike-multifile.mjs.
+// __sleep__, _state, _stop. Never touches _start/_run/_transform. Module functions
+// are SELECTIVELY async (only those that loop/pause); pure helpers stay sync so
+// class methods / module-level code can use their real return values. Every call
+// is still wrapped in await __maybe_await__ (non-coroutines pass straight through).
 const PROJECT_PY = String.raw`
 import sys, ast, importlib, importlib.abc, importlib.util, inspect, traceback, os
 
@@ -769,16 +770,39 @@ class _AwaitCalls(_SyncBarrier):
         self.generic_visit(node)
         return node
 
-class _AsyncifyAll(ast.NodeTransformer):
-    def __init__(self):
+def _needs_async(node, time_mods, sleep_names):
+    # True iff this function body (NOT nested defs/classes) contains a game loop or
+    # a sleep/wait that _Awaiter rewrites to await — exactly the things that must yield.
+    for n in _shallow(node):
+        if isinstance(n, ast.While) and _is_gameloop(n):
+            return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Name) and f.id in sleep_names:
+                return True
+            if isinstance(f, ast.Attribute):
+                o = f.value
+                if f.attr == 'sleep' and isinstance(o, ast.Name) and o.id in time_mods:
+                    return True
+                if f.attr in ('wait', 'delay') and isinstance(o, ast.Attribute) and o.attr == 'time':
+                    return True
+    return False
+
+class _AsyncifyCoop(ast.NodeTransformer):
+    """Convert ONLY functions that must yield/pause (game loop or sleep/wait).
+    Pure helpers stay sync so class methods / module-level code can call them and
+    use real return values. Methods (inside classes) are never converted."""
+    def __init__(self, time_mods, sleep_names):
+        self.time_mods, self.sleep_names = time_mods, sleep_names
         self.converted = set()
     def visit_FunctionDef(self, node):
-        self.generic_visit(node)
-        node.__class__ = ast.AsyncFunctionDef
-        self.converted.add(node.name)
+        self.generic_visit(node)            # decide nested defs first
+        if _needs_async(node, self.time_mods, self.sleep_names):
+            node.__class__ = ast.AsyncFunctionDef
+            self.converted.add(node.name)
         return node
     def visit_ClassDef(self, node):
-        return node          # methods stay sync (see friendly-error check below)
+        return node                         # methods stay sync (game loop in a method is caught elsewhere)
 
 def _check_loop_placement(tree, filename):
     base = filename.rsplit('/', 1)[-1]
@@ -792,6 +816,22 @@ def _check_loop_placement(tree, filename):
                 if isinstance(n, ast.While) and _is_gameloop(n):
                     raise _ProjectError(base + ': a game loop inside a class method '
                                         "isn't supported — move it to a module-level function or the entry file.")
+
+class _CoopCallCheck(ast.NodeVisitor):
+    """Raise a friendly error if a cooperative (converted) function is called by
+    bare name from a SYNC context (module top level / a sync function / a class
+    method), where its coroutine would be silently dropped. Such functions must be
+    called from the entry file or another cooperative (async) function."""
+    def __init__(self, converted, base):
+        self.converted, self.base = converted, base
+    def visit_AsyncFunctionDef(self, node):
+        pass                                # inside async, calls are awaited -> safe; don't descend
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id in self.converted:
+            raise _ProjectError(self.base + ": '" + node.func.id + "' contains a game loop or pause, "
+                "so it can't be called from module top level, a class method, or a non-cooperative "
+                "function — call it from the entry file or another function that loops or waits.")
+        self.generic_visit(node)
 
 class _ModuleCoop(ast.NodeTransformer):
     """Apply the cooperative passes (_Awaiter / _AwaitCalls / _InjectYield) ONLY
@@ -812,9 +852,11 @@ class _ModuleCoop(ast.NodeTransformer):
 def _transform_module(src, filename):
     tree = ast.parse(src)
     _check_loop_placement(tree, filename)
-    asyncify = _AsyncifyAll()
-    tree = asyncify.visit(tree)
     time_mods, sleep_names = _time_names(tree)
+    asyncify = _AsyncifyCoop(time_mods, sleep_names)
+    tree = asyncify.visit(tree)
+    base = filename.rsplit('/', 1)[-1]
+    _CoopCallCheck(asyncify.converted, base).visit(tree)
     # Modules are exec'd SYNCHRONOUSLY (no top-level-await flag), so the cooperative
     # passes run only inside the now-async function bodies — never at module top level.
     _ModuleCoop(asyncify.converted, time_mods, sleep_names).visit(tree)

@@ -963,6 +963,21 @@ def _start_project(files, entry):
     _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True)
     _state['task'] = asyncio.ensure_future(_run_project(dict(files), str(entry)))
     return _state['task']
+
+def _purge_project_files():
+    # Reconcile MEMFS when leaving the project path (e.g. dropping back to a single
+    # file): unlink every module a prior project run wrote and forget its import, so
+    # a solo program can't import a stale sibling. Safe to call with nothing tracked.
+    for path in list(_PROJECT_PATHS):
+        try:
+            if os.path.exists(path): os.unlink(path)
+        except Exception:
+            pass
+    for stem in list(_PROJECT_FILES):
+        sys.modules.pop(stem, None)
+    _PROJECT_PATHS.clear()
+    _PROJECT_FILES.clear()
+    importlib.invalidate_caches()
 `;
 
 // ---------------------------------------------------------------- UI plumbing
@@ -1358,20 +1373,48 @@ editor.on("change", () => { if (collab.active) return; dirty = true; clearTimeou
 // re-persists the loaded project over a programmatically-cleared key.
 addEventListener("beforeunload", () => { if (dirty) flushSave(); });
 
+// Same-document navigation to a share link (#project= / #code=) changes only the
+// fragment, so the document never reloads — re-run the load precedence so opening
+// a link in the current tab round-trips the project. #room= is owned by collab;
+// a malformed #project= falls through to the saved project (no clobber).
+addEventListener("hashchange", () => {
+  if (collab.active) return;                               // collab owns #room= transitions
+  const h = location.hash;
+  if (h.startsWith("#room=")) return;
+  if (!h.startsWith("#project=") && !h.startsWith("#code=")) return;
+  const fromProject = projectFromHash();
+  if (fromProject) { project.load(fromProject); renderTabs(); return; }
+  const fromCode = codeFromHash();
+  if (fromCode != null) { project.load({ files: { "main.py": fromCode } }); renderTabs(); return; }
+  const saved = savedProject();                            // malformed link -> saved project, never blank
+  if (saved) { project.load(saved); renderTabs(); }
+});
+
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
-  const url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());
+  let url;
+  if (project.isMulti()) {
+    url = location.origin + location.pathname + "#project=" + b64url.enc(JSON.stringify(project.serialize()));
+    if (url.length > 16000) {
+      logLine("This project is too large to share by link — use Save or Collaborate instead.", "sys");
+      return;
+    }
+  } else {
+    url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());
+  }
   history.replaceState(null, "", url);
   const btn = e.currentTarget;
   btn.textContent = await navigator.clipboard.writeText(url).then(() => "✓ copied", () => "✓ in URL bar");
   setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
 });
 exampleSel.addEventListener("change", () => {
-  if (editor.getValue() !== loadedExample &&
-      !confirm("Replace your current code with the example?")) {
-    return;
-  }
+  const dirty = project.isMulti() || editor.getValue() !== loadedExample;
+  const msg = project.isMulti()
+    ? `Replace your whole project (${project.order.length} files) with this example?`
+    : "Replace your current code with the example?";
+  if (dirty && !confirm(msg)) return;
   loadedExample = EXAMPLES[exampleSel.value];
-  editor.setValue(loadedExample);
+  project.load({ files: { "main.py": loadedExample } });   // collapse to a one-file project
+  renderTabs();
   run();
 });
 
@@ -1491,7 +1534,7 @@ async function run() {
   resumeAudio();
   let task;
   if (collab.active || !project.isMulti()) {
-    pyodide.runPython("_state['via_project'] = False");
+    pyodide.runPython("_state['via_project'] = False; _purge_project_files()");
     const start = pyodide.globals.get("_start");
     task = start(editor.getValue());          // existing single-file path, verbatim
     start.destroy();
@@ -1644,8 +1687,17 @@ async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {
 
 async function startRoom() {
   collab.lib = await loadAutomerge();
+  let seed = editor.getValue();
+  if (project.isMulti()) {
+    if (!confirm(`Live collaboration is single-file. Share only your entry file (${project.entry})? `
+               + `Your full project stays saved locally and returns when you reload.`)) {
+      setLive("offline", 1);   // user backed out; clear the "connecting" indicator
+      return;
+    }
+    seed = project.text(project.entry);
+  }
   collab.repo = new collab.lib.Repo({ network: [new collab.lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
-  collab.handle = collab.repo.create({ code: editor.getValue() });
+  collab.handle = collab.repo.create({ code: seed });
   await collab.handle.whenReady();
   location.hash = "#room=" + collab.handle.url;
   await enterRoom();
@@ -1671,6 +1723,7 @@ async function enterRoom() {
   setLive("", 1);
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
   if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
+  renderTabs();   // remove the multi-file tab strip in a room (gate: isMulti() && !collab.active)
 }
 
 function copyRoomLink() {

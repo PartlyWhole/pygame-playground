@@ -308,6 +308,60 @@ const enemyAfter = await page.evaluate(() => window.project.files['enemy.py']?.g
 if (enemyAfter && enemyAfter.includes('ZZ = 9')) ok('non-active tab edit survives reload');
 else fail('non-active edit lost: ' + enemyAfter);
 
+// 7. Share button emits #project= for multi-file and round-trips on reload.
+await page.evaluate(() => {
+  window.project.load({ files: { 'main.py': 'import helper\nhelper.f()\n', 'helper.py': 'def f():\n    print("HI")\n' },
+                        order: ['main.py','helper.py'], entry: 'main.py', active: 'main.py' });
+  window.renderTabs();
+  navigator.clipboard.writeText = () => Promise.resolve();   // avoid clipboard perms
+});
+await page.click('#shareBtn');
+const hash = await page.evaluate(() => location.hash);
+if (hash.startsWith('#project=')) ok('Share emits #project= in multi-file mode');
+else fail('Share did not emit #project=: ' + hash);
+await page.goto(URL + hash, { waitUntil: 'load' });
+await booted().catch(() => fail('did not boot from #project='));
+const round = await page.evaluate(() => ({ order: window.project.order,
+  helper: window.project.files['helper.py']?.getValue() }));
+if (JSON.stringify(round.order) === '["main.py","helper.py"]' && round.helper.includes('HI'))
+  ok('#project= round-trips the whole project');
+else fail('#project= round-trip wrong: ' + JSON.stringify(round));
+
+// 7b. A malformed #project= falls through to the saved project (no clobber).
+await page.evaluate(() => localStorage.setItem('pygame-playground:project',
+  JSON.stringify({ files: { 'main.py': 'SAVED = 1\n' }, order: ['main.py'], entry: 'main.py' })));
+await page.goto(URL + '#project=not%20valid%20base64!!', { waitUntil: 'load' });
+await booted().catch(() => fail('did not boot (bad #project=)'));
+const fellThrough = await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
+if (fellThrough.includes('SAVED')) ok('malformed #project= falls through to saved project');
+else fail('bad #project= clobbered saved project: ' + fellThrough);
+
+// 8 (perf sanity): a 2-file game with a per-frame cross-module call sustains animation.
+await page.goto(URL, { waitUntil: 'load' }); await booted();
+await runProject({
+  'main.py': 'import pygame, draw\npygame.init()\nscreen=pygame.display.set_mode((240,180))\nclock=pygame.time.Clock()\nn=0\nwhile True:\n    n=(n+2)%255\n    draw.frame(screen, n)\n    pygame.display.flip()\n    clock.tick(60)\n',
+  'draw.py': 'import pygame\ndef frame(screen, n):\n    screen.fill((n, 60, 120))\n',
+}, 'main.py');
+await page.waitForFunction(() => document.getElementById('status').textContent === 'running',
+  null, { timeout: 15_000 }).catch(() => fail('perf run did not start'));
+const p1 = await frame(); await page.waitForTimeout(600); const p2 = await frame();
+const pr0 = Date.now(); await page.evaluate(() => 1+1); const prdt = Date.now() - pr0;
+if (p1 !== p2 && prdt < 500) ok(`per-frame cross-module call sustains animation, responsive (${prdt}ms)`);
+else fail(`perf sanity failed (animating=${p1!==p2}, resp=${prdt}ms)`);
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
+// 10. No cross-run contamination: drop to one file, solo-import the old module -> ModuleNotFoundError.
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+await page.evaluate(() => {
+  document.querySelector('.CodeMirror').CodeMirror.setValue('import draw\nprint(draw)\n');
+  window.project.load({ files: { 'main.py': 'import draw\nprint(draw)\n' } });   // single file now
+});
+await page.click('#runBtn');
+await page.waitForFunction(() => /ModuleNotFoundError|No module named/.test(
+  Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n')),
+  null, { timeout: 12_000 }).then(() => ok('no cross-run contamination: stale module unlinked'))
+  .catch(() => fail('stale module still importable after dropping to single file'));
+
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));
 else ok('no JS console errors');

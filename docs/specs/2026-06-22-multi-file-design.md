@@ -241,7 +241,8 @@ converted call in arg/return position.
 
 **Known edges (documented, narrow):** calling a loop/pause-bearing function from a
 sync context raises a friendly error for a bare same-module name (`_CoopCallCheck`),
-but **silently drops the coroutine** when reached via a cross-module attribute
+but **drops the coroutine** (Python prints a *coroutine was never awaited*
+warning naming the function) when reached via a cross-module attribute
 (`other.run()` from a class method) or a local alias (`f = run; f()`) — these need
 cross-module/dataflow analysis the single-module transform can't do, and are rare
 (you don't normally call a game-loop/pause function from a method). Also unsupported:

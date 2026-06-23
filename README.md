@@ -157,8 +157,9 @@ Limitations (v1):
 - **A loop/pause-bearing function must be called from the entry or another
   cooperative function.** Calling one by its bare same-module name from a class
   method or module-level code gives a friendly error; reaching it indirectly via a
-  cross-module attribute (`other.run()`) or an alias is silently skipped (a rare
-  edge — you don't normally call a game-loop function that way).
+  cross-module attribute (`other.run()`) or an alias is skipped, and Python prints
+  a *coroutine was never awaited* warning naming the function (a rare edge — you
+  don't normally call a game-loop function that way).
 - **Multi-file projects are solo.** Live **👥 Collaborate** shares only the entry
   file (you'll be asked to confirm); your full project stays saved locally and
   returns when you reload. The **🔗 Share** link carries the *whole* project — but

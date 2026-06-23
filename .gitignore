@@ -2,3 +2,4 @@ verify-screenshot.png
 .DS_Store
 build/node_modules/
 test/spike-assets.png
+vendor/automerge-history-spike.mjs

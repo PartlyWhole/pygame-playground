@@ -139,8 +139,42 @@ await runProject({
 await page.waitForFunction(() => document.getElementById('status').textContent === 'running',
   null, { timeout: 15_000 }).catch(() => fail('await-matrix run did not start'));
 const g1 = await frame(); await page.waitForTimeout(500); const g2 = await frame();
-if (g1 !== g2) ok('cross-module await matrix runs (from-import + alias + returned-then-called)');
-else fail('await matrix not animating — a coroutine was likely never awaited');
+// Harden (I1): a C2 double-await crash leaves status 'error' + a Traceback while the
+// one-shot boot paint still differs frame-to-frame. Require all three to be healthy.
+const awaitStatus = await page.evaluate(() => document.getElementById('status').textContent);
+const awaitConsole = await consoleText();
+if (g1 !== g2 && awaitStatus === 'running' && !/Error|Traceback/.test(awaitConsole))
+  ok('cross-module await matrix runs (from-import + alias + returned-then-called)');
+else fail(`await matrix not healthy — animating=${g1 !== g2} status=${awaitStatus} console=${awaitConsole}`);
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
+// C1 regression: a module with module-LEVEL calls (run at import time) must import + run.
+await page.evaluate(() => pyodide.runPython('_stop()'));
+await runProject({
+  'main.py': 'import pygame, conf\npygame.init()\nscreen=pygame.display.set_mode((200,150))\nscreen.fill(conf.BG)\npygame.display.flip()\nprint("MAIN_OK", conf.SIZE)\n',
+  'conf.py': 'import math\nSIZE = len("hello")\nBG = (int(math.pi*10) % 255, 40, 90)\n_table = list(range(3))\n',   // module-level CALLS at import time
+}, 'main.py');
+await page.waitForFunction(() => /MAIN_OK 5/.test(
+  Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n')),
+  null, { timeout: 15_000 }).then(() => ok('module with top-level calls imports + runs (C1 fixed)'))
+  .catch(async () => fail('module top-level call broke import (C1): ' + await consoleText()));
+await page.evaluate(() => pyodide.runPython('_stop()'));
+
+// Pause honored inside an imported module function (function-level cooperation intact post-C1).
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+const tSleep = Date.now();
+await runProject({
+  'main.py': 'import pygame, seq\npygame.init()\nscreen=pygame.display.set_mode((200,150))\nseq.run(screen)\n',
+  'seq.py': 'import pygame, time\ndef run(screen):\n    screen.fill((200,60,60)); pygame.display.flip()\n    pygame.time.wait(500)\n    time.sleep(0.5)\n    screen.fill((60,200,60)); pygame.display.flip()\n    print("SEQ_DONE")\n',
+}, 'main.py');
+const rresp0 = Date.now(); await page.evaluate(() => 1+1); const rresp = Date.now() - rresp0;
+await page.waitForFunction(() => /SEQ_DONE/.test(
+  Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n')),
+  null, { timeout: 12_000 }).then(() => {
+    const took = Date.now() - tSleep;
+    if (rresp < 500 && took >= 800) ok(`imported module pause honored (~${took}ms) without freezing (${rresp}ms)`);
+    else fail(`imported pause wrong: took=${took}ms resp=${rresp}ms`);
+  }).catch(async () => fail('imported module pause never finished: ' + await consoleText()));
 await page.evaluate(() => pyodide.runPython('_stop()'));
 
 // 9. Friendly error: a game loop inside a class method.
@@ -160,6 +194,11 @@ await page.waitForFunction(() => /class method/.test(
   Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n')),
   null, { timeout: 15_000 }).then(() => ok('friendly error for game loop in a class method'))
   .catch(async () => fail('no friendly error for in-method loop: ' + await consoleText()));
+// M2: the message names the file BASENAME, not the abs MEMFS path.
+const methodErr = await consoleText();
+if (/badmod\.py/.test(methodErr) && !/\/home\/pyodide|\/badmod/.test(methodErr))
+  ok('friendly error shows basename badmod.py (M2)');
+else fail('friendly error path wrong (M2): ' + methodErr);
 await page.evaluate(() => pyodide.runPython('_stop()'));
 
 // 11. Single-file byte-identity: solo run still calls _start, not _start_project.

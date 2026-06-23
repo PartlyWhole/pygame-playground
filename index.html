@@ -748,14 +748,26 @@ async def __maybe_await__(value):
     return value
 
 class _AwaitCalls(_SyncBarrier):
+    _HELPERS = ('__maybe_await__', '__yield__', '__sleep__')
     def _wrap(self, call):
         return ast.copy_location(ast.Await(value=ast.Call(
             func=ast.Name('__maybe_await__', ast.Load()), args=[call], keywords=[])), call)
     def visit_Call(self, node):
         self.generic_visit(node)
-        if isinstance(node.func, ast.Name) and node.func.id in ('__maybe_await__', '__yield__', '__sleep__'):
+        if isinstance(node.func, ast.Name) and node.func.id in self._HELPERS:
             return node
         return self._wrap(node)
+    def visit_Await(self, node):
+        # _Awaiter may already have produced 'await f()' (converted name) or 'await x'
+        # (asyncio.run). Wrap the inner call ONCE here so visit_Call doesn't add a
+        # second await on top (double-await -> TypeError when the call returns None).
+        v = node.value
+        if isinstance(v, ast.Call) and not (isinstance(v.func, ast.Name) and v.func.id in self._HELPERS):
+            self.generic_visit(v)        # process the call's args, not the call itself
+            return ast.copy_location(ast.Await(value=ast.Call(
+                func=ast.Name('__maybe_await__', ast.Load()), args=[v], keywords=[])), node)
+        self.generic_visit(node)
+        return node
 
 class _AsyncifyAll(ast.NodeTransformer):
     def __init__(self):
@@ -769,25 +781,43 @@ class _AsyncifyAll(ast.NodeTransformer):
         return node          # methods stay sync (see friendly-error check below)
 
 def _check_loop_placement(tree, filename):
-    for stmt in tree.body:
-        if isinstance(stmt, ast.While) and _is_gameloop(stmt):
-            raise _ProjectError(filename + ': a game loop must be in the entry file '
-                                'or a module-level function — not at module top level.')
+    base = filename.rsplit('/', 1)[-1]
+    for n in _shallow(tree):                       # module-level, not crossing into defs
+        if isinstance(n, ast.While) and _is_gameloop(n):
+            raise _ProjectError(base + ': a game loop must be in the entry file or a '
+                                'module-level function — not at module top level.')
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             for n in ast.walk(node):
                 if isinstance(n, ast.While) and _is_gameloop(n):
-                    raise _ProjectError(filename + ': a game loop inside a class method '
+                    raise _ProjectError(base + ': a game loop inside a class method '
                                         "isn't supported — move it to a module-level function or the entry file.")
+
+class _ModuleCoop(ast.NodeTransformer):
+    """Apply the cooperative passes (_Awaiter / _AwaitCalls / _InjectYield) ONLY
+    inside async-function bodies. Module top-level code stays plain sync Python:
+    the module is imported synchronously, so a top-level await won't compile."""
+    def __init__(self, converted, time_mods, sleep_names):
+        self.converted, self.time_mods, self.sleep_names = converted, time_mods, sleep_names
+    def visit_AsyncFunctionDef(self, node):
+        # The sub-passes recurse into nested async defs, so do NOT generic_visit
+        # here (that would process nested functions twice).
+        _Awaiter(self.converted, self.time_mods, self.sleep_names).visit(node)
+        _AwaitCalls().visit(node)
+        _InjectYield().visit(node)
+        return node
+    def visit_ClassDef(self, node):
+        return node     # methods stay sync
 
 def _transform_module(src, filename):
     tree = ast.parse(src)
     _check_loop_placement(tree, filename)
     asyncify = _AsyncifyAll()
     tree = asyncify.visit(tree)
-    tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
-    tree = _AwaitCalls().visit(tree)
-    tree = _InjectYield().visit(tree)
+    time_mods, sleep_names = _time_names(tree)
+    # Modules are exec'd SYNCHRONOUSLY (no top-level-await flag), so the cooperative
+    # passes run only inside the now-async function bodies — never at module top level.
+    _ModuleCoop(asyncify.converted, time_mods, sleep_names).visit(tree)
     ast.fix_missing_locations(tree)
     return compile(tree, filename, 'exec')
 

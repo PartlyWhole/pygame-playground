@@ -256,6 +256,58 @@ if (!/Traceback/.test(coopErr)) ok('coop-from-sync error is friendly (no raw tra
 else fail('coop-from-sync produced a raw traceback: ' + coopErr);
 await page.evaluate(() => pyodide.runPython('_stop()'));
 
+// 6 + tabs: add a file via the model+renderer, assert a tab appears, switch, edit persists.
+await page.evaluate(() => {
+  window.project.load({ files: { 'main.py': 'a = 1\n' } });    // reset to single
+  window.renderTabs();
+});
+let tabsHiddenSolo = await page.evaluate(() => {
+  const t = document.getElementById('tabs');
+  return !t || t.offsetParent === null || t.children.length === 0;
+});
+if (tabsHiddenSolo) ok('tab strip absent in single-file mode');
+else fail('tab strip showing for a single file');
+
+await page.evaluate(() => {
+  window.project.add('enemy.py', '# enemy\ndef spawn():\n    return 1\n');
+  window.project.setActive('main.py');
+  window.renderTabs();
+});
+const tabNames = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#tabs .tab')).map(t => t.dataset.name));
+if (JSON.stringify(tabNames) === '["main.py","enemy.py"]') ok('tabs render both files');
+else fail('tabs wrong: ' + JSON.stringify(tabNames));
+
+// Switch to enemy.py by clicking its tab; editor shows enemy source; mode is python.
+await page.click('#tabs .tab[data-name="enemy.py"]');
+const afterSwitch = await page.evaluate(() => {
+  const cm = document.querySelector('.CodeMirror').CodeMirror;
+  return { val: cm.getValue(), active: window.project.active,
+           hasComment: !!document.querySelector('.CodeMirror .cm-comment') };
+});
+if (afterSwitch.val.includes('enemy') && afterSwitch.active === 'enemy.py' && afterSwitch.hasComment)
+  ok('tab switch swaps doc + Python highlighting on the new file');
+else fail('tab switch wrong: ' + JSON.stringify(afterSwitch));
+
+// Entry badge on main.py; set enemy.py as entry moves it.
+await page.evaluate(() => { window.project.setEntry('enemy.py'); window.renderTabs(); });
+const entryTab = await page.evaluate(() =>
+  document.querySelector('#tabs .tab.entry')?.dataset.name);
+if (entryTab === 'enemy.py') ok('set-as-entry moves the entry badge');
+else fail('entry badge wrong: ' + entryTab);
+
+// Non-active edit survives reload (serialize reads every Doc).
+await page.evaluate(() => {
+  window.project.setEntry('main.py');
+  window.project.files['enemy.py'].setValue('# enemy edited\nZZ = 9\n');  // edit non-active doc
+  window.__flushSave();
+});
+await page.reload({ waitUntil: 'load' });
+await booted().catch(() => fail('did not reboot (tabs persist)'));
+const enemyAfter = await page.evaluate(() => window.project.files['enemy.py']?.getValue());
+if (enemyAfter && enemyAfter.includes('ZZ = 9')) ok('non-active tab edit survives reload');
+else fail('non-active edit lost: ' + enemyAfter);
+
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));
 else ok('no JS console errors');

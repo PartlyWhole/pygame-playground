@@ -40,8 +40,20 @@
   #status.error { color: var(--bad); }
   #status.boot { color: var(--warn); }
   main { flex: 1 1 0; display: flex; min-height: 0; }
-  #editorPane { flex: 0 1 52%; min-width: 240px; display: flex; overflow: hidden; }
-  .CodeMirror { flex: 1; height: auto; font-size: 13.5px; }
+  #editorPane { flex: 0 1 52%; min-width: 240px; display: flex; flex-direction: column; overflow: hidden; }
+  .CodeMirror { flex: 1; height: auto; font-size: 13.5px; min-height: 0; }
+  /* editor tab strip (multi-file): stacked ABOVE the editor by #editorPane's column flex.
+     hidden (display:none, innerHTML cleared) in single-file mode + in a collab room. */
+  #tabs { display: none; flex: 0 0 auto; align-items: stretch; background: var(--panel);
+          border-bottom: 1px solid var(--edge); overflow-x: auto; }
+  #tabs.show { display: flex; }
+  #tabs .tab { display: flex; align-items: center; gap: 5px; padding: 5px 9px; font-size: 12px;
+               color: var(--dim); border-right: 1px solid var(--edge); cursor: pointer; white-space: nowrap; }
+  #tabs .tab:hover { color: var(--text); }
+  #tabs .tab.active { color: var(--text); background: #1c1e26; box-shadow: inset 0 -2px 0 var(--accent); }
+  #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
+  #tabs .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 2px; }
+  #tabs .tab-add { padding: 5px 10px; color: var(--accent); cursor: pointer; user-select: none; }
   #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--edge); }
   #vsplit { flex: 0 0 6px; cursor: row-resize; background: var(--edge); }
   #splitter:hover, #splitter.active, #vsplit:hover, #vsplit.active { background: var(--accent); }
@@ -126,7 +138,7 @@
   <span id="status" class="boot">starting…</span>
 </header>
 <main>
-  <div id="editorPane"><textarea id="code"></textarea></div>
+  <div id="editorPane"><div id="tabs"></div><textarea id="code"></textarea></div>
   <div id="splitter" title="Drag to resize"></div>
   <div id="rightPane">
     <div id="stage">
@@ -1252,9 +1264,66 @@ addEventListener('drop', (e) => {
 const collab = { repo: null, handle: null, presence: null, active: false, applyingRemote: false };
 let _amCache = null;
 
+// ---------------------------------------------------------------- tabs UI (multi-file)
+// One CodeMirror instance; clicking a tab swapDoc's in that file's Doc. The strip is
+// only shown for ≥2 files outside a room; otherwise its innerHTML is cleared and it's
+// display:none, so the solo / collab layout is pixel-identical to the single-file build.
+// Defined before loadInitialProject()'s renderTabs() call (tabsEl is a const — no TDZ).
+const tabsEl = document.getElementById("tabs");
+// Local escaper — the assets section's `esc` is defined later in source.
+const escTab = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function renderTabs() {
+  const show = project.isMulti() && !collab.active;
+  tabsEl.classList.toggle("show", show);
+  if (!show) { tabsEl.innerHTML = ""; editor.refresh(); return; }   // strip out of the DOM in single-file / room
+  tabsEl.innerHTML = project.order.map(name => `
+    <div class="tab${name === project.active ? " active" : ""}${name === project.entry ? " entry" : ""}" data-name="${escTab(name)}">
+      <span class="tab-name">${escTab(name)}</span>
+      <button class="tab-menu" title="File actions">⋯</button>
+    </div>`).join("") + `<span class="tab-add" title="New file">+</span>`;
+  editor.refresh();   // CM caches viewport geometry; refresh after the strip changes height
+}
+window.renderTabs = renderTabs;   // test seam
+tabsEl.addEventListener("click", (e) => {
+  const add = e.target.closest(".tab-add");
+  if (add) {
+    const raw = prompt("New file name (e.g. enemy.py):", "");
+    if (raw == null) return;
+    const name = raw.endsWith(".py") ? raw : raw + ".py";
+    if (!project.add(name)) { alert("Use a valid, unique name ending in .py"); return; }
+    project.setActive(name);
+    renderTabs(); flushSave();
+    return;
+  }
+  const menuBtn = e.target.closest(".tab-menu");
+  const tab = e.target.closest(".tab");
+  if (!tab) return;
+  const name = tab.dataset.name;
+  if (menuBtn) { tabMenu(name); return; }
+  project.setActive(name); renderTabs();
+});
+function tabMenu(name) {
+  const action = prompt(`File "${name}" — type: entry / rename / delete`, "");
+  if (!action) return;
+  if (action === "entry") { project.setEntry(name); }
+  else if (action === "rename") {
+    let next = prompt(`Rename "${name}" to:`, name);
+    if (next == null) return;
+    if (!next.endsWith(".py")) next += ".py";
+    if (!project.rename(name, next)) { alert("Invalid or duplicate name."); return; }
+    alert(`Renamed. Note: 'import ${name.slice(0, -3)}' references in other files are NOT updated — fix them manually.`);
+  } else if (action === "delete") {
+    if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
+    if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+    project.remove(name);
+  }
+  renderTabs(); flushSave();
+}
+
 let loadedExample = EXAMPLES[exampleSel.value];
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
 loadInitialProject();
+renderTabs();
 if (roomFromHash) joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
 
 // Build the initial project. Precedence: #room (single-file, joined async above) >

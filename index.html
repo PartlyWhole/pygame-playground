@@ -116,6 +116,28 @@
   #assetPanel .ap-storage { color: var(--dim); font-size: 11.5px; margin-top: 4px;
                             padding-top: 4px; border-top: 1px solid var(--edge); }
   #assetPanel .ap-storage.low { color: var(--warn); }
+  #historyPanel { position: absolute; top: 44px; right: 14px; z-index: 20; width: 340px;
+                  max-height: 70vh; overflow-y: auto; background: var(--panel);
+                  border: 1px solid var(--edge); border-radius: 8px; padding: 10px;
+                  box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12.5px; }
+  #historyPanel[hidden] { display: none; }
+  #historyPanel .hp-head { display: flex; justify-content: space-between; color: var(--dim); margin-bottom: 6px; }
+  #historyPanel .hp-clear { color: var(--bad); cursor: pointer; }
+  #historyPanel .hist-row { display: flex; justify-content: space-between; gap: 8px; padding: 5px 6px;
+                            border-top: 1px solid var(--edge); cursor: pointer; border-radius: 4px; }
+  #historyPanel .hist-row:hover { background: #20222c; }
+  #historyPanel .hist-row.sel { background: #20222c; box-shadow: inset 2px 0 0 var(--accent); }
+  #historyPanel .hist-time { color: var(--text); }
+  #historyPanel .hist-meta { color: var(--dim); font-family: "SF Mono", Menlo, monospace; }
+  #historyPanel .hp-empty { color: var(--dim); padding: 6px 0; }
+  #historyPanel .hp-diff { margin-top: 8px; }
+  #historyPanel .hp-difftitle { color: var(--dim); margin: 6px 0 4px; }
+  #historyPanel .hp-diffbody { font: 11.5px/1.5 "SF Mono", Menlo, monospace; white-space: pre-wrap;
+                               max-height: 30vh; overflow-y: auto; border: 1px solid var(--edge); border-radius: 4px; }
+  #historyPanel .d-add { background: rgba(123,216,143,.14); color: #b8f0c6; }
+  #historyPanel .d-del { background: rgba(255,110,127,.14); color: #f3b0ba; }
+  #historyPanel .d-ctx { color: var(--dim); }
+  #historyPanel .hp-restore { margin-top: 8px; background: #234430; border-color: #2f6a44; color: #b8f0c6; }
   #dropOverlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: center;
                  justify-content: center; background: rgba(20,30,40,.78); color: var(--accent);
                  font-size: 22px; border: 3px dashed var(--accent); }
@@ -135,6 +157,8 @@
   <span id="assetChip" title="Uploaded assets — drop files anywhere, or click to add">📁</span>
   <input id="assetInput" type="file" multiple hidden>
   <div id="assetPanel" hidden></div>
+  <button id="historyBtn" title="Version history — a snapshot is saved each time you Run">🕘 History</button>
+  <div id="historyPanel" hidden></div>
   <span class="hint"><kbd>⌘</kbd><kbd>↩</kbd> run · <kbd>⌘</kbd><kbd>/</kbd> comment · <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> indent · click canvas for keys · 👥 = live share</span>
   <span id="status" class="boot">starting…</span>
 </header>
@@ -1195,6 +1219,55 @@ const assetStore = {
   async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
 };
 
+// ---------------------------------------------------------------- history (version snapshots)
+// A snapshot of the whole project is saved on each Run, in a SEPARATE IndexedDB
+// database so it can't disturb assetStore's versioning. Local-only; no Automerge.
+const HISTORY_CAP = 100;
+const historyStore = {
+  _db: null,
+  _open() {
+    return this._db ??= new Promise((resolve, reject) => {
+      const r = indexedDB.open('pygame-playground-history', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('snapshots', { keyPath: 'id', autoIncrement: true });
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  },
+  async _tx(mode, fn) {
+    const db = await this._open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('snapshots', mode);
+      const out = fn(tx.objectStore('snapshots'));
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+  async getAll() {   // newest-first (autoincrement id ascending -> reverse)
+    try { const all = await this._tx('readonly', s => { const rq = s.getAll(); return new Promise(r => rq.onsuccess = () => r(rq.result)); }); return all.reverse(); }
+    catch { return []; }
+  },
+  async latest() { return (await this.getAll())[0] || null; },
+  async add(rec) {
+    try {
+      await this._tx('readwrite', s => s.add(rec));
+      const keys = await this._tx('readonly', s => { const rq = s.getAllKeys(); return new Promise(r => rq.onsuccess = () => r(rq.result)); });
+      if (keys.length > HISTORY_CAP) { const drop = keys.slice(0, keys.length - HISTORY_CAP); await this._tx('readwrite', s => drop.forEach(k => s.delete(k))); }
+    } catch {}
+  },
+  async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
+};
+window.historyStore = historyStore;   // test seam
+
+async function captureSnapshot() {
+  try {
+    const proj = project.serialize();
+    const last = await historyStore.latest();
+    if (last && JSON.stringify(last.project) === JSON.stringify(proj)) return;   // dedup unchanged re-runs
+    await historyStore.add({ at: Date.now(), mode: collab.active ? "room" : "solo", project: proj });
+    if (typeof historyPanelEl !== "undefined" && !historyPanelEl.hidden) renderHistory();
+  } catch {}
+}
+
 const assetFS = {
   list: [],   // [{name, size, type, warn}]
   _memfs(name, bytes) { if (pyodide) try { pyodide.FS.writeFile(name, bytes); } catch (e) { console.warn('memfs write', name, e); } },
@@ -1321,6 +1394,104 @@ addEventListener('drop', (e) => {
   if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
   e.preventDefault(); dragDepth = 0; dropOverlayEl.classList.remove('show');
   assetFS.addFiles([...e.dataTransfer.files]);
+});
+
+// ---------------------------------------------------------------- history UI
+// The 🕘 History popover (same shape as the 📁 asset popover): lists snapshots
+// newest-first, and on selecting one shows a line-diff of the active file
+// (snapshot → now) with a Restore button. jsdiff loads lazily on first diff view.
+const JSDIFF_CDN = "https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js";
+let _diff = null;
+function loadDiffLib() {
+  return _diff ??= new Promise((resolve, reject) => {
+    const s = document.createElement("script"); s.src = JSDIFF_CDN;
+    s.onload = () => resolve(window.Diff); s.onerror = () => { _diff = null; reject(new Error("diff load")); };
+    document.head.appendChild(s);
+  });
+}
+const historyBtnEl = document.getElementById("historyBtn");
+const historyPanelEl = document.getElementById("historyPanel");
+const lineCount = (t) => (t ? t.split("\n").length : 0);
+function relTime(ms) {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 10) return "just now";
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return new Date(ms).toLocaleDateString();
+}
+// Project-wide net line delta vs the previous version (cheap — no diff lib needed),
+// so the badge is meaningful for multi-file too (not tied to the entry or active file).
+function deltaBadge(older, cur) {
+  const names = [...new Set([...Object.keys(cur.files), ...Object.keys((older && older.files) || {})])];
+  const total = (proj) => names.reduce((n, f) => n + lineCount(proj.files[f]), 0);
+  if (!older) return total(cur) + " lines";
+  const d = total(cur) - total(older);
+  return d > 0 ? "+" + d + " lines" : d < 0 ? d + " lines" : "edited";
+}
+let _histSnaps = [], _histSelectedId = null;
+async function renderHistory() {
+  if (historyPanelEl.hidden) return;
+  _histSnaps = await historyStore.getAll();   // newest-first
+  if (!_histSnaps.length) { historyPanelEl.innerHTML = '<div class="hp-head"><span>Version history</span></div><div class="hp-empty">No versions yet — press ▶ Run to save one.</div>'; return; }
+  const rows = _histSnaps.map((s, i) => {
+    const older = _histSnaps[i + 1];
+    const nf = s.project.order.length;
+    return `<div class="hist-row" data-id="${s.id}">
+      <span class="hist-time">${relTime(s.at)}</span>
+      <span class="hist-meta">${deltaBadge(older?.project, s.project)}${nf > 1 ? " · " + nf + " files" : ""}${s.mode === "room" ? " · room" : ""}</span>
+    </div>`;
+  }).join("");
+  // Rows live in their own container so the diff pane below them doesn't make the
+  // last row stop being a :last-child (the panel lists rows, then a diff pane).
+  historyPanelEl.innerHTML = `<div class="hp-head"><span>Version history</span><span class="hp-clear">Clear</span></div><div class="hist-rows">${rows}</div><div class="hp-diff" id="histDiff"></div>`;
+  // Preserve an open diff across a re-render (e.g. a Run while the panel is open).
+  if (_histSelectedId != null && _histSnaps.some(s => String(s.id) === String(_histSelectedId))) showDiff(_histSelectedId);
+}
+async function showDiff(id) {
+  const rec = _histSnaps.find(s => String(s.id) === String(id));
+  if (!rec) return;
+  _histSelectedId = id;
+  historyPanelEl.querySelectorAll(".hist-row").forEach(r => r.classList.toggle("sel", r.dataset.id === String(id)));
+  const diffEl = document.getElementById("histDiff");
+  diffEl.innerHTML = "Loading diff…";
+  let Diff;
+  try { Diff = await loadDiffLib(); } catch { diffEl.textContent = "Couldn't load the diff view — check your connection."; return; }
+  const active = project.active;
+  const isNew = !(active in rec.project.files);     // the file you're viewing didn't exist in this version
+  const before = rec.project.files[active] ?? "";
+  const after = project.text(active) ?? "";
+  const body = Diff.diffLines(before, after).map(p => {
+    const cls = p.added ? "d-add" : p.removed ? "d-del" : "d-ctx";
+    return p.value.replace(/\n$/, "").split("\n").map(ln => `<div class="${cls}">${esc(ln) || "&nbsp;"}</div>`).join("");
+  }).join("");
+  const otherChanged = [...new Set([...Object.keys(rec.project.files), ...project.order])]
+    .filter(n => n !== active && (rec.project.files[n] ?? "") !== (project.files[n]?.getValue() ?? "")).length;
+  diffEl.innerHTML = `<div class="hp-difftitle">${esc(active)}${isNew ? " (new file)" : ""} — this version → now${otherChanged ? ` (+${otherChanged} other file${otherChanged > 1 ? "s" : ""} differ)` : ""}</div>`
+    + `<div class="hp-diffbody">${body || '<div class="d-ctx">(no changes in this file)</div>'}</div>`
+    + `<button class="hp-restore" data-id="${rec.id}">Restore this version</button>`;
+}
+async function restoreSnapshot(id) {
+  const rec = _histSnaps.find(s => String(s.id) === String(id));
+  if (!rec) return;
+  if (!confirm("Replace your current code with this version?")) return;
+  await captureSnapshot();            // save the current state first, so a restore is itself recoverable
+  _histSelectedId = null;
+  project.load(rec.project);
+  renderTabs();
+  flushSave();
+  historyPanelEl.hidden = true;
+}
+historyBtnEl.addEventListener("click", () => { historyPanelEl.hidden = !historyPanelEl.hidden; if (historyPanelEl.hidden) _histSelectedId = null; renderHistory(); });
+historyPanelEl.addEventListener("click", (e) => {
+  if (e.target.classList.contains("hp-clear")) { _histSelectedId = null; historyStore.clear().then(renderHistory); return; }
+  const restore = e.target.closest(".hp-restore");
+  if (restore) { restoreSnapshot(restore.dataset.id); return; }
+  const row = e.target.closest(".hist-row");
+  if (row) showDiff(row.dataset.id);
+});
+document.addEventListener("click", (e) => {
+  if (!historyPanelEl.hidden && !historyPanelEl.contains(e.target) && e.target !== historyBtnEl) { historyPanelEl.hidden = true; _histSelectedId = null; }
 });
 
 // ---------------------------------------------------------------- collaboration (lazy) — declared early so joinRoom() can reference collab before the collab section below
@@ -1633,6 +1804,7 @@ const booted = boot().catch((e) => {
 async function run() {
   try { await booted; } catch { return; }
   clearConsole();
+  captureSnapshot();   // fire-and-forget: save this version to history
   canvasEl.focus();
   resumeAudio();
   let task;

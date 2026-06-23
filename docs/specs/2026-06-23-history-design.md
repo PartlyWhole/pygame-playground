@@ -63,7 +63,7 @@ timeline (with coalescing) is the **primary iteration fork** below.
   oldest) — each is a few KB of text, so this is tiny.
 - **Panel:** a `🕘 History` header button opens a popover (same pattern as the 📁
   asset popover) listing snapshots newest-first: each row shows a relative time
-  ("2 min ago"), a `+a / −b` line-delta badge vs the previous snapshot, and a
+  ("2 min ago"), a project-wide net line-delta badge vs the previous snapshot, and a
   multi-file marker (`N files`) when applicable. Selecting a row reveals a
   **line-diff** (active file: selected version → current code) below the list and
   a **Restore** button.
@@ -71,8 +71,8 @@ timeline (with coalescing) is the **primary iteration fork** below.
   file's** text (snapshot vs current), colored adds/removes. (Single-file projects
   → the whole program.) A note shows how many *other* files differ.
 - **Restore:** `confirm()` ("Replace your current code with this version?"), then
-  `project.load(snapshot.project)` + `renderTabs()`. Restoring is itself a normal
-  edit (the next Run snapshots it), so it's non-destructive to history.
+  **snapshot the current state first** (so even un-run edits are recoverable),
+  then `project.load(snapshot.project)` + `renderTabs()` + `flushSave()`.
 - **Empty state:** before any Run, the panel says "No versions yet — press Run to
   save one."
 - **Collab:** snapshots capture the shared single-file buffer while in a room

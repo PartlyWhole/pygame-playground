@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype B — bottom dock</title>
+<style>
+  :root{
+    --bg:#14151a; --panel:#1c1e26; --edge:#2c2f3a; --text:#d8dae5; --dim:#8a8fa3;
+    --accent:#7bd88f; --warn:#f0a45d; --bad:#ff6e7f;
+    --mono:"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    background:var(--bg);color:var(--text);
+    font:14px/1.45 -apple-system,"Segoe UI",sans-serif;
+    margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+  }
+  button{font:inherit}
+  .btn{
+    background:#262936;color:var(--text);border:1px solid var(--edge);
+    border-radius:6px;padding:5px 12px;cursor:pointer;display:inline-flex;
+    align-items:center;gap:6px;white-space:nowrap;
+  }
+  .btn:hover{border-color:#3c4150;background:#2c2f3c}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .btn.primary{
+    background:#234430;border-color:#2f6a44;color:#b8f0c6;font-weight:600;
+  }
+  .btn.primary:hover{background:#28503a}
+  .btn.primary.stop{color:var(--bad);border-color:#5a2e36;background:#3a232a}
+  .btn.primary.stop:hover{background:#46282f}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{
+    flex:0 0 auto;display:flex;align-items:center;gap:10px;
+    padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--edge);
+  }
+  .brand{display:flex;flex-direction:column;line-height:1.1;margin-right:6px}
+  .brand .title{font-size:15px;font-weight:600;white-space:nowrap}
+  .brand .title .pg{color:var(--accent)}
+  .brand .cap{font-size:11px;color:var(--dim);margin-top:2px}
+  .tb-sep{width:1px;height:24px;background:var(--edge);margin:0 2px}
+  .tb-spacer{flex:1}
+  .status{
+    padding:4px 10px;border-radius:99px;background:#20222c;border:1px solid var(--edge);
+    color:var(--dim);font-size:12px;white-space:nowrap;transition:color .15s;
+  }
+  .status.running{color:var(--accent)}
+  .switcher{display:flex;align-items:center;gap:2px;margin-left:4px}
+  .switcher a{
+    color:var(--dim);text-decoration:none;font-size:12px;font-weight:600;
+    padding:3px 8px;border-radius:5px;border:1px solid transparent;
+  }
+  .switcher a:hover{background:#262936;border-color:var(--edge)}
+  .switcher a.cur{color:var(--accent);background:#1a2a20;border-color:#2f6a44}
+  .protag{font-size:10px;color:var(--dim);margin-left:8px;letter-spacing:.02em}
+
+  /* ---------- Top region ---------- */
+  .top{flex:0 0 62%;display:flex;min-height:0;overflow:hidden}
+
+  /* Explorer */
+  .explorer{
+    flex:0 0 200px;min-width:140px;background:var(--panel);
+    display:flex;flex-direction:column;min-height:0;
+  }
+  .ex-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--dim);border-bottom:1px solid var(--edge);
+  }
+  .newfile{
+    background:none;border:1px solid var(--edge);color:var(--dim);
+    border-radius:5px;padding:1px 7px;cursor:pointer;font-size:11px;
+  }
+  .newfile:hover{color:var(--text);border-color:#3c4150}
+  .tree{flex:1;overflow:auto;padding:4px 0}
+  .row{
+    display:flex;align-items:center;gap:6px;padding:4px 10px;cursor:pointer;
+    position:relative;font-size:13px;border-left:2px solid transparent;
+  }
+  .row:hover{background:#23262f}
+  .row.active{background:#26303a;border-left-color:var(--accent)}
+  .row .ico{width:16px;text-align:center;flex:0 0 16px;font-size:13px}
+  .row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .entry{color:var(--accent);font-size:11px}
+  .row .warn{color:var(--warn);flex:0 0 auto}
+  .row .more{
+    opacity:0;color:var(--dim);flex:0 0 auto;padding:0 2px;border-radius:4px;
+  }
+  .row:hover .more{opacity:1}
+  .row .more:hover{color:var(--text);background:#30343f}
+  /* python glyph */
+  .py{
+    display:inline-block;width:13px;height:13px;border-radius:3px;
+    background:linear-gradient(135deg,#4b8bbe 50%,#ffd43b 50%);
+  }
+
+  /* Splitters */
+  .vsplit{flex:0 0 6px;background:var(--edge);cursor:col-resize}
+  .vsplit:hover{background:var(--accent)}
+  .hsplit{flex:0 0 6px;background:var(--edge);cursor:row-resize}
+  .hsplit:hover{background:var(--accent)}
+
+  /* Viewer */
+  .viewer{flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:var(--bg);min-height:0}
+  .vw-head{
+    flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:6px 12px;border-bottom:1px solid var(--edge);background:var(--panel);
+    font-size:12px;color:var(--dim);
+  }
+  .vw-head .fname{color:var(--text)}
+  .vw-body{flex:1;overflow:auto;min-height:0;position:relative}
+
+  /* code editor */
+  .editor{display:flex;font:12.5px/1.55 var(--mono);min-height:100%}
+  .gutter{
+    flex:0 0 auto;text-align:right;color:var(--dim);padding:10px 8px 10px 12px;
+    user-select:none;background:#181a21;border-right:1px solid var(--edge);
+  }
+  .gutter div{height:1.55em}
+  .code{padding:10px 14px;white-space:pre;overflow-x:auto;flex:1;min-width:0;color:#cfd3e0}
+  .tok-kw{color:#c397e0}
+  .tok-str{color:#9ed99a}
+  .tok-com{color:#5f6577;font-style:italic}
+  .tok-fn{color:#7cc7f0}
+  .tok-num{color:var(--warn)}
+
+  /* image viewer */
+  .imgview{
+    height:100%;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;
+    background-image:
+      linear-gradient(45deg,#1a1c22 25%,transparent 25%),
+      linear-gradient(-45deg,#1a1c22 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#1a1c22 75%),
+      linear-gradient(-45deg,transparent 75%,#1a1c22 75%);
+    background-size:20px 20px;
+    background-position:0 0,0 10px,10px -10px,-10px 0;
+    background-color:#202229;
+  }
+  .imgview .frame{
+    background:#0e0f13;border:1px solid var(--edge);border-radius:8px;padding:18px;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+  .imgcap{font-size:12px;color:var(--dim);font-family:var(--mono)}
+
+  /* audio player */
+  .audio{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px}
+  .player{
+    width:min(420px,90%);background:var(--panel);border:1px solid var(--edge);
+    border-radius:10px;padding:16px;display:flex;align-items:center;gap:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+  .playbtn{
+    flex:0 0 auto;width:40px;height:40px;border-radius:50%;
+    background:#234430;border:1px solid #2f6a44;color:#b8f0c6;cursor:pointer;
+    font-size:14px;display:flex;align-items:center;justify-content:center;
+  }
+  .playbtn:hover{background:#28503a}
+  .wave{flex:1;height:40px}
+  .audiocap{font-size:12px;color:var(--dim);font-family:var(--mono)}
+  .warnbanner{
+    width:min(420px,90%);background:#2a2218;border:1px solid #5a4426;
+    color:var(--warn);border-radius:8px;padding:10px 14px;font-size:12.5px;
+    display:flex;gap:8px;align-items:flex-start;
+  }
+
+  /* empty state */
+  .empty{height:100%;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);text-align:center;padding:30px;font-size:13.5px}
+
+  /* Stage */
+  .stage{flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:var(--panel);min-height:0}
+  .stage-head{
+    flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+    padding:6px 12px;border-bottom:1px solid var(--edge);font-size:12px;color:var(--dim);
+  }
+  .stage-body{flex:1;position:relative;min-height:0;background:#0c0d11;overflow:hidden}
+  #stageCanvas{display:block;width:100%;height:100%}
+  .fs{
+    position:absolute;bottom:8px;right:8px;background:rgba(28,30,38,.85);
+    border:1px solid var(--edge);color:var(--dim);border-radius:5px;
+    width:26px;height:26px;cursor:pointer;font-size:13px;
+  }
+  .fs:hover{color:var(--text);border-color:#3c4150}
+  .stage-idle{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:#3e4350;font-size:13px;font-family:var(--mono);pointer-events:none;
+  }
+
+  /* ---------- Bottom dock ---------- */
+  .dock{flex:1 1 0;min-height:0;display:flex;flex-direction:column;background:var(--panel);border-top:1px solid var(--edge)}
+  .dock-tabs{
+    flex:0 0 auto;display:flex;align-items:center;gap:2px;
+    padding:0 8px;border-bottom:1px solid var(--edge);height:34px;
+  }
+  .tab{
+    background:none;border:none;border-bottom:2px solid transparent;
+    color:var(--dim);padding:8px 12px 6px;cursor:pointer;font-size:12.5px;
+  }
+  .tab:hover{color:var(--text)}
+  .tab.active{color:var(--text);border-bottom-color:var(--accent)}
+  .dock-spacer{flex:1}
+  .examples-btn{
+    background:none;border:1px solid var(--edge);color:var(--dim);
+    border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;margin-right:auto;margin-left:4px;
+  }
+  .examples-btn:hover{color:var(--text);border-color:#3c4150}
+  .dock-body{flex:1;min-height:0;overflow:hidden}
+  .pane{height:100%;display:none}
+  .pane.show{display:block}
+
+  /* console */
+  .console{
+    height:100%;overflow:auto;background:#121318;font:12.5px/1.5 var(--mono);
+    padding:10px 14px;color:#cfd3e0;
+  }
+  .console .ln{white-space:pre-wrap}
+  .console .sys{color:var(--dim);font-style:italic}
+  .console .err{color:var(--bad)}
+  .console .ok{color:var(--accent)}
+
+  /* history */
+  .history{height:100%;overflow:auto;padding:6px 0}
+  .hrow{
+    display:flex;align-items:center;gap:12px;padding:8px 16px;cursor:pointer;
+    border-left:2px solid transparent;
+  }
+  .hrow:hover{background:#23262f}
+  .hrow.sel{background:#23262f;border-left-color:var(--accent)}
+  .hrow .when{flex:0 0 auto;width:120px;color:var(--text);font-size:13px}
+  .hrow .meta{flex:0 0 auto;color:var(--dim);font-size:12px;font-family:var(--mono)}
+  .hrow .diff{flex:1;font-family:var(--mono);font-size:12px}
+  .hrow .diff .plus{color:var(--accent)}
+  .hrow .diff .minus{color:var(--bad)}
+  .restore{
+    background:#262936;border:1px solid var(--edge);color:var(--text);
+    border-radius:5px;padding:3px 10px;cursor:pointer;font-size:12px;
+  }
+  .restore:hover{border-color:#3c4150;background:#2c2f3c}
+
+  /* ---------- Examples popover ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:40}
+  .scrim.show{display:block}
+  .popover{
+    position:fixed;left:16px;bottom:54px;z-index:50;width:min(620px,calc(100vw - 32px));
+    max-height:min(440px,70vh);background:var(--panel);border:1px solid var(--edge);
+    border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4);display:none;
+    flex-direction:column;overflow:hidden;
+  }
+  .popover.show{display:flex}
+  .pop-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:10px 14px;border-bottom:1px solid var(--edge);
+  }
+  .pop-head .t{font-weight:600}
+  .pop-head .ro{font-size:11px;color:var(--dim);margin-left:8px}
+  .pop-close{background:none;border:none;color:var(--dim);cursor:pointer;font-size:18px;line-height:1}
+  .pop-close:hover{color:var(--text)}
+  .pop-body{display:flex;min-height:0;flex:1}
+  .ex-list{flex:0 0 170px;border-right:1px solid var(--edge);overflow:auto;padding:6px 0}
+  .ex-item{padding:7px 14px;cursor:pointer;font-size:13px;border-left:2px solid transparent}
+  .ex-item:hover{background:#23262f}
+  .ex-item.sel{background:#26303a;border-left-color:var(--accent);color:var(--text)}
+  .ex-code-wrap{flex:1;display:flex;flex-direction:column;min-width:0}
+  .ex-codebar{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--edge)}
+  .ex-codebar .nm{font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .copybtn{background:#262936;border:1px solid var(--edge);color:var(--text);border-radius:5px;padding:3px 10px;cursor:pointer;font-size:12px}
+  .copybtn:hover{border-color:#3c4150}
+  .ex-code{flex:1;overflow:auto;margin:0;padding:12px 14px;font:12px/1.5 var(--mono);white-space:pre;color:#cfd3e0;background:#121318}
+  .pop-foot{padding:6px 14px;border-top:1px solid var(--edge);font-size:11px;color:var(--dim)}
+
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+</style>
+</head>
+<body>
+
+<!-- ===== Toolbar ===== -->
+<div class="toolbar">
+  <div class="brand">
+    <span class="title">🐍 pygame <span class="pg">playground</span></span>
+    <span class="cap">B · editor + stage on top, console/history docked below</span>
+  </div>
+  <div class="tb-sep"></div>
+  <button class="btn primary" id="runBtn" aria-label="Start program">▶ Start</button>
+  <button class="btn" aria-label="Upload files">⬆ Upload</button>
+  <button class="btn" aria-label="Download project zip" title="Download project .zip">⬇ Download</button>
+  <button class="btn" aria-label="Collaborate">👥 Collaborate</button>
+  <div class="tb-spacer"></div>
+  <span class="status" id="status">ready</span>
+  <div class="switcher" aria-label="Prototype switcher">
+    <a href="ia-a.html">A</a>
+    <a href="ia-b.html" class="cur" aria-current="page">B</a>
+    <a href="ia-c.html">C</a>
+  </div>
+  <span class="protag">prototype · visual only</span>
+</div>
+
+<!-- ===== Top region ===== -->
+<div class="top" id="top">
+
+  <!-- Explorer -->
+  <aside class="explorer" id="explorer">
+    <div class="ex-head">
+      <span>Files</span>
+      <button class="newfile" aria-label="New file">+ New file</button>
+    </div>
+    <div class="tree" id="tree" role="tree" aria-label="Project files"></div>
+  </aside>
+
+  <div class="vsplit" data-split="ex"></div>
+
+  <!-- Viewer -->
+  <section class="viewer">
+    <div class="vw-head">
+      <span class="fname" id="vwName">main.py</span>
+      <span id="vwKind">· Python · entry</span>
+    </div>
+    <div class="vw-body" id="vwBody"></div>
+  </section>
+
+  <div class="vsplit" data-split="vw"></div>
+
+  <!-- Stage -->
+  <section class="stage">
+    <div class="stage-head">
+      <span>Stage</span>
+      <span id="stageNote" style="font-family:var(--mono)">320 × 240</span>
+    </div>
+    <div class="stage-body">
+      <canvas id="stageCanvas" width="320" height="240"></canvas>
+      <div class="stage-idle" id="stageIdle">press ▶ Start to run</div>
+      <button class="fs" id="fsBtn" aria-label="Fullscreen stage" title="Fullscreen">⛶</button>
+    </div>
+  </section>
+</div>
+
+<div class="hsplit" data-split="dock"></div>
+
+<!-- ===== Bottom dock ===== -->
+<div class="dock" id="dock">
+  <div class="dock-tabs">
+    <button class="examples-btn" id="examplesBtn" aria-haspopup="dialog">💡 Examples</button>
+    <button class="tab active" data-tab="console">Console</button>
+    <button class="tab" data-tab="history">History</button>
+    <div class="dock-spacer"></div>
+  </div>
+  <div class="dock-body">
+    <div class="pane show" id="pane-console">
+      <div class="console" id="console"></div>
+    </div>
+    <div class="pane" id="pane-history">
+      <div class="history" id="history"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Examples popover ===== -->
+<div class="scrim" id="scrim"></div>
+<div class="popover" id="popover" role="dialog" aria-label="Examples" aria-modal="true">
+  <div class="pop-head">
+    <span><span class="t">💡 Examples</span><span class="ro">read-only — copy into your project</span></span>
+    <button class="pop-close" id="popClose" aria-label="Close examples">×</button>
+  </div>
+  <div class="pop-body">
+    <div class="ex-list" id="exList" role="listbox" aria-label="Example list"></div>
+    <div class="ex-code-wrap">
+      <div class="ex-codebar">
+        <span class="nm" id="exName">bouncing_ball.py</span>
+        <button class="copybtn" id="copyBtn">Copy</button>
+      </div>
+      <pre class="ex-code" id="exCode"></pre>
+    </div>
+  </div>
+  <div class="pop-foot">Read-only — selecting an example never changes your editor.</div>
+</div>
+
+<script>
+/* ---------------- File model ---------------- */
+const FILES = {
+  "main.py": {type:"py", entry:true, code:
+`import pygame
+from enemy import Enemy
+
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+clock = pygame.time.Clock()
+
+enemy = Enemy(160, 120)
+score = 0
+running = True
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    screen.fill((12, 13, 17))
+    enemy.update()
+    enemy.draw(screen)
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()`},
+  "enemy.py": {type:"py", code:
+`import pygame
+
+class Enemy:
+    """A simple bouncing enemy sprite."""
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.vx = 2.4
+        self.vy = 1.8
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        if self.x < 8 or self.x > 312:
+            self.vx = -self.vx
+        if self.y < 8 or self.y > 232:
+            self.vy = -self.vy
+
+    def draw(self, screen):
+        pygame.draw.circle(screen, (123, 216, 143),
+                           (int(self.x), int(self.y)), 8)`},
+  "ship.png":  {type:"image", cap:"ship.png · 64×64 · PNG"},
+  "blip.wav":  {type:"audio", cap:"blip.wav · WAV"},
+  "tune.mp3":  {type:"audio", cap:"tune.mp3 · MP3", warn:true},
+  "notes.txt": {type:"other"}
+};
+
+const TREE_ORDER = ["main.py","enemy.py","ship.png","blip.wav","tune.mp3","notes.txt"];
+
+/* ---------------- Explorer ---------------- */
+const tree = document.getElementById("tree");
+let selected = "main.py";
+
+function fileIcon(name, f){
+  if(f.type==="py")   return '<span class="ico"><span class="py"></span></span>';
+  if(f.type==="image")return '<span class="ico">🖼</span>';
+  if(f.type==="audio")return '<span class="ico">🔊</span>';
+  return '<span class="ico">📄</span>';
+}
+
+function renderTree(){
+  tree.innerHTML = "";
+  TREE_ORDER.forEach(name=>{
+    const f = FILES[name];
+    const row = document.createElement("div");
+    row.className = "row" + (name===selected ? " active" : "");
+    row.setAttribute("role","treeitem");
+    row.tabIndex = 0;
+    row.dataset.name = name;
+    let html = fileIcon(name,f);
+    html += `<span class="nm">${name}</span>`;
+    if(f.entry) html += `<span class="entry" title="Entry point">▸ entry</span>`;
+    if(f.warn)  html += `<span class="warn" title="plays in this viewer, but not in pygame — convert to WAV/OGG">⚠</span>`;
+    html += `<span class="more" title="Rename / delete" aria-label="File actions">⋯</span>`;
+    row.innerHTML = html;
+    row.addEventListener("click", ()=>select(name));
+    row.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();select(name);} });
+    tree.appendChild(row);
+  });
+}
+
+function select(name){
+  selected = name;
+  renderTree();
+  renderViewer(name);
+}
+
+/* ---------------- Viewer ---------------- */
+const vwName = document.getElementById("vwName");
+const vwKind = document.getElementById("vwKind");
+const vwBody = document.getElementById("vwBody");
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+function highlight(code){
+  const KW = new Set(["import","from","class","def","return","if","elif","else","while","for","in","not","and","or","True","False","None","self"]);
+  // Single tokenization pass over RAW text, escaping each piece as it is emitted.
+  // This guarantees span markup is never re-scanned, so class="tok-..." can't leak.
+  const tok = /(#.*$)|("[^"]*"|'[^']*')|(\b\d+\.?\d*\b)|([A-Za-z_]\w*)/gm;
+  const lines = code.split("\n").map(line=>{
+    let out = "", last = 0, m;
+    tok.lastIndex = 0;
+    while((m = tok.exec(line))){
+      out += esc(line.slice(last, m.index));
+      const t = m[0];
+      if(m[1])      out += `<span class="tok-com">${esc(t)}</span>`;   // comment (to EOL)
+      else if(m[2]) out += `<span class="tok-str">${esc(t)}</span>`;   // string
+      else if(m[3]) out += `<span class="tok-num">${esc(t)}</span>`;   // number
+      else if(m[4] && KW.has(t)) out += `<span class="tok-kw">${esc(t)}</span>`; // keyword
+      else out += esc(t);
+      last = m.index + t.length;
+    }
+    out += esc(line.slice(last));
+    return out;
+  });
+  return lines.join("\n");
+}
+
+function renderViewer(name){
+  const f = FILES[name];
+  vwName.textContent = name;
+  if(f.type==="py"){
+    vwKind.textContent = f.entry ? "· Python · entry" : "· Python";
+    const lines = f.code.split("\n");
+    const gutter = lines.map((_,i)=>`<div>${i+1}</div>`).join("");
+    vwBody.innerHTML =
+      `<div class="editor"><div class="gutter">${gutter}</div><div class="code">${highlight(f.code)}</div></div>`;
+  }
+  else if(f.type==="image"){
+    vwKind.textContent = "· PNG image";
+    vwBody.innerHTML = `
+      <div class="imgview">
+        <div class="frame">
+          <svg width="64" height="64" viewBox="0 0 64 64" aria-label="ship sprite">
+            <polygon points="32,6 50,52 32,42 14,52" fill="#7bd88f"/>
+            <polygon points="32,14 40,46 32,40 24,46" fill="#234430"/>
+            <circle cx="32" cy="30" r="4" fill="#cfeede"/>
+            <rect x="28" y="50" width="8" height="8" rx="2" fill="#f0a45d"/>
+          </svg>
+        </div>
+        <div class="imgcap">${f.cap}</div>
+      </div>`;
+  }
+  else if(f.type==="audio"){
+    vwKind.textContent = f.warn ? "· MP3 audio" : "· WAV audio";
+    const bars = Array.from({length:42},(_,i)=>{
+      const h = 6 + Math.abs(Math.sin(i*0.7))*28;
+      return `<rect x="${i*9+2}" y="${20-h/2}" width="5" height="${h}" rx="2" fill="#5b8f6a"/>`;
+    }).join("");
+    let html = `<div class="audio">
+      <div class="player">
+        <button class="playbtn" aria-label="Play ${name}">▶</button>
+        <svg class="wave" viewBox="0 0 380 40" preserveAspectRatio="none">${bars}</svg>
+      </div>`;
+    if(f.warn){
+      html += `<div class="warnbanner"><span>⚠</span><span>Plays here, but pygame's audio can't load MP3 — convert to WAV or OGG.</span></div>`;
+    }
+    html += `<div class="audiocap">${f.cap}</div></div>`;
+    vwBody.innerHTML = html;
+  }
+  else {
+    vwKind.textContent = "· text";
+    vwBody.innerHTML = `<div class="empty">Can't preview ${name} — only code, images, and sounds open here.</div>`;
+  }
+}
+
+/* ---------------- Console ---------------- */
+const consoleEl = document.getElementById("console");
+function cline(text, cls){
+  const d = document.createElement("div");
+  d.className = "ln" + (cls?(" "+cls):"");
+  d.textContent = text;
+  consoleEl.appendChild(d);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+function seedConsole(){
+  consoleEl.innerHTML = "";
+  cline("pygame 2.5 (SDL 2.28)");
+  cline("Hello from main.py");
+  cline("— program finished —", "sys");
+}
+seedConsole();
+
+/* ---------------- Run / Stop ---------------- */
+const runBtn = document.getElementById("runBtn");
+const statusEl = document.getElementById("status");
+let running = false;
+let raf = null;
+
+function setStatus(s){
+  statusEl.textContent = s;
+  statusEl.classList.toggle("running", s==="running");
+}
+
+runBtn.addEventListener("click", ()=> running ? stopProgram() : startProgram());
+
+function startProgram(){
+  running = true;
+  runBtn.textContent = "■ Stop";
+  runBtn.classList.add("stop");
+  runBtn.setAttribute("aria-label","Stop program");
+  setStatus("running");
+  consoleEl.innerHTML = "";              // fresh start clears console
+  cline("pygame 2.5 (SDL 2.28)");
+  cline("Hello from main.py");
+  document.getElementById("stageIdle").style.display = "none";
+  startAnim();
+}
+
+function stopProgram(){
+  running = false;
+  runBtn.textContent = "▶ Start";
+  runBtn.classList.remove("stop");
+  runBtn.setAttribute("aria-label","Start program");
+  setStatus("stopped");
+  cancelAnimationFrame(raf); raf = null;  // freeze last frame (no clear)
+  cline("— stopped —", "sys");
+  setTimeout(()=>{ if(!running) setStatus("ready"); }, 900);
+}
+
+/* ---------------- Stage animation ---------------- */
+const canvas = document.getElementById("stageCanvas");
+const ctx = canvas.getContext("2d");
+let bx=60, by=70, bvx=2.6, bvy=2.0, score=0, frame=0;
+
+function startAnim(){
+  function loop(){
+    frame++;
+    bx+=bvx; by+=bvy;
+    if(bx<12||bx>canvas.width-12){bvx=-bvx; score++;}
+    if(by<12||by>canvas.height-12){bvy=-bvy; score++;}
+    ctx.fillStyle="#0c0d11"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    // ground line
+    ctx.strokeStyle="#1e2129"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,canvas.height-20); ctx.lineTo(canvas.width,canvas.height-20); ctx.stroke();
+    // sprite
+    ctx.fillStyle="#7bd88f";
+    ctx.beginPath(); ctx.arc(bx,by,9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="rgba(123,216,143,.25)";
+    ctx.beginPath(); ctx.arc(bx,by,14,0,Math.PI*2); ctx.fill();
+    // score
+    ctx.fillStyle="#d8dae5"; ctx.font='12px "SF Mono",monospace';
+    ctx.fillText("score "+score, 10, 18);
+    raf = requestAnimationFrame(loop);
+  }
+  raf = requestAnimationFrame(loop);
+}
+// paint an initial idle frame
+ctx.fillStyle="#0c0d11"; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+document.getElementById("fsBtn").addEventListener("click", ()=>{
+  const el = document.querySelector(".stage-body");
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+});
+
+/* ---------------- History ---------------- */
+const HISTORY = [
+  {when:"just now",  files:3, add:5, del:2},
+  {when:"2 min ago", files:3, add:12, del:4},
+  {when:"18 min ago",files:2, add:3,  del:0},
+  {when:"1 hr ago",  files:2, add:24, del:9},
+];
+const historyEl = document.getElementById("history");
+function renderHistory(){
+  historyEl.innerHTML = "";
+  HISTORY.forEach((h,i)=>{
+    const row = document.createElement("div");
+    row.className = "hrow";
+    row.innerHTML = `
+      <span class="when">🕘 ${h.when}</span>
+      <span class="meta">${h.files} files</span>
+      <span class="diff"><span class="plus">+${h.add}</span> <span class="minus">−${h.del}</span></span>
+      <button class="restore">Restore</button>`;
+    row.addEventListener("click", e=>{
+      if(e.target.classList.contains("restore")) return;
+      [...historyEl.children].forEach(c=>c.classList.remove("sel"));
+      row.classList.add("sel");
+    });
+    row.querySelector(".restore").addEventListener("click", e=>{
+      e.stopPropagation();
+      e.target.textContent = "Restored ✓";
+      setTimeout(()=>{ e.target.textContent = "Restore"; }, 1200);
+    });
+    historyEl.appendChild(row);
+  });
+}
+renderHistory();
+
+/* ---------------- Dock tabs ---------------- */
+document.querySelectorAll(".tab").forEach(tab=>{
+  tab.addEventListener("click", ()=>{
+    document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+    tab.classList.add("active");
+    const which = tab.dataset.tab;
+    document.getElementById("pane-console").classList.toggle("show", which==="console");
+    document.getElementById("pane-history").classList.toggle("show", which==="history");
+  });
+});
+
+/* ---------------- Examples popover ---------------- */
+const EXAMPLES = {
+  "Bouncing ball": {file:"bouncing_ball.py", code:
+`import pygame
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+clock = pygame.time.Clock()
+x, y, vx, vy = 60, 60, 3, 2
+while True:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT: raise SystemExit
+    x += vx; y += vy
+    if x < 8 or x > 312: vx = -vx
+    if y < 8 or y > 232: vy = -vy
+    screen.fill((12, 13, 17))
+    pygame.draw.circle(screen, (123, 216, 143), (x, y), 8)
+    pygame.display.flip(); clock.tick(60)`},
+  "Snake": {file:"snake.py", code:
+`import pygame, random
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+snake = [(160, 120)]
+food = (random.randrange(0,320,10), random.randrange(0,240,10))
+dx, dy = 10, 0
+# ... move snake, eat food, grow, check collisions ...`},
+  "Pong": {file:"pong.py", code:
+`import pygame
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+left = pygame.Rect(10, 100, 6, 40)
+right = pygame.Rect(304, 100, 6, 40)
+ball = pygame.Rect(157, 117, 6, 6)
+# ... paddle input, ball bounce, scoring ...`},
+  "Starfield": {file:"starfield.py", code:
+`import pygame, random
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+stars = [[random.randrange(320), random.randrange(240),
+          random.uniform(1, 4)] for _ in range(80)]
+# ... move stars toward viewer, wrap at edges ...`},
+  "Platformer": {file:"platformer.py", code:
+`import pygame
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+player = pygame.Rect(40, 180, 16, 16)
+vel_y, on_ground = 0, False
+GRAVITY = 0.6
+# ... gravity, jump on key, collide with platforms ...`},
+  "Particles": {file:"particles.py", code:
+`import pygame, random, math
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+particles = []
+def emit(x, y):
+    for _ in range(20):
+        a = random.uniform(0, math.tau)
+        particles.append([x, y, math.cos(a)*2, math.sin(a)*2, 30])
+# ... update life, fade, draw ...`}
+};
+
+const scrim = document.getElementById("scrim");
+const popover = document.getElementById("popover");
+const exList = document.getElementById("exList");
+const exName = document.getElementById("exName");
+const exCode = document.getElementById("exCode");
+let exSel = "Bouncing ball";
+
+function renderExList(){
+  exList.innerHTML = "";
+  Object.keys(EXAMPLES).forEach(name=>{
+    const it = document.createElement("div");
+    it.className = "ex-item" + (name===exSel?" sel":"");
+    it.textContent = name;
+    it.setAttribute("role","option");
+    it.tabIndex = 0;
+    it.addEventListener("click", ()=>{ exSel=name; renderExList(); renderExCode(); });
+    exList.appendChild(it);
+  });
+}
+function renderExCode(){
+  const ex = EXAMPLES[exSel];
+  exName.textContent = ex.file;
+  exCode.textContent = ex.code;
+}
+function openExamples(){
+  renderExList(); renderExCode();
+  scrim.classList.add("show"); popover.classList.add("show");
+}
+function closeExamples(){ scrim.classList.remove("show"); popover.classList.remove("show"); }
+
+document.getElementById("examplesBtn").addEventListener("click", openExamples);
+document.getElementById("popClose").addEventListener("click", closeExamples);
+scrim.addEventListener("click", closeExamples);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeExamples(); });
+
+document.getElementById("copyBtn").addEventListener("click", e=>{
+  const btn = e.target;
+  const text = EXAMPLES[exSel].code;
+  const done = ()=>{ btn.textContent="✓ Copied"; setTimeout(()=>btn.textContent="Copy",1200); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(done);
+  } else { done(); }
+});
+
+/* ---------------- Splitter look (drag wired for the two we can) ---------------- */
+(function(){
+  function drag(handle, onMove){
+    handle.addEventListener("mousedown", e=>{
+      e.preventDefault();
+      const move = ev=>onMove(ev);
+      const up = ()=>{document.removeEventListener("mousemove",move);document.removeEventListener("mouseup",up);document.body.style.cursor="";};
+      document.addEventListener("mousemove",move);
+      document.addEventListener("mouseup",up);
+    });
+  }
+  const explorer = document.getElementById("explorer");
+  const exSplit = document.querySelector('[data-split="ex"]');
+  drag(exSplit, ev=>{
+    const w = Math.min(360, Math.max(140, ev.clientX));
+    explorer.style.flexBasis = w+"px";
+  });
+  const top = document.getElementById("top");
+  const dockSplit = document.querySelector('[data-split="dock"]');
+  drag(dockSplit, ev=>{
+    const total = document.body.clientHeight;
+    const tb = document.querySelector(".toolbar").offsetHeight;
+    const pct = Math.min(80, Math.max(30, ((ev.clientY - tb)/(total - tb))*100));
+    top.style.flexBasis = pct+"%";
+  });
+})();
+
+/* ---------------- init ---------------- */
+renderTree();
+renderViewer("main.py");
+</script>
+</body>
+</html>

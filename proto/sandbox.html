@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pygame playground — sandbox prototype</title>
+<style>
+  :root{
+    --bg:#14151a; --panel:#1c1e26; --edge:#2c2f3a; --text:#d8dae5; --dim:#8a8fa3;
+    --accent:#7bd88f; --warn:#f0a45d; --bad:#ff6e7f;
+    --sunken:#121318; --stage:#0e0f13; --control:#262936; --pill:#20222c;
+    --tint-run:#234430; --tint-run-h:#2b5a3d; --tint-run-b:#2f6a44; --on-tint:#b8f0c6;
+    --mono:"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--text);
+    font:14px/1.45 -apple-system,"Segoe UI",sans-serif;
+    margin:0;display:flex;flex-direction:column;overflow:hidden;
+  }
+  button{font:inherit}
+  .mono{font-family:var(--mono)}
+
+  /* ---------- buttons ---------- */
+  .btn{
+    background:var(--control);color:var(--text);border:1px solid var(--edge);
+    border-radius:6px;padding:5px 12px;cursor:pointer;display:inline-flex;
+    align-items:center;gap:6px;line-height:1;transition:background .12s,border-color .12s;
+  }
+  .btn:hover{background:#2e3140;border-color:#4a4f63}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .btn.primary{background:var(--tint-run);border-color:var(--tint-run-b);color:var(--on-tint);font-weight:600}
+  .btn.primary:hover{background:var(--tint-run-h)}
+  .btn.stop{color:var(--bad);font-weight:600}
+  .btn.stop:hover{background:#3a2329;border-color:#6a2f38}
+  .btn.danger{color:var(--bad);border-color:#5a2e36;background:#2a1d20}
+  .btn.danger:hover{background:#3a2329;border-color:#6a2f38}
+  .ghost{background:none;border:0;color:var(--dim);cursor:pointer;font-size:12px;padding:3px 6px;border-radius:5px;display:inline-flex;align-items:center;gap:4px}
+  .ghost:hover{color:var(--text);background:#23262f}
+  .ghost:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* ---------- toolbar ---------- */
+  .toolbar{
+    display:flex;align-items:center;gap:10px;height:46px;flex:0 0 auto;
+    padding:0 12px;background:var(--panel);border-bottom:1px solid var(--edge);
+  }
+  .title{font-weight:600;font-size:15px;white-space:nowrap}
+  .title .pg{color:var(--accent)}
+  .spacer{flex:1}
+  .pill{
+    padding:4px 10px;border-radius:99px;background:var(--pill);border:1px solid var(--edge);
+    color:var(--dim);font-size:12px;white-space:nowrap;
+  }
+  .pill.running{color:var(--accent);border-color:var(--tint-run-b)}
+  .protoTag{color:var(--dim);font-size:11px;opacity:.85;white-space:nowrap}
+  .protoTag a{color:var(--accent);text-decoration:none}
+  .protoTag a:hover{text-decoration:underline}
+
+  /* ---------- main grid ---------- */
+  .main{flex:1;min-height:0;display:flex}
+
+  /* ---------- side panel ---------- */
+  .side{
+    flex:0 0 250px;width:250px;background:var(--panel);border-right:1px solid var(--edge);
+    display:flex;flex-direction:column;min-height:0;min-width:0;
+  }
+  .side.collapsed{display:none}
+  /* horizontal activity tab strip across the TOP of the panel */
+  /* vertical activity rail on the far left */
+  .rail{display:flex;flex-direction:column;align-items:center;gap:4px;flex:0 0 48px;
+        background:#181a21;border-right:1px solid var(--edge);padding:8px 0}
+  .acttab{
+    width:38px;height:38px;background:none;border:0;border-radius:8px;position:relative;
+    color:var(--dim);cursor:pointer;display:flex;align-items:center;justify-content:center;
+    transition:background .12s,color .12s;
+  }
+  .acttab svg{width:20px;height:20px;display:block}
+  .acttab:hover{color:var(--text);background:#23262f}
+  .acttab.active{color:var(--accent);background:rgba(123,216,143,.12)}
+  /* selected indicator: accent bar pinned to the rail's left edge */
+  .acttab.active::before{content:"";position:absolute;left:-5px;top:50%;transform:translateY(-50%);
+    width:3px;height:22px;border-radius:0 2px 2px 0;background:var(--accent)}
+  .acttab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* unified hover tooltip for all icon controls (data-tip) */
+  .tooltip{
+    position:fixed;left:0;top:0;z-index:300;background:var(--panel);color:var(--text);
+    border:1px solid var(--edge);border-radius:6px;padding:3px 8px;font-size:11px;line-height:1.3;
+    white-space:nowrap;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.4);
+    opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity .12s,transform .12s,visibility .12s;
+  }
+  .tooltip.show{opacity:1;visibility:visible;transform:translateY(0)}
+
+  .side-head{
+    display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:33px;
+    padding:3px 5px 3px 11px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  }
+  .side-head .acts{display:flex;gap:1px;margin-left:auto}
+  .side-head .acts .ghost{padding:4px;border-radius:5px}
+  .panelview{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panelview[hidden]{display:none}
+  .side-body{flex:1;overflow:auto;min-height:0;padding:2px 6px 8px}
+
+  /* explorer toolbar */
+
+  /* ---------- file tree ---------- */
+  .tree{padding:4px 4px}
+  .node{user-select:none}
+  .row{
+    display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;cursor:pointer;
+    position:relative;border-left:2px solid transparent;
+  }
+  .row:hover{background:#23262f}
+  .row.sel{background:#23303a;border-left-color:var(--accent);color:#cdeccf}
+  .row.drop-into{background:#26402f;box-shadow:inset 0 0 0 1px var(--accent)}
+  .row.drag-ghost{opacity:.4}
+  .row .caret{width:12px;flex:0 0 12px;text-align:center;color:var(--dim);font-size:10px;transition:transform .12s}
+  .row .caret.spacer{visibility:hidden}
+  .node.open > .row .caret{transform:rotate(90deg)}
+  .row .ic{width:16px;flex:0 0 16px;text-align:center;font-size:13px}
+  .row .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .row .nm input{width:100%;background:#14151a;border:1px solid var(--accent);color:var(--text);
+    border-radius:4px;padding:1px 4px;font:inherit;font-size:13px}
+  .row .entry{color:var(--accent);font-size:11px;flex:0 0 auto}
+  .row .moddot{color:var(--accent);flex:0 0 auto;font-size:10px}
+  .row .warnglyph{color:var(--warn);flex:0 0 auto;font-size:12px}
+  .row .acts{display:none;gap:1px;flex:0 0 auto}
+  .row:hover .acts{display:flex}
+  .row .acts button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:12px;padding:0 3px;border-radius:3px}
+  .row .acts button:hover{color:var(--text);background:#34384a}
+  .row .acts button.del:hover{color:var(--bad);background:#3a2329}
+  .row .ic svg,.exrow .ic svg,.row .caret svg{display:block;margin:0 auto}
+  .row .acts button svg{display:block}
+  .ghost svg{flex:0 0 auto}
+  .children{margin-left:0}
+  .node.closed > .children{display:none}
+  .drop-line{height:2px;background:var(--accent);margin:0 6px;border-radius:1px;display:none}
+  .pyico{color:#6fb3e0}
+
+  /* storage footer */
+  .storage{flex:0 0 auto;border-top:1px solid var(--edge);padding:8px 10px;color:var(--dim);font-size:11px}
+  .storage .lab{display:flex;justify-content:space-between;margin-bottom:5px}
+  .storage .bar{height:5px;background:#0f1014;border-radius:3px;overflow:hidden;border:1px solid var(--edge)}
+  .storage .bar > div{height:100%;background:linear-gradient(90deg,var(--accent),#5fb872);width:0}
+
+  /* ---------- history ---------- */
+  .hrow{
+    border:1px solid var(--edge);border-radius:6px;padding:7px 9px;margin:0 4px 7px;
+    cursor:pointer;background:#191b22;
+  }
+  .hrow:hover{border-color:#4a4f63;background:#1d202a}
+  .hrow .when{display:flex;justify-content:space-between;align-items:center}
+  .hrow .when b{font-weight:600;font-size:13px}
+  .hrow .meta{color:var(--dim);font-size:11px}
+  .hrow .diff{font-size:11px;margin-top:6px;display:none;align-items:center;gap:8px}
+  .hrow.open .diff{display:flex}
+  .plus{color:var(--accent)}.minus{color:var(--bad)}
+  .restore{margin-left:auto;font-size:11px;padding:2px 9px}
+
+  /* ---------- examples ---------- */
+  .panel-note{color:var(--dim);font-size:11px;padding:6px 10px 4px;font-style:italic}
+  .exrow{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;border-left:2px solid transparent}
+  .exrow:hover{background:#23262f}
+  .exrow.sel{background:#23303a;border-left-color:var(--accent)}
+  .exrow .ic{width:16px;flex:0 0 16px;text-align:center;font-size:13px}
+  .exrow .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .exrow .moddot{color:var(--accent);font-size:10px;flex:0 0 auto}
+  .exrow .reset{background:none;border:0;color:var(--dim);cursor:pointer;font-size:13px;padding:0 3px;border-radius:3px;flex:0 0 auto;opacity:0}
+  .exrow:hover .reset{opacity:1}
+  .exrow .reset:hover{color:var(--accent);background:#34384a}
+
+  /* ---------- collaboration ---------- */
+  .collab{padding:10px 12px;color:var(--dim);font-size:13px;line-height:1.5}
+  .collab b{color:var(--text)}
+  .collab .startbtn{width:100%;justify-content:center;margin-top:6px}
+  .peer{display:flex;align-items:center;gap:9px;margin-top:10px;color:var(--text)}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 2px rgba(0,0,0,.35)}
+  .roomlink{display:flex;gap:6px;margin-top:14px;align-items:center}
+  .roomlink input{flex:1;min-width:0;background:#14151a;border:1px solid var(--edge);color:var(--dim);
+    border-radius:6px;padding:5px 8px;font:inherit;font-size:11.5px;font-family:var(--mono)}
+
+  /* ---------- splitters ---------- */
+  .split{flex:0 0 6px;background:var(--edge);cursor:col-resize;transition:background .12s;z-index:5}
+  .split:hover{background:var(--accent)}
+  .split.h{height:6px;width:100%;cursor:row-resize;flex:0 0 6px}
+
+  /* ---------- right stack ---------- */
+  .stack{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+  .toprow{flex:1;min-height:0;display:flex}
+
+  .pane-head{
+    display:flex;align-items:center;gap:8px;height:34px;flex:0 0 auto;padding:0 10px;
+    background:var(--panel);border-bottom:1px solid var(--edge);color:var(--dim);font-size:12px;
+  }
+  .pane-head .name{color:var(--text)}
+  .pane-head .chev-btn{margin-left:auto}
+  .pane-head .btn{padding:3px 10px;font-size:12px}
+  #endBtn:hover{color:var(--bad);background:#3a2329}
+  .stage-hint{background:none;border:0;color:var(--dim);font:inherit;font-size:12px;padding:0;cursor:default}
+  .stage-hint.live{color:var(--accent);cursor:pointer}
+  .stage-hint.live:hover{text-decoration:underline}
+  .row.running .nm{color:var(--accent)}
+  .row .run-mark{color:var(--accent);font-size:9px;flex:0 0 auto;margin-left:1px}
+  .chev-btn{background:none;border:0;color:var(--dim);cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px}
+  .chev-btn:hover{color:var(--text);background:#23262f}
+  .chev-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* ---------- viewer ---------- */
+  .viewer{flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+  .viewer.collapsed{display:none}
+  .vbody{flex:1;min-height:0;overflow:auto;position:relative}
+
+  /* code editor */
+  .editor{display:flex;font-family:var(--mono);font-size:13px;line-height:1.55;min-height:100%}
+  .gutter{
+    flex:0 0 auto;text-align:right;white-space:pre;color:#5a5f72;background:#16171d;
+    padding:10px 10px 10px 14px;user-select:none;border-right:1px solid var(--edge);
+  }
+  .code{
+    flex:1;min-width:0;padding:10px 14px;white-space:pre;overflow-x:auto;tab-size:4;
+    color:var(--text);outline:none;caret-color:var(--accent);
+  }
+  .code:focus{background:#15161c}
+  .kw{color:#c98bdb}.str{color:#9ecb78}.com{color:#6b7185;font-style:italic}.fn{color:#7bd0e0}.num{color:#e0a36f}
+  .edithint{position:absolute;bottom:8px;right:12px;font-size:10.5px;color:var(--dim);background:rgba(20,21,26,.85);
+    padding:3px 8px;border-radius:5px;border:1px solid var(--edge);pointer-events:none}
+
+  /* image viewer */
+  .imgview{height:100%;display:grid;place-items:center;gap:14px;padding:20px}
+  .checker{
+    width:180px;height:180px;border-radius:8px;border:1px solid var(--edge);display:grid;place-items:center;
+    background-image:linear-gradient(45deg,#23252e 25%,transparent 25%),linear-gradient(-45deg,#23252e 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#23252e 75%),linear-gradient(-45deg,transparent 75%,#23252e 75%);
+    background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0;background-color:#1a1c23;
+  }
+  .vcaption{color:var(--dim);font-size:12px;text-align:center}
+
+  /* sound player */
+  .sound{padding:24px;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;height:100%}
+  .playerbar{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--edge);
+    border-radius:10px;padding:12px 16px;width:min(460px,90%)}
+  .playbtn{width:38px;height:38px;border-radius:50%;flex:0 0 auto;background:var(--tint-run);border:1px solid var(--tint-run-b);
+    color:var(--on-tint);cursor:pointer;font-size:14px}
+  .playbtn:hover{background:var(--tint-run-h)}
+  .warnbanner{background:#2a2418;border:1px solid #5a4a2a;color:var(--warn);border-radius:8px;
+    padding:9px 12px;font-size:12.5px;width:min(460px,90%);display:flex;gap:8px;align-items:flex-start}
+
+  /* empty state */
+  .empty{height:100%;display:grid;place-items:center;color:var(--dim);text-align:center;padding:30px;font-size:13px}
+  .empty .big{font-size:28px;margin-bottom:8px;opacity:.6}
+
+  /* ---------- stage ---------- */
+  .stage{flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+  .stage.collapsed{display:none}
+  .stagewrap{flex:1;min-height:0;position:relative;display:grid;place-items:center;background:var(--stage);overflow:hidden}
+  #stageCanvas{display:block;background:#0b0c10;border-radius:6px;max-width:100%;max-height:100%}
+
+  /* ---------- console drawer ---------- */
+  .drawer{flex:0 0 170px;border-top:1px solid var(--edge);background:var(--sunken);display:flex;flex-direction:column;min-height:0}
+  .drawer.collapsed{flex:0 0 31px}
+  .drawer.collapsed .console{display:none}
+  .drawer-head{
+    display:flex;align-items:center;gap:8px;height:30px;flex:0 0 auto;padding:0 10px;
+    background:var(--panel);border-bottom:1px solid var(--edge);user-select:none;
+  }
+  .drawer.collapsed .drawer-head{border-bottom:0}
+  .drawer-head .lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+  .drawer-head .fs-end{margin-left:auto}
+  .errbadge{background:#3a2024;border:1px solid #5a2e36;color:var(--bad);border-radius:99px;font-size:11px;padding:1px 8px;display:none}
+  .errbadge.show{display:inline-block}
+  .console{flex:1;overflow:auto;padding:8px 12px;font-family:var(--mono);font-size:12.5px;line-height:1.6;min-height:0}
+  .console .ln{white-space:pre-wrap}
+  .console .sys{color:var(--dim);font-style:italic}
+  .console .err{color:var(--bad)}
+  .console .ok{color:var(--accent)}
+
+  /* ---------- confirm modal ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:200}
+  .scrim.show{display:flex}
+  .dialog{background:var(--panel);border:1px solid var(--edge);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.5);
+    width:min(420px,92vw);overflow:hidden}
+  .dialog h3{margin:0;padding:14px 16px 8px;font-size:15px}
+  .dialog .msg{padding:0 16px 16px;color:var(--dim);font-size:13px;line-height:1.5}
+  .dialog .acts{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--edge);background:#191b22}
+
+  @media (max-width:1000px){.protoTag{display:none}}
+</style>
+</head>
+<body>
+
+<!-- ===================== TOOLBAR ===================== -->
+<div class="toolbar">
+  <span class="title">🐍 pygame <span class="pg">playground</span></span>
+  <span class="spacer"></span>
+  <span id="status" class="pill" role="status" aria-live="polite">ready</span>
+  <span class="protoTag">prototype · visual only · <a href="index.html">index</a></span>
+</div>
+
+<!-- ===================== MAIN ===================== -->
+<div class="main">
+
+
+  <!-- ---------- SIDE PANEL ---------- -->
+  <nav class="rail" role="tablist" aria-label="Panels">
+    <button class="acttab active" data-view="explorer" role="tab" aria-selected="true" aria-label="Explorer" data-tip="Explorer" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+    <button class="acttab" data-view="history" role="tab" aria-selected="false" aria-label="History" data-tip="History" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+    <button class="acttab" data-view="examples" role="tab" aria-selected="false" aria-label="Examples" data-tip="Examples" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 18h5"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 3.6 10.8c-.6.5-1.1 1.2-1.1 2H9.5c0-.8-.5-1.5-1.1-2A6 6 0 0 1 12 3z"/></svg></button>
+    <button class="acttab" data-view="collab" role="tab" aria-selected="false" aria-label="Collaboration" data-tip="Collaboration" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/></svg></button>
+  </nav>
+
+  <aside class="side" id="side" aria-label="Side panel">
+
+    <!-- EXPLORER -->
+    <section class="panelview" data-panel="explorer">
+      <div class="side-head">
+        <span>Explorer</span>
+        <div class="acts">
+          <button class="ghost" id="uploadBtn" aria-label="Upload files" data-tip="Upload files"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/></svg></button>
+          <button class="ghost" id="downloadBtn" aria-label="Download project zip" data-tip="Download project .zip"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>
+          <button class="ghost" id="newFileBtn" aria-label="New file" data-tip="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg></button>
+          <button class="ghost" id="newFolderBtn" aria-label="New folder" data-tip="New folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/></svg></button>
+        </div>
+      </div>
+      <div class="side-body">
+        <div class="tree" id="tree"></div>
+      </div>
+      <div class="storage">
+        <div class="lab"><span id="storeUsed">Storage — 12.4 MB used</span><span id="storeFree">~2.1 GB free</span></div>
+        <div class="bar"><div id="storeBar"></div></div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="panelview" data-panel="history" hidden>
+      <div class="side-head"><span>Run snapshots</span></div>
+      <div class="side-body"><div id="histList"></div></div>
+    </section>
+
+    <!-- EXAMPLES -->
+    <section class="panelview" data-panel="examples" hidden>
+      <div class="side-head"><span>Examples</span></div>
+      <div class="panel-note">Open one to edit & run — editing makes it your file.</div>
+      <div class="side-body"><div id="exList"></div></div>
+    </section>
+
+    <!-- COLLABORATION -->
+    <section class="panelview" data-panel="collab" hidden>
+      <div class="side-head"><span>Collaboration</span></div>
+      <div class="side-body"><div class="collab" id="collabBody"></div></div>
+    </section>
+  </aside>
+
+  <div class="split" data-split="side"></div>
+
+  <!-- ---------- RIGHT STACK ---------- -->
+  <div class="stack">
+    <div class="toprow" id="toprow">
+
+      <!-- VIEWER -->
+      <div class="viewer" id="viewerPane">
+        <div class="pane-head">
+          <span class="name" id="vName">main.py</span>
+          <span id="vMeta">· Python · entry point</span>
+          <span class="spacer"></span>
+          <button id="runBtn" class="btn primary" aria-label="Run the open file">▶ Start</button>
+          <button class="chev-btn" id="viewerFs" aria-label="Fullscreen editor" data-tip="Fullscreen editor">⛶</button>
+        </div>
+        <div class="vbody" id="viewerBody"></div>
+      </div>
+
+      <div class="split" data-split="viewer" id="viewerSplit"></div>
+
+      <!-- STAGE -->
+      <div class="stage" id="stagePane">
+        <div class="pane-head">
+          <span class="name">🎮 Game stage</span>
+          <button id="stageHint" class="stage-hint" type="button">press start to run</button>
+          <span class="spacer"></span>
+          <button id="pauseBtn" class="btn" aria-label="Pause program" style="display:none">⏸ Pause</button>
+          <button class="chev-btn" id="endBtn" aria-label="End program" data-tip="End program" style="display:none">✕</button>
+          <button class="chev-btn" id="fsBtn" aria-label="Fullscreen game stage" data-tip="Fullscreen game stage">⛶</button>
+        </div>
+        <div class="stagewrap">
+          <canvas id="stageCanvas" width="360" height="260"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="split h" data-split="console" id="consoleSplit"></div>
+
+    <!-- CONSOLE DRAWER -->
+    <div class="drawer" id="drawer">
+      <div class="drawer-head">
+        <button class="chev-btn" id="drawerCollapse" aria-label="Collapse console" aria-expanded="true" data-tip="Collapse console">▾</button>
+        <span class="lbl">Console</span>
+        <span class="errbadge" id="errBadge">1 error</span>
+        <button class="chev-btn fs-end" id="consoleFs" aria-label="Fullscreen console" data-tip="Fullscreen console">⛶</button>
+      </div>
+      <div class="console" id="console"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== CONFIRM MODAL ===================== -->
+<div class="scrim" id="scrim">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle" aria-describedby="dlgMsg">
+    <h3 id="dlgTitle">Confirm</h3>
+    <div class="msg" id="dlgMsg">Are you sure?</div>
+    <div class="acts">
+      <button class="btn" id="dlgCancel">Cancel</button>
+      <button class="btn danger" id="dlgConfirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   SYNTAX HIGHLIGHTER (single-pass, like ia-c)
+   ========================================================================= */
+const PY_KW=new Set(['import','from','def','class','return','if','else','elif','while','for','in','self','True','False','None','and','or','not','as','with','try','except','raise','pass','break','continue','int','range','print']);
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function hl(src){
+  return src.split('\n').map(line=>{
+    let out='',i=0;const n=line.length;
+    while(i<n){
+      const ch=line[i];
+      if(ch==='#'){ out+='<span class="com">'+esc(line.slice(i))+'</span>'; break; }
+      if(ch==='"'||ch==="'"){
+        let j=i+1; while(j<n&&line[j]!==ch)j++;
+        out+='<span class="str">'+esc(line.slice(i,Math.min(j+1,n)))+'</span>'; i=j+1; continue;
+      }
+      if(/[A-Za-z_]/.test(ch)){
+        let j=i; while(j<n&&/[A-Za-z0-9_]/.test(line[j]))j++;
+        const w=line.slice(i,j);
+        out+=PY_KW.has(w)?'<span class="kw">'+w+'</span>':esc(w); i=j; continue;
+      }
+      if(/[0-9]/.test(ch)){
+        let j=i; while(j<n&&/[0-9.]/.test(line[j]))j++;
+        out+='<span class="num">'+line.slice(i,j)+'</span>'; i=j; continue;
+      }
+      out+=esc(ch); i++;
+    }
+    return out;
+  }).join('\n');
+}
+
+/* =========================================================================
+   FILE MODEL — a tree of nodes. type:'folder' has children[]; files carry body.
+   Each editable file owns its own undo stack (undo[] + redo[]).
+   ========================================================================= */
+const MAIN_PY=`# main.py — bounce a ship around the screen
+import pygame, sys
+from enemy import Enemy
+
+pygame.init()
+screen = pygame.display.set_mode((360, 260))
+clock  = pygame.time.Clock()
+enemy  = Enemy(120, 80)
+
+x, y, dx, dy = 40, 40, 3, 2
+while True:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            pygame.quit(); sys.exit()
+
+    x += dx; y += dy
+    if x < 0 or x > 336: dx = -dx
+    if y < 0 or y > 236: dy = -dy
+
+    screen.fill((11, 12, 16))
+    enemy.update(); enemy.draw(screen)
+    pygame.draw.rect(screen, (123, 216, 143), (x, y, 24, 24))
+    pygame.display.flip()
+    clock.tick(60)`;
+
+const ENEMY_PY=`# enemy.py — a tiny drifting enemy sprite
+import pygame
+
+class Enemy:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+        self.vx = 1.5
+
+    def update(self):
+        self.x += self.vx
+        if self.x < 0 or self.x > 336:
+            self.vx = -self.vx
+
+    def draw(self, screen):
+        color = (240, 164, 93)
+        pygame.draw.circle(screen, color, (int(self.x), int(self.y)), 10)`;
+
+const NOTES_TXT=`TODO
+- tune enemy speed
+- add a score HUD
+- swap ship.png for a nicer sprite`;
+
+let uidSeq=1; const uid=()=>'n'+(uidSeq++);
+function mkFile(name,kind,body,extra){
+  return Object.assign({id:uid(),name,type:'file',kind,body:body||'',undo:[],redo:[]},extra||{});
+}
+function mkFolder(name,children,open){
+  return {id:uid(),name,type:'folder',open:open!==false,children:children||[]};
+}
+
+// Seed tree
+const TREE=[
+  mkFolder('sprites/',[ mkFile('ship.png','img') ], true),
+  mkFolder('sounds/',[
+    mkFile('blip.wav','wav'),
+    mkFile('tune.mp3','mp3',null,{warn:true}),
+  ], true),
+  mkFile('main.py','py',MAIN_PY,{entry:true}),
+  mkFile('enemy.py','py',ENEMY_PY),
+  mkFile('notes.txt','txt',NOTES_TXT),
+];
+
+let selectedId=null; // set after first render to main.py
+let currentFile=null; // the file object currently shown in the viewer (a TREE node OR an example)
+
+/* tree helpers ----------------------------------------------------------- */
+function walk(nodes,fn,parent){
+  for(const n of nodes){ fn(n,parent,nodes); if(n.type==='folder') walk(n.children,fn,n); }
+}
+function findNode(id){ let r=null; walk(TREE,n=>{ if(n.id===id) r=n; }); return r; }
+function findParentList(id){ // returns {list,index} where the node lives
+  let res=null;
+  function rec(list){
+    for(let i=0;i<list.length;i++){
+      if(list[i].id===id){ res={list,index:i}; return true; }
+      if(list[i].type==='folder' && rec(list[i].children)) return true;
+    }
+    return false;
+  }
+  rec(TREE); return res;
+}
+function isDescendant(folderId,targetId){ // is targetId inside folderId?
+  const f=findNode(folderId); if(!f||f.type!=='folder') return false;
+  let found=false; walk(f.children,n=>{ if(n.id===targetId) found=true; });
+  return found;
+}
+
+/* =========================================================================
+   ICONS
+   ========================================================================= */
+const ICON={
+  folder:'<path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  py:'<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M10.6 12.4 9 14l1.6 1.6"/><path d="M13.4 12.4 15 14l-1.6 1.6"/>',
+  img:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M4 16.5l4.5-4 3.5 3 3-2.5 5 4.5"/>',
+  audio:'<path d="M9 17V5l11-2v12"/><circle cx="6.5" cy="17" r="2.3"/><circle cx="17.5" cy="15" r="2.3"/>',
+  file:'<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M9 13h6"/><path d="M9 16h4"/>',
+  warn:'<path d="M12 4 2.6 20h18.8z"/><path d="M12 10v4"/><path d="M12 17h.01"/>',
+  upload:'<path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/>',
+  download:'<path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/>',
+  filePlus:'<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/>',
+  folderPlus:'<path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/>',
+  pencil:'<path d="M4 20h4L18 10l-4-4L4 16z"/><path d="M13 7l4 4"/>',
+  trash:'<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  chev:'<path d="M9 6l6 6-6 6"/>'
+};
+function svgIcon(name,size){return '<svg viewBox="0 0 24 24" width="'+(size||15)+'" height="'+(size||15)+'" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+ICON[name]+'</svg>';}
+function iconFor(n){
+  if(n.type==='folder') return svgIcon('folder');
+  if(n.kind==='py') return svgIcon('py');
+  if(n.kind==='img') return svgIcon('img');
+  if(n.kind==='wav'||n.kind==='mp3') return svgIcon('audio');
+  return svgIcon('file');
+}
+
+/* =========================================================================
+   FILE TREE RENDER + DRAG/DROP
+   ========================================================================= */
+const treeEl=document.getElementById('tree');
+let dragId=null;
+
+function rowHTML(n,depth){
+  const isFolder=n.type==='folder';
+  const caret = isFolder
+    ? '<span class="caret">'+svgIcon('chev',11)+'</span>'
+    : '<span class="caret spacer"></span>';
+  return caret+
+    '<span class="ic" aria-hidden="true">'+iconFor(n)+'</span>'+
+    '<span class="nm">'+n.name+'</span>'+
+    (running&&runFile&&n.id===runFile.id?'<span class="run-mark" data-tip="Running">▶</span>':'')+
+    (n.entry?'<span class="entry" data-tip="Entry point">▸ entry</span>':'')+
+    (n.modified?'<span class="moddot" data-tip="Modified">●</span>':'')+
+    (n.warn?'<span class="warnglyph" data-tip="plays here, but pygame can&#39;t load MP3 — convert to WAV/OGG">'+svgIcon('warn',13)+'</span>':'')+
+    '<span class="acts">'+
+      '<button class="dl" data-tip="Download (zip)" aria-label="Download '+n.name+' as a zip">'+svgIcon('download',14)+'</button>'+
+      '<button class="ren" data-tip="Rename" aria-label="Rename '+n.name+'">'+svgIcon('pencil',14)+'</button>'+
+      '<button class="del" data-tip="Delete" aria-label="Delete '+n.name+'">'+svgIcon('trash',14)+'</button>'+
+    '</span>';
+}
+
+function buildNode(n,depth){
+  const node=document.createElement('div');
+  node.className='node'+(n.type==='folder'?(n.open?' open':' closed'):'');
+  node.dataset.id=n.id;
+
+  const row=document.createElement('div');
+  row.className='row'+(n.id===selectedId?' sel':'')+(running&&runFile&&n.id===runFile.id?' running':'');
+  row.style.paddingLeft=(6+depth*14)+'px';
+  row.tabIndex=0;
+  row.draggable=true;
+  row.dataset.id=n.id;
+  row.innerHTML=rowHTML(n,depth);
+
+  // click: select file, or toggle folder
+  row.addEventListener('click',e=>{
+    if(e.target.closest('.acts')) return;
+    if(n.type==='folder'){ n.open=!n.open; renderTree(); }
+    else { selectFile(n.id); }
+  });
+  row.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ if(n.type==='folder'){n.open=!n.open;renderTree();} else selectFile(n.id); }
+  });
+  // rename + delete
+  row.querySelector('.dl').addEventListener('click',e=>{ e.stopPropagation(); downloadItem(n); });
+  row.querySelector('.ren').addEventListener('click',e=>{ e.stopPropagation(); beginRename(n,row); });
+  row.querySelector('.del').addEventListener('click',e=>{ e.stopPropagation(); confirmDelete(n); });
+
+  // drag & drop
+  row.addEventListener('dragstart',e=>{
+    dragId=n.id; row.classList.add('drag-ghost');
+    e.dataTransfer.effectAllowed='move';
+    e.dataTransfer.setData('text/plain',n.id);
+  });
+  row.addEventListener('dragend',()=>{ dragId=null; row.classList.remove('drag-ghost'); clearDropMarks(); });
+  row.addEventListener('dragover',e=>{
+    e.preventDefault();
+    if(!dragId||dragId===n.id) return;
+    if(n.type==='folder' && isDescendant(dragId,n.id)) return; // can't drop into own descendant
+    clearDropMarks();
+    if(n.type==='folder'){
+      row.classList.add('drop-into'); // drop INTO folder
+    } else {
+      // reorder: show a drop line before/after based on cursor position
+      const r=row.getBoundingClientRect();
+      const after=(e.clientY-r.top)>r.height/2;
+      showDropLine(node,after);
+    }
+  });
+  row.addEventListener('dragleave',()=>{ row.classList.remove('drop-into'); });
+  row.addEventListener('drop',e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(!dragId||dragId===n.id) return;
+    if(n.type==='folder' && !isDescendant(dragId,n.id)){
+      moveInto(dragId,n.id);
+    } else {
+      const r=row.getBoundingClientRect();
+      const after=(e.clientY-r.top)>r.height/2;
+      moveBeside(dragId,n.id,after);
+    }
+    clearDropMarks(); renderTree();
+  });
+
+  node.appendChild(row);
+
+  if(n.type==='folder'){
+    const kids=document.createElement('div');
+    kids.className='children';
+    n.children.forEach(c=>kids.appendChild(buildNode(c,depth+1)));
+    // allow dropping into an (open) folder's empty body
+    kids.addEventListener('dragover',e=>{ e.preventDefault(); });
+    node.appendChild(kids);
+  }
+  return node;
+}
+
+let dropLineEl=null;
+function showDropLine(nodeEl,after){
+  clearDropMarks();
+  dropLineEl=document.createElement('div'); dropLineEl.className='drop-line'; dropLineEl.style.display='block';
+  if(after) nodeEl.after(dropLineEl); else nodeEl.before(dropLineEl);
+}
+function clearDropMarks(){
+  treeEl.querySelectorAll('.drop-into').forEach(r=>r.classList.remove('drop-into'));
+  if(dropLineEl){ dropLineEl.remove(); dropLineEl=null; }
+}
+
+function moveInto(id,folderId){
+  const src=findParentList(id); if(!src) return;
+  const node=src.list.splice(src.index,1)[0];
+  const folder=findNode(folderId);
+  folder.open=true; folder.children.push(node);
+}
+function moveBeside(id,targetId,after){
+  const src=findParentList(id); if(!src) return;
+  const node=src.list.splice(src.index,1)[0];
+  const dst=findParentList(targetId); if(!dst){ src.list.splice(src.index,0,node); return; }
+  let idx=dst.index+(after?1:0);
+  dst.list.splice(idx,0,node);
+}
+
+function renderTree(){
+  treeEl.innerHTML='';
+  TREE.forEach(n=>treeEl.appendChild(buildNode(n,0)));
+}
+
+/* rename ----------------------------------------------------------------- */
+function downloadItem(n){
+  // prototype mock — a real build would JSZip the file (or the folder's contents) and save it
+  const nm=n.name.replace(/\/$/,'');
+  const base=n.type==='folder'?nm:nm.replace(/\.[^.]+$/,'');
+  toast('Downloaded '+base+'.zip');
+}
+function beginRename(n,row){
+  const nm=row.querySelector('.nm');
+  const old=n.name;
+  nm.innerHTML='<input type="text" aria-label="Rename" value="'+old.replace(/"/g,'&quot;')+'">';
+  const inp=nm.querySelector('input'); inp.focus(); inp.select();
+  const commit=()=>{ const v=inp.value.trim(); if(v) n.name=v; renderTree(); refreshOpenFileName(); };
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') commit(); else if(e.key==='Escape'){ renderTree(); } });
+  inp.addEventListener('blur',commit);
+}
+function refreshOpenFileName(){
+  const f=findNode(selectedId);
+  if(f){ vName.textContent=f.name; }
+}
+
+/* delete (with confirm) -------------------------------------------------- */
+function confirmDelete(n){
+  const what=n.type==='folder'?('folder '+n.name):n.name;
+  confirmDialog({
+    title:'Delete '+n.name+'?',
+    message:'Delete '+what+'? This can’t be undone.',
+    confirmLabel:'Delete', danger:true
+  }).then(ok=>{
+    if(!ok) return;
+    const loc=findParentList(n.id); if(loc) loc.list.splice(loc.index,1);
+    if(n.id===selectedId || isDescendant(n.id,selectedId)){
+      // pick a new selection (first file we can find)
+      let next=null; walk(TREE,x=>{ if(!next && x.type==='file') next=x; });
+      if(next) selectFile(next.id); else { selectedId=null; currentFile=null; updateRunButton(null); viewerBody.innerHTML='<div class="empty"><div class="big">📁</div>No file selected</div>'; }
+    }
+    renderTree();
+  });
+}
+
+/* new file / folder ------------------------------------------------------ */
+function newFile(){
+  const f=mkFile('untitled.py','py','# new file\n');
+  TREE.push(f); renderTree(); selectFile(f.id);
+  // immediately offer rename
+  const row=treeEl.querySelector('[data-id="'+f.id+'"] .row')||treeEl.querySelector('.row.sel');
+}
+function newFolder(){
+  const f=mkFolder('new-folder/',[],true);
+  TREE.push(f); renderTree();
+}
+
+/* =========================================================================
+   VIEWER (type-aware swap)
+   ========================================================================= */
+const viewerBody=document.getElementById('viewerBody');
+const vName=document.getElementById('vName');
+const vMeta=document.getElementById('vMeta');
+
+function selectFile(id){
+  selectedId=id;
+  renderTree();
+  renderViewer(findNode(id));
+}
+function revealFile(f){       // open a specific file object (tree node OR example) in the editor
+  if(!f) return;
+  selectedId=f.id;
+  renderTree(); renderExamples(); renderViewer(f);
+}
+
+function renderViewer(f){
+  currentFile=f;
+  if(!f){ updateRunButton(null); return; }
+  vName.textContent=f.name;
+  if(f.kind==='py'){
+    vMeta.textContent='· Python'+(f.entry?' · entry point':'')+(f.exampleOf?' · from example':'');
+    renderEditor(f);
+  } else if(f.kind==='img'){
+    vMeta.textContent='· PNG';
+    viewerBody.innerHTML='<div class="imgview"><div class="checker">'+SHIP_SVG+'</div>'+
+      '<div class="vcaption">'+f.name+' · 64×64 · PNG</div></div>';
+  } else if(f.kind==='wav'||f.kind==='mp3'){
+    vMeta.textContent='· '+(f.kind==='wav'?'WAV':'MP3');
+    let html='<div class="sound">'+player(f.name+' · '+(f.kind==='wav'?'WAV':'MP3'));
+    if(f.kind==='mp3'){
+      html+='<div class="warnbanner"><span>⚠</span><span>Plays here, but pygame’s audio can’t load MP3 — convert to WAV or OGG.</span></div>';
+    }
+    html+='</div>';
+    viewerBody.innerHTML=html;
+    const pb=viewerBody.querySelector('.playbtn');
+    pb.addEventListener('click',()=>{ pb.textContent = pb.textContent==='▶'?'■':'▶'; });
+  } else {
+    vMeta.textContent='· text';
+    viewerBody.innerHTML='<div class="empty"><div class="big">📄</div>Can’t open '+f.name+
+      ' here — only code, images, and sounds preview in the viewer.</div>';
+  }
+  updateRunButton(f);
+}
+
+/* editable code editor — contenteditable with re-highlight on input ------- */
+function renderEditor(f){
+  const lineCount=f.body.split('\n').length;
+  let gutter=''; for(let i=1;i<=lineCount;i++) gutter+=i+'\n';
+  viewerBody.innerHTML=
+    '<div class="editor">'+
+      '<div class="gutter mono" id="gutter">'+gutter+'</div>'+
+      '<div class="code mono" id="code" contenteditable="true" spellcheck="false" '+
+        'role="textbox" aria-multiline="true" aria-label="Code editor">'+hl(f.body)+'</div>'+
+    '</div>'+
+    '<div class="edithint">⌘Z undo · edits become your file</div>';
+  const code=document.getElementById('code');
+  const gut=document.getElementById('gutter');
+
+  // capture current text from the contenteditable (plain text)
+  const readText=()=>code.innerText.replace(/ /g,' ');
+
+  let typing=false;
+  code.addEventListener('input',()=>{
+    typing=true;
+    const txt=readText();
+    // push previous state to this file's undo stack (debounced-ish: per input)
+    if(txt!==f.body){
+      f.undo.push(f.body);
+      if(f.undo.length>200) f.undo.shift();
+      f.redo.length=0;
+      f.body=txt;
+      markModified(f);
+      // update gutter line numbers live
+      const lc=txt.split('\n').length; let g=''; for(let i=1;i<=lc;i++) g+=i+'\n'; gut.textContent=g;
+    }
+    typing=false;
+  });
+
+  // per-file undo / redo via Cmd/Ctrl-Z (and Shift for redo)
+  code.addEventListener('keydown',e=>{
+    const meta=e.metaKey||e.ctrlKey;
+    if(meta && e.key.toLowerCase()==='z'){
+      e.preventDefault();
+      if(e.shiftKey) redoFile(f,code,gut); else undoFile(f,code,gut);
+    } else if(meta && e.key.toLowerCase()==='y'){
+      e.preventDefault(); redoFile(f,code,gut);
+    }
+  });
+}
+
+function setEditorText(code,gut,text){
+  // undo/redo are not mid-keystroke, so restore the tinted view (and drop caret at end)
+  code.innerHTML=hl(text);
+  const lc=text.split('\n').length; let g=''; for(let i=1;i<=lc;i++) g+=i+'\n'; gut.textContent=g;
+  try{
+    const sel=window.getSelection(), r=document.createRange();
+    r.selectNodeContents(code); r.collapse(false);
+    sel.removeAllRanges(); sel.addRange(r); code.focus();
+  }catch(e){}
+}
+function undoFile(f,code,gut){
+  if(!f.undo.length) return;
+  f.redo.push(f.body);
+  f.body=f.undo.pop();
+  setEditorText(code,gut,f.body);
+  recomputeModified(f);
+}
+function redoFile(f,code,gut){
+  if(!f.redo.length) return;
+  f.undo.push(f.body);
+  f.body=f.redo.pop();
+  setEditorText(code,gut,f.body);
+  recomputeModified(f);
+}
+
+function markModified(f){
+  const wasClean=!f.modified;
+  f.modified=true;
+  if(f.exampleOf!==undefined && wasClean){
+    // first edit promotes the example into the real project tree + shows the dot
+    promoteExampleToTree(f);
+    renderExamples();
+  }
+  renderTree();
+}
+function recomputeModified(f){
+  if(f.exampleOf!==undefined){
+    f.modified = (f.body!==EXAMPLES[f.exampleOf]);
+    renderExamples();
+  }
+  renderTree();
+}
+
+function player(caption){
+  let bars='';
+  for(let i=0;i<48;i++){
+    const h=6+Math.abs(Math.sin(i*0.6))*22+(i%3)*4;
+    bars+='<rect x="'+(i*5)+'" y="'+(28-h/2)+'" width="3" height="'+h+'" rx="1.5" fill="#7bd88f" opacity="'+(0.4+0.5*Math.abs(Math.sin(i*0.4))).toFixed(2)+'"/>';
+  }
+  return '<div class="playerbar"><button class="playbtn" aria-label="Play sound">▶</button>'+
+    '<svg width="100%" height="40" viewBox="0 0 240 40" preserveAspectRatio="none" style="flex:1" aria-hidden="true">'+bars+'</svg></div>'+
+    '<div class="vcaption">'+caption+'</div>';
+}
+const SHIP_SVG=`<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="ship sprite">
+  <polygon points="32,6 50,52 32,42 14,52" fill="#7bd88f"/>
+  <polygon points="32,14 32,40 22,46" fill="#5bbf72"/>
+  <circle cx="32" cy="28" r="5" fill="#14151a"/>
+  <polygon points="32,52 26,62 38,62" fill="#f0a45d"/>
+</svg>`;
+
+/* =========================================================================
+   ACTIVITY TABS
+   ========================================================================= */
+const acttabs=[...document.querySelectorAll('.acttab')];
+const panelviews=[...document.querySelectorAll('.panelview')];
+const side=document.getElementById('side');
+const sideSplit=document.querySelector('[data-split="side"]');
+let activeView='explorer';
+function showView(v){
+  activeView=v;
+  side.classList.remove('collapsed'); sideSplit.style.display='';
+  acttabs.forEach(b=>{ const on=b.dataset.view===v; b.classList.toggle('active',on); b.setAttribute('aria-selected',String(on)); });
+  panelviews.forEach(p=>p.hidden=(p.dataset.panel!==v));
+  if(!running) fitCanvas();
+}
+function collapsePanel(){
+  side.classList.add('collapsed'); sideSplit.style.display='none';
+  acttabs.forEach(b=>{ b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+  if(!running) fitCanvas();
+}
+// clicking the active panel's rail icon collapses it; any other icon switches + opens
+acttabs.forEach(b=>b.addEventListener('click',()=>{
+  const v=b.dataset.view;
+  if(activeView===v && !side.classList.contains('collapsed')) collapsePanel();
+  else showView(v);
+}));
+
+/* explorer toolbar */
+document.getElementById('newFileBtn').addEventListener('click',newFile);
+document.getElementById('newFolderBtn').addEventListener('click',newFolder);
+document.getElementById('uploadBtn').addEventListener('click',()=>{
+  // mocked upload: add a file to root
+  const f=mkFile('uploaded.png','img'); TREE.push(f); renderTree();
+  toast('Uploaded uploaded.png (prototype)');
+});
+document.getElementById('downloadBtn').addEventListener('click',()=>toast('Downloading project.zip (prototype)'));
+
+/* tiny toast via console line for feedback */
+function toast(msg){ logLine(msg,'sys'); ensureConsoleVisible(); }
+function ensureConsoleVisible(){ if(drawer.classList.contains('collapsed')) toggleDrawer(); }
+
+/* =========================================================================
+   HISTORY
+   ========================================================================= */
+const HISTORY=[
+  {when:'just now', files:3, add:6, del:2},
+  {when:'4 min ago', files:3, add:12, del:4},
+  {when:'22 min ago', files:2, add:3, del:0},
+  {when:'yesterday', files:2, add:40, del:11},
+];
+const histList=document.getElementById('histList');
+function renderHistory(){
+  histList.innerHTML='';
+  HISTORY.forEach(h=>{
+    const row=document.createElement('div');
+    row.className='hrow';
+    row.innerHTML=
+      '<div class="when"><b>'+h.when+'</b>'+
+        '<button class="btn restore" aria-label="Restore this snapshot">Restore</button></div>'+
+      '<div class="meta">'+h.files+' files</div>'+
+      '<div class="diff"><span class="plus">+'+h.add+'</span><span class="minus">−'+h.del+'</span>'+
+        '<span class="meta">changes vs now</span></div>';
+    row.addEventListener('click',e=>{
+      if(e.target.closest('.restore')){
+        confirmDialog({title:'Restore snapshot?',message:'Restore your project to "'+h.when+'" ('+h.files+' files)? Current unsaved changes will be replaced.',confirmLabel:'Restore',danger:false})
+          .then(ok=>{ if(ok) toast('Restored snapshot from '+h.when+' (prototype)'); });
+        return;
+      }
+      row.classList.toggle('open');
+    });
+    histList.appendChild(row);
+  });
+}
+
+/* =========================================================================
+   EXAMPLES  (editable, runnable files — open in the same editor)
+   ========================================================================= */
+const EXAMPLES={
+  'Bouncing ball':`import pygame
+pygame.init()
+s = pygame.display.set_mode((360, 260))
+x, y, vx, vy = 50, 50, 3, 2
+while True:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT: raise SystemExit
+    x += vx; y += vy
+    if x < 0 or x > 360: vx = -vx
+    if y < 0 or y > 260: vy = -vy
+    s.fill((11, 12, 16))
+    pygame.draw.circle(s, (123, 216, 143), (x, y), 10)
+    pygame.display.flip()`,
+  'Snake':`# Classic snake — arrow keys to steer
+import pygame, random
+pygame.init()
+cell = 16
+snake = [(5, 5)]; d = (1, 0)
+food = (10, 10)
+# move head, eat food, grow tail, check self-collision
+# (full game loop omitted in this starter)`,
+  'Pong':`# Pong — two paddles, one ball
+import pygame
+pygame.init()
+# paddle_l / paddle_r move on key input
+# ball bounces off top, bottom, and paddles
+# score when a side misses`,
+  'Starfield':`# Warp-speed starfield
+import pygame, random
+stars = [[random.randint(0, 360), random.randint(0, 260)] for _ in range(80)]
+# move each star toward the viewer, wrap at edges`,
+  'Platformer':`# Side-scrolling platformer base
+import pygame
+GRAVITY = 0.6
+# player has x/y velocity, jumps when on ground,
+# collides with a list of tile rectangles`,
+  'Particles':`# Particle burst on click
+import pygame, random, math
+particles = []
+# each particle: position, velocity, life
+# fade alpha as life runs out`,
+};
+// build example "files" backed by their own undo stacks; lazily promoted into TREE
+const exFiles={}; // name -> file node
+Object.keys(EXAMPLES).forEach(name=>{
+  exFiles[name]=mkFile(name+'.py','py',EXAMPLES[name],{exampleOf:name,modified:false});
+});
+
+const exListEl=document.getElementById('exList');
+function renderExamples(){
+  exListEl.innerHTML='';
+  Object.keys(EXAMPLES).forEach(name=>{
+    const f=exFiles[name];
+    const row=document.createElement('div');
+    row.className='exrow'+(f.id===selectedId?' sel':'');
+    row.tabIndex=0;
+    row.innerHTML=
+      '<span class="ic" aria-hidden="true">'+svgIcon('py')+'</span>'+
+      '<span class="nm">'+name+'</span>'+
+      (f.modified?'<span class="moddot" data-tip="Modified — now your file">●</span>':'')+
+      '<button class="reset" aria-label="Reset to original" data-tip="Reset to original">↺</button>';
+    row.addEventListener('click',e=>{
+      if(e.target.closest('.reset')) return;
+      openExample(name);
+    });
+    row.addEventListener('keydown',e=>{ if(e.key==='Enter') openExample(name); });
+    row.querySelector('.reset').addEventListener('click',e=>{ e.stopPropagation(); resetExample(name); });
+    exListEl.appendChild(row);
+  });
+}
+function openExample(name){
+  const f=exFiles[name];
+  selectedId=f.id;
+  renderExamples(); renderTree();
+  renderViewer(f);
+}
+function promoteExampleToTree(f){
+  // once edited, the example becomes a real project file shown in Explorer
+  if(!TREE.includes(f)){ TREE.push(f); }
+}
+function resetExample(name){
+  const f=exFiles[name];
+  confirmDialog({
+    title:'Reset '+name+'?',
+    message:'Reset '+name+' to its original code? Your changes will be lost.',
+    confirmLabel:'Reset', danger:true
+  }).then(ok=>{
+    if(!ok) return;
+    f.undo.push(f.body); f.redo.length=0;
+    f.body=EXAMPLES[name];
+    f.modified=false;
+    renderExamples(); renderTree();
+    if(f.id===selectedId) renderViewer(f);
+  });
+}
+
+/* =========================================================================
+   COLLABORATION
+   ========================================================================= */
+const ADJ=['Cobalt','Amber','Violet','Teal','Coral'];
+const ANIMALS=['Otter','Falcon','Lynx','Heron','Marmot'];
+const PEER_COLORS=['#6fb3e0','#e07bd0','#f0a45d'];
+let collabActive=false;
+const collabBody=document.getElementById('collabBody');
+function renderCollab(){
+  if(!collabActive){
+    collabBody.innerHTML=
+      'Invite others to edit this project together in real time. Everyone runs against the same files.'+
+      '<button class="btn primary startbtn" id="startCollab" aria-label="Start a collaboration room">Start a collaboration room</button>';
+    document.getElementById('startCollab').addEventListener('click',()=>{ collabActive=true; renderCollab(); });
+  } else {
+    const a1=ADJ[1]+' '+ANIMALS[1], a2=ADJ[3]+' '+ANIMALS[3];
+    collabBody.innerHTML=
+      '<div style="color:var(--text)"><b>Room is live</b> — 3 people editing</div>'+
+      '<div class="peer"><span class="dot" style="background:var(--accent)"></span><b>You</b> · editing</div>'+
+      '<div class="peer"><span class="dot" style="background:'+PEER_COLORS[0]+'"></span>'+a1+'</div>'+
+      '<div class="peer"><span class="dot" style="background:'+PEER_COLORS[1]+'"></span>'+a2+'</div>'+
+      '<div class="roomlink"><input id="roomLink" readonly value="play.pygame.dev/r/quartz-otter-42" aria-label="Room link">'+
+        '<button class="btn" id="copyLink" aria-label="Copy room link">Copy link</button></div>'+
+      '<button class="ghost" id="leaveRoom" style="margin-top:12px" aria-label="Leave room">Leave room</button>';
+    document.getElementById('copyLink').addEventListener('click',()=>{
+      const btn=document.getElementById('copyLink');
+      const txt='https://play.pygame.dev/r/quartz-otter-42';
+      const done=()=>{ btn.textContent='✓ Copied'; setTimeout(()=>btn.textContent='Copy link',1300); };
+      if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done,done); else done();
+    });
+    document.getElementById('leaveRoom').addEventListener('click',()=>{ collabActive=false; renderCollab(); });
+  }
+}
+
+/* =========================================================================
+   CONSOLE
+   ========================================================================= */
+const consoleEl=document.getElementById('console');
+const errBadge=document.getElementById('errBadge');
+function logLine(text,cls){
+  const d=document.createElement('div');
+  d.className='ln'+(cls?' '+cls:'');
+  d.textContent=text;
+  consoleEl.appendChild(d);
+  consoleEl.scrollTop=consoleEl.scrollHeight;
+  refreshErrBadge();
+}
+function refreshErrBadge(){
+  const n=consoleEl.querySelectorAll('.err').length;
+  errBadge.textContent=n+(n===1?' error':' errors');
+  errBadge.classList.toggle('show',n>0);
+}
+function seedConsole(){
+  consoleEl.innerHTML='';
+  logLine('pygame 2.5 (SDL 2.28)');
+  logLine('Hello from main.py');
+  logLine('— program finished —','sys');
+}
+
+/* =========================================================================
+   UNIFIED START / STOP + STAGE
+   ========================================================================= */
+const runBtn=document.getElementById('runBtn');
+const pauseBtn=document.getElementById('pauseBtn');
+const endBtn=document.getElementById('endBtn');
+const statusEl=document.getElementById('status');
+const stageHint=document.getElementById('stageHint');
+const canvas=document.getElementById('stageCanvas');
+const ctx=canvas.getContext('2d');
+let running=false, paused=false, raf=null, sceneT=0, currentScene=null, runFile=null;
+
+function updateRunButton(f){
+  // Editor 'Start' runs the currently-open file — shown only for runnable code files (.py /
+  // examples). A running program is controlled from the stage (pause/resume + end).
+  runBtn.style.display=(f && f.kind==='py')?'':'none';
+}
+function updateStageButtons(){
+  pauseBtn.style.display=running?'':'none';
+  endBtn.style.display=running?'':'none';
+  pauseBtn.textContent=paused?'▶ Resume':'⏸ Pause';
+  pauseBtn.classList.toggle('primary',paused);
+  pauseBtn.setAttribute('aria-label',paused?'Resume program':'Pause program');
+}
+function updateRunIndicator(){
+  // stage badge: which file is running, clickable to jump to it (independent of the open file)
+  if(running && runFile){
+    stageHint.textContent=(paused?'⏸ paused: ':'▶ running: ')+runFile.name;
+    stageHint.classList.add('live'); stageHint.setAttribute('data-tip','Open the running file');
+  } else {
+    stageHint.classList.remove('live'); stageHint.removeAttribute('data-tip');
+  }
+}
+
+function fitCanvas(){
+  const wrap=canvas.parentElement.getBoundingClientRect();
+  canvas.width=Math.max(80,Math.floor(wrap.width-2));
+  canvas.height=Math.max(80,Math.floor(wrap.height-2));
+}
+function hud(c,txt){ c.fillStyle='#d8dae5'; c.font='13px "SF Mono",Menlo,monospace'; c.fillText(txt,10,20); }
+// Each scene is a pure function of the frame counter t — so Pause just stops advancing t
+// (freezes) and Resume continues from where it left off; no per-scene state to reset.
+const SCENES={
+  'Bouncing ball':(c,W,H,t)=>{ const span=Math.max(1,W-24), x=12+Math.abs(((t*3)%(2*span))-span), y=12+(H-36)*(0.5-0.5*Math.cos(t*0.07));
+    c.fillStyle='#7bd88f'; c.beginPath(); c.arc(x,y,12,0,7); c.fill(); hud(c,'bouncing ball'); },
+  'Snake':(c,W,H,t)=>{ const g=16, cols=Math.max(1,Math.floor(W/g)), rows=Math.max(1,Math.floor((H-4)/g)), n=cols*rows, head=Math.floor(t/5);
+    for(let i=0;i<7;i++){ const p=((head-i)%n+n)%n, x=(p%cols)*g, y=(Math.floor(p/cols)%rows)*g; c.fillStyle=i?'#2f6a44':'#7bd88f'; c.fillRect(x+1,y+1,g-2,g-2); }
+    c.fillStyle='#ff6e7f'; c.fillRect((cols-2)*g+2,2*g+2,g-4,g-4); hud(c,'snake'); },
+  'Pong':(c,W,H,t)=>{ const bx=24+Math.abs(((t*3)%(2*(W-48)))-(W-48)), by=24+Math.abs(((t*2.2)%(2*(H-48)))-(H-48));
+    const lp=Math.max(0,Math.min(H-44,by-22)), rp=Math.max(0,Math.min(H-44,(H-by)-22));
+    c.fillStyle='#d8dae5'; c.fillRect(10,lp,6,44); c.fillRect(W-16,rp,6,44); c.beginPath(); c.arc(bx,by,6,0,7); c.fill(); hud(c,'pong'); },
+  'Starfield':(c,W,H,t)=>{ for(let i=0;i<70;i++){ const s=((i*131)%100)/100, x=W-(((t*(0.6+s*2.4))+i*47)%W), y=(i*61)%H, r=0.6+s*2.4;
+    c.fillStyle='rgba(216,218,229,'+(0.25+s*0.7).toFixed(2)+')'; c.fillRect(x,y,r,r); } hud(c,'starfield'); },
+  'Platformer':(c,W,H,t)=>{ c.fillStyle='#2c2f3a'; c.fillRect(0,H-22,W,22); c.fillStyle='#3b6d4a'; c.fillRect(W*0.38,H-58,64,8); c.fillRect(W*0.66,H-92,64,8);
+    const x=(t*2)%Math.max(1,W-18), y=H-40-Math.abs(Math.sin(t*0.09))*34; c.fillStyle='#7bd88f'; c.fillRect(x,y,18,18); hud(c,'platformer'); },
+  'Particles':(c,W,H,t)=>{ const ph=(t%80)/80; for(let i=0;i<44;i++){ const a=i/44*Math.PI*2, r=ph*Math.min(W,H)*0.45*(0.4+(i%6)/6);
+    c.fillStyle='hsla('+((i*8+t*2)%360)+',70%,66%,'+(1-ph).toFixed(2)+')'; c.fillRect(W/2+Math.cos(a)*r,H/2+Math.sin(a)*r,3,3); } hud(c,'particles'); },
+};
+function sceneDefault(c,W,H,t){ const sx=Math.max(1,W-24), sy=Math.max(1,H-24), x=Math.abs(((t*2.6)%(2*sx))-sx), y=Math.abs(((t*1.9)%(2*sy))-sy);
+  c.fillStyle='#f0a45d'; c.beginPath(); c.arc(12+Math.abs(((t*1.6)%(2*sx))-sx),H*0.3,9,0,7); c.fill();
+  c.fillStyle='#7bd88f'; c.fillRect(x,y,24,24); hud(c,'score '+Math.floor(t/40)); }
+function pickScene(f){ return (f && f.exampleOf && SCENES[f.exampleOf]) || sceneDefault; }
+
+function drawFrame(){
+  const W=canvas.width,H=canvas.height;
+  ctx.fillStyle='#0b0c10'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#1a1c24'; ctx.lineWidth=1;
+  for(let i=20;i<W;i+=20){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,H);ctx.stroke();}
+  for(let j=20;j<H;j+=20){ctx.beginPath();ctx.moveTo(0,j);ctx.lineTo(W,j);ctx.stroke();}
+  (currentScene||sceneDefault)(ctx,W,H,sceneT);
+  sceneT++;
+  raf=requestAnimationFrame(drawFrame);
+}
+function freezeFrame(){ if(raf) cancelAnimationFrame(raf); raf=null; }
+
+// Editor 'Start' runs / restarts the currently-open file
+function startRun(){
+  const f=currentFile;
+  if(!(f && f.kind==='py')) return;                  // only runnable code files
+  running=true; paused=false; runFile=f;
+  currentScene=pickScene(f); sceneT=0;               // different file -> different program
+  statusEl.textContent='running'; statusEl.classList.add('running');
+  consoleEl.innerHTML='';                             // fresh start clears console
+  logLine('pygame 2.5 (SDL 2.28)');
+  logLine('Running '+f.name+'…','ok');
+  fitCanvas();
+  updateStageButtons(); updateRunIndicator(); renderTree();   // badge + explorer highlight
+  freezeFrame(); raf=requestAnimationFrame(drawFrame);
+}
+// Stage Pause/Resume — suspends/continues the loop; frame frozen while paused
+function togglePause(){
+  if(!running) return;
+  paused=!paused;
+  if(paused){ freezeFrame(); statusEl.textContent='paused'; statusEl.classList.remove('running'); logLine('— paused —','sys'); }
+  else { statusEl.textContent='running'; statusEl.classList.add('running'); logLine('— resumed —','sys'); freezeFrame(); raf=requestAnimationFrame(drawFrame); }
+  updateStageButtons(); updateRunIndicator();
+}
+// Stage ✕ — fully end the program (last frame stays, console kept)
+function endRun(){
+  if(!running) return;
+  running=false; paused=false; runFile=null;
+  freezeFrame();
+  statusEl.textContent='stopped'; statusEl.classList.remove('running');
+  stageHint.textContent='stopped';
+  logLine('— stopped —','sys');
+  updateStageButtons(); updateRunIndicator(); renderTree();
+  setTimeout(()=>{ if(!running){ statusEl.textContent='ready'; } },900);
+}
+runBtn.addEventListener('click',startRun);
+pauseBtn.addEventListener('click',togglePause);
+endBtn.addEventListener('click',endRun);
+stageHint.addEventListener('click',()=>{ if(running && runFile) revealFile(runFile); });
+
+document.getElementById('fsBtn').addEventListener('click',()=>{
+  const el=canvas.parentElement;
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+});
+document.getElementById('viewerFs').addEventListener('click',()=>{
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(viewerPane.requestFullscreen) viewerPane.requestFullscreen().catch(()=>{});
+});
+
+/* =========================================================================
+   CONSOLE DRAWER COLLAPSE
+   ========================================================================= */
+const drawer=document.getElementById('drawer');
+const drawerCollapse=document.getElementById('drawerCollapse');
+let savedDrawerFlex='';
+function toggleDrawer(){
+  const collapsed=drawer.classList.toggle('collapsed');
+  // The console-resize drag writes an inline flex-basis on #drawer, which would override
+  // .drawer.collapsed{flex:0 0 31px}. Clear it while collapsed so the class wins; restore
+  // the resized height on expand.
+  if(collapsed){ savedDrawerFlex=drawer.style.flex; drawer.style.flex=''; }
+  else { drawer.style.flex=savedDrawerFlex; }
+  drawerCollapse.setAttribute('aria-expanded',String(!collapsed));
+  drawerCollapse.textContent=collapsed?'▸':'▾';
+  document.getElementById('consoleSplit').style.display=collapsed?'none':'';
+}
+drawerCollapse.addEventListener('click',toggleDrawer);
+document.getElementById('consoleFs').addEventListener('click',()=>{
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(drawer.requestFullscreen) drawer.requestFullscreen().catch(()=>{});
+});
+
+/* =========================================================================
+   PANE COLLAPSE / EXPAND  (side panel, viewer, stage)
+   ========================================================================= */
+const viewerPane=document.getElementById('viewerPane');
+const stagePane=document.getElementById('stagePane');
+const viewerSplit=document.getElementById('viewerSplit');
+// editor + game stage are no longer collapsible (only resizable); console keeps its own collapse.
+
+/* =========================================================================
+   SPLITTERS — real drag resize
+   ========================================================================= */
+function setupSplitters(){
+  document.querySelectorAll('.split').forEach(sp=>{
+    sp.addEventListener('mousedown',e=>{
+      if(sp.dataset.split==='side' && side.classList.contains('collapsed')) return;
+      e.preventDefault();
+      const kind=sp.dataset.split;
+      const startX=e.clientX, startY=e.clientY;
+      let startVal;
+      if(kind==='side'){ startVal=side.getBoundingClientRect().width; }
+      else if(kind==='viewer'){ startVal=viewerPane.getBoundingClientRect().width; }
+      else if(kind==='console'){ startVal=drawer.getBoundingClientRect().height; }
+      document.body.style.userSelect='none';
+      document.body.style.cursor=(kind==='console')?'row-resize':'col-resize';
+      function move(ev){
+        if(kind==='side'){
+          let w=Math.max(180,Math.min(440,startVal+(ev.clientX-startX)));
+          side.style.flex='0 0 '+w+'px'; side.style.width=w+'px';
+        } else if(kind==='viewer'){
+          let w=Math.max(160,startVal+(ev.clientX-startX));
+          viewerPane.style.flex='0 0 '+w+'px';
+        } else if(kind==='console'){
+          let h=Math.max(60,Math.min(window.innerHeight-180,startVal-(ev.clientY-startY)));
+          drawer.style.flex='0 0 '+h+'px';
+        }
+        if(!running && raf===null) fitCanvas();
+      }
+      function up(){
+        document.removeEventListener('mousemove',move);
+        document.removeEventListener('mouseup',up);
+        document.body.style.userSelect=''; document.body.style.cursor='';
+        if(!running) fitCanvas();
+      }
+      document.addEventListener('mousemove',move);
+      document.addEventListener('mouseup',up);
+    });
+  });
+}
+
+/* =========================================================================
+   CONFIRM DIALOG (single reusable modal) — returns a Promise<boolean>
+   ========================================================================= */
+const scrim=document.getElementById('scrim');
+const dlgTitle=document.getElementById('dlgTitle');
+const dlgMsg=document.getElementById('dlgMsg');
+const dlgCancel=document.getElementById('dlgCancel');
+const dlgConfirm=document.getElementById('dlgConfirm');
+let dlgResolve=null, dlgPrevFocus=null;
+function confirmDialog({title,message,confirmLabel,danger}){
+  return new Promise(resolve=>{
+    dlgResolve=resolve;
+    dlgPrevFocus=document.activeElement;
+    dlgTitle.textContent=title||'Confirm';
+    dlgMsg.textContent=message||'';
+    dlgConfirm.textContent=confirmLabel||'OK';
+    dlgConfirm.classList.toggle('danger',!!danger);
+    if(!danger){ dlgConfirm.classList.add('primary'); } else { dlgConfirm.classList.remove('primary'); }
+    scrim.classList.add('show');
+    dlgConfirm.focus();
+  });
+}
+function closeDialog(result){
+  scrim.classList.remove('show');
+  dlgConfirm.classList.remove('primary');
+  if(dlgResolve){ const r=dlgResolve; dlgResolve=null; r(result); }
+  if(dlgPrevFocus&&dlgPrevFocus.focus){ try{dlgPrevFocus.focus();}catch(e){} }
+}
+dlgCancel.addEventListener('click',()=>closeDialog(false));
+dlgConfirm.addEventListener('click',()=>closeDialog(true));
+scrim.addEventListener('click',e=>{ if(e.target===scrim) closeDialog(false); });
+document.addEventListener('keydown',e=>{
+  if(scrim.classList.contains('show')){
+    if(e.key==='Escape'){ e.preventDefault(); closeDialog(false); }
+    else if(e.key==='Enter'){ e.preventDefault(); closeDialog(true); }
+    else if(e.key==='Tab'){ // simple focus trap between the two buttons
+      e.preventDefault();
+      (document.activeElement===dlgConfirm?dlgCancel:dlgConfirm).focus();
+    }
+  }
+});
+
+/* =========================================================================
+   INIT
+   ========================================================================= */
+function setStorage(){
+  document.getElementById('storeBar').style.width='12%';
+}
+const mainFile=TREE.find(n=>n.type==='file'&&n.name==='main.py');
+selectedId=(mainFile||TREE.find(n=>n.type==='file')||TREE[0]).id;
+renderTree();
+renderViewer(findNode(selectedId));
+renderHistory();
+renderExamples();
+renderCollab();
+seedConsole();
+setStorage();
+setupSplitters();
+fitCanvas();
+window.addEventListener('resize',()=>{ if(!running) fitCanvas(); });
+
+/* unified, subtle hover tooltip for every icon control carrying data-tip */
+(function(){
+  const tip=document.createElement('div'); tip.className='tooltip'; tip.setAttribute('role','tooltip');
+  document.body.appendChild(tip); let cur=null;
+  function show(el){
+    const t=el.getAttribute('data-tip'); if(!t){ hide(); return; }
+    cur=el; tip.textContent=t;
+    const r=el.getBoundingClientRect(), tw=tip.offsetWidth, th=tip.offsetHeight;
+    let left, top;
+    if(el.getAttribute('data-tip-side')==='right'){
+      left=r.right+8; top=r.top+r.height/2-th/2;
+      if(left+tw>window.innerWidth-6) left=r.left-tw-8;          // flip if no room
+      top=Math.max(6,Math.min(top,window.innerHeight-th-6));
+    } else {
+      left=r.left+r.width/2-tw/2; left=Math.max(6,Math.min(left,window.innerWidth-tw-6));
+      top=r.bottom+7; if(top+th>window.innerHeight-6) top=r.top-th-7;
+    }
+    tip.style.left=Math.round(left)+'px'; tip.style.top=Math.round(top)+'px';
+    tip.classList.add('show');
+  }
+  function hide(){ cur=null; tip.classList.remove('show'); }
+  document.addEventListener('mouseover',e=>{ const el=e.target.closest&&e.target.closest('[data-tip]'); if(el&&el!==cur) show(el); });
+  document.addEventListener('mouseout',e=>{ const el=e.target.closest&&e.target.closest('[data-tip]'); if(el&&(!e.relatedTarget||!el.contains(e.relatedTarget))) hide(); });
+  document.addEventListener('focusin',e=>{ const el=e.target.closest&&e.target.closest('[data-tip]'); if(el) show(el); });
+  document.addEventListener('focusout',hide);
+  document.addEventListener('mousedown',hide);
+  window.addEventListener('scroll',hide,true);
+})();
+</script>
+</body>
+</html>

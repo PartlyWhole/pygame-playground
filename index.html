@@ -1411,7 +1411,6 @@ function loadDiffLib() {
 }
 const historyBtnEl = document.getElementById("historyBtn");
 const historyPanelEl = document.getElementById("historyPanel");
-const escHist = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const lineCount = (t) => (t ? t.split("\n").length : 0);
 function relTime(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -1421,13 +1420,16 @@ function relTime(ms) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return new Date(ms).toLocaleDateString();
 }
+// Project-wide net line delta vs the previous version (cheap — no diff lib needed),
+// so the badge is meaningful for multi-file too (not tied to the entry or active file).
 function deltaBadge(older, cur) {
-  const f = cur.entry;
-  if (!older) return lineCount(cur.files[f]) + " lines";
-  const d = lineCount(cur.files[f]) - lineCount(older.files[f] || "");
+  const names = [...new Set([...Object.keys(cur.files), ...Object.keys((older && older.files) || {})])];
+  const total = (proj) => names.reduce((n, f) => n + lineCount(proj.files[f]), 0);
+  if (!older) return total(cur) + " lines";
+  const d = total(cur) - total(older);
   return d > 0 ? "+" + d + " lines" : d < 0 ? d + " lines" : "edited";
 }
-let _histSnaps = [];
+let _histSnaps = [], _histSelectedId = null;
 async function renderHistory() {
   if (historyPanelEl.hidden) return;
   _histSnaps = await historyStore.getAll();   // newest-first
@@ -1443,47 +1445,53 @@ async function renderHistory() {
   // Rows live in their own container so the diff pane below them doesn't make the
   // last row stop being a :last-child (the panel lists rows, then a diff pane).
   historyPanelEl.innerHTML = `<div class="hp-head"><span>Version history</span><span class="hp-clear">Clear</span></div><div class="hist-rows">${rows}</div><div class="hp-diff" id="histDiff"></div>`;
+  // Preserve an open diff across a re-render (e.g. a Run while the panel is open).
+  if (_histSelectedId != null && _histSnaps.some(s => String(s.id) === String(_histSelectedId))) showDiff(_histSelectedId);
 }
 async function showDiff(id) {
   const rec = _histSnaps.find(s => String(s.id) === String(id));
   if (!rec) return;
+  _histSelectedId = id;
   historyPanelEl.querySelectorAll(".hist-row").forEach(r => r.classList.toggle("sel", r.dataset.id === String(id)));
   const diffEl = document.getElementById("histDiff");
   diffEl.innerHTML = "Loading diff…";
   let Diff;
   try { Diff = await loadDiffLib(); } catch { diffEl.textContent = "Couldn't load the diff view — check your connection."; return; }
   const active = project.active;
+  const isNew = !(active in rec.project.files);     // the file you're viewing didn't exist in this version
   const before = rec.project.files[active] ?? "";
   const after = project.text(active) ?? "";
   const body = Diff.diffLines(before, after).map(p => {
     const cls = p.added ? "d-add" : p.removed ? "d-del" : "d-ctx";
-    return p.value.replace(/\n$/, "").split("\n").map(ln => `<div class="${cls}">${escHist(ln) || "&nbsp;"}</div>`).join("");
+    return p.value.replace(/\n$/, "").split("\n").map(ln => `<div class="${cls}">${esc(ln) || "&nbsp;"}</div>`).join("");
   }).join("");
   const otherChanged = [...new Set([...Object.keys(rec.project.files), ...project.order])]
     .filter(n => n !== active && (rec.project.files[n] ?? "") !== (project.files[n]?.getValue() ?? "")).length;
-  diffEl.innerHTML = `<div class="hp-difftitle">${escHist(active)} — this version → now${otherChanged ? ` (+${otherChanged} other file${otherChanged > 1 ? "s" : ""} differ)` : ""}</div>`
+  diffEl.innerHTML = `<div class="hp-difftitle">${esc(active)}${isNew ? " (new file)" : ""} — this version → now${otherChanged ? ` (+${otherChanged} other file${otherChanged > 1 ? "s" : ""} differ)` : ""}</div>`
     + `<div class="hp-diffbody">${body || '<div class="d-ctx">(no changes in this file)</div>'}</div>`
     + `<button class="hp-restore" data-id="${rec.id}">Restore this version</button>`;
 }
-function restoreSnapshot(id) {
+async function restoreSnapshot(id) {
   const rec = _histSnaps.find(s => String(s.id) === String(id));
   if (!rec) return;
   if (!confirm("Replace your current code with this version?")) return;
+  await captureSnapshot();            // save the current state first, so a restore is itself recoverable
+  _histSelectedId = null;
   project.load(rec.project);
   renderTabs();
   flushSave();
   historyPanelEl.hidden = true;
 }
-historyBtnEl.addEventListener("click", () => { historyPanelEl.hidden = !historyPanelEl.hidden; renderHistory(); });
+historyBtnEl.addEventListener("click", () => { historyPanelEl.hidden = !historyPanelEl.hidden; if (historyPanelEl.hidden) _histSelectedId = null; renderHistory(); });
 historyPanelEl.addEventListener("click", (e) => {
-  if (e.target.classList.contains("hp-clear")) { historyStore.clear().then(renderHistory); return; }
+  if (e.target.classList.contains("hp-clear")) { _histSelectedId = null; historyStore.clear().then(renderHistory); return; }
   const restore = e.target.closest(".hp-restore");
   if (restore) { restoreSnapshot(restore.dataset.id); return; }
   const row = e.target.closest(".hist-row");
   if (row) showDiff(row.dataset.id);
 });
 document.addEventListener("click", (e) => {
-  if (!historyPanelEl.hidden && !historyPanelEl.contains(e.target) && e.target !== historyBtnEl) historyPanelEl.hidden = true;
+  if (!historyPanelEl.hidden && !historyPanelEl.contains(e.target) && e.target !== historyBtnEl) { historyPanelEl.hidden = true; _histSelectedId = null; }
 });
 
 // ---------------------------------------------------------------- collaboration (lazy) — declared early so joinRoom() can reference collab before the collab section below

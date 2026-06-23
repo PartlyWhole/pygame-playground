@@ -98,6 +98,22 @@ await page.waitForTimeout(200);
 const back = await page.evaluate(() => ({ order: window.project.order, e: window.project.files['e.py']?.getValue() }));
 if (back.order.length === 2 && back.e?.includes('Z = 7')) ok('multi-file restore brings back all files'); else fail('multi-file restore wrong: ' + JSON.stringify(back));
 
+// 8. A Run while the panel is open preserves the currently-open diff (re-render keeps the selection).
+await page.evaluate(async () => { await window.historyStore.clear(); window.confirm = () => true; });
+await page.evaluate(() => { document.getElementById('historyPanel').hidden = true; window.project.load({ files: { 'main.py': 'v = 1\n' } }); });
+await page.click('#runBtn'); await page.waitForTimeout(600);
+await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('v = 2\n'));
+await page.click('#runBtn'); await page.waitForTimeout(600);
+await page.click('#historyBtn');
+await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
+await page.click('#historyPanel .hist-row:last-child');          // select the oldest -> opens its diff
+await page.waitForSelector('#historyPanel .hp-diffbody', { timeout: 10_000 });
+await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('v = 3\n'));
+await page.click('#runBtn'); await page.waitForTimeout(700);     // a NEW snapshot re-renders the open panel
+const preserved = await page.evaluate(() => !!document.querySelector('#historyPanel .hp-diffbody')
+  && document.querySelectorAll('#historyPanel .hist-row.sel').length === 1);
+if (preserved) ok('Run while the history panel is open preserves the open diff'); else fail('open diff lost on a Run-while-open');
+
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | ')); else ok('no JS console errors');
 await browser.close();

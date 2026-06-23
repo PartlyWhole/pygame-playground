@@ -1,0 +1,84 @@
+<!doctype html>
+<!--
+  DE-RISK SPIKE harness (throwaway). Boots the SAME Pyodide (v0.27.2) + pygame-ce
+  as index.html (loader/version copied verbatim from index.html:1763-1796), and
+  exposes a tiny window.runPy(code) bridge so test/spike-packages.mjs can drive
+  arbitrary Python from headless chromium.
+
+  This page deliberately does NOT load BOOT_PY / PROJECT_PY — the whole point of
+  the spike is to prove that PLAIN, NATIVE importlib over real MEMFS subdirectories
+  on sys.path supports true Python packages, with NO custom _ProjectFinder. We keep
+  the engine out so the result is a clean signal about native behavior.
+
+  A <canvas id="canvas"> is present + registered with SDL exactly like index.html so
+  pygame.init()/display works headless if a test wants it (we don't need a window for
+  the asset claim — file readability at the nested path is enough).
+-->
+<html>
+<head><meta charset="utf-8"><title>spike-packages harness</title></head>
+<body>
+  <canvas id="canvas" width="640" height="480" tabindex="0"></canvas>
+  <div id="status">starting…</div>
+  <script type="module">
+    const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
+    const statusEl = document.getElementById("status");
+    const canvasEl = document.getElementById("canvas");
+    let pyodide = null;
+
+    // Collect stdout/stderr so a test can read program output if it wants.
+    window.__out = [];
+    window.__err = [];
+
+    window.bootError = null;
+
+    async function boot() {
+      statusEl.textContent = "loading Python…";
+      const mod = await import(PYODIDE_BASE + "pyodide.mjs");
+      pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
+      window.pyodide = pyodide;
+      pyodide.setStdout({ batched: (s) => window.__out.push(s) });
+      pyodide.setStderr({ batched: (s) => window.__err.push(s) });
+      // Register the canvas with SDL BEFORE pygame import (same order as index.html).
+      if (pyodide.canvas && pyodide.canvas.setCanvas2D) {
+        pyodide.canvas.setCanvas2D(canvasEl);
+      } else {
+        pyodide._module.canvas = canvasEl;
+      }
+      pyodide.runPython(
+        'import os; os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"');
+      statusEl.textContent = "loading pygame…";
+      await pyodide.loadPackage("pygame-ce");
+      statusEl.textContent = "ready";
+    }
+
+    // window.runPy(code) -> { ok, result, error, out, err }
+    // result is whatever the snippet returns from runPython (stringified safely).
+    window.runPy = async (code) => {
+      window.__out = [];
+      window.__err = [];
+      try {
+        const result = await pyodide.runPythonAsync(code);
+        let r = result;
+        // Convert PyProxy results to JS where possible, else stringify.
+        if (r && typeof r.toJs === "function") { try { r = r.toJs(); } catch { r = String(result); } }
+        return { ok: true, result: r, out: window.__out.slice(), err: window.__err.slice() };
+      } catch (e) {
+        return { ok: false, error: String(e), out: window.__out.slice(), err: window.__err.slice() };
+      }
+    };
+
+    // Helper: write bytes to a MEMFS path (creating parent dirs) from JS.
+    window.writeBytes = (path, b64) => {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const slash = path.lastIndexOf("/");
+      if (slash > 0) pyodide.FS.mkdirTree(path.slice(0, slash));
+      pyodide.FS.writeFile(path, bytes);
+    };
+
+    boot().then(() => { statusEl.textContent = "ready"; })
+          .catch((e) => { window.bootError = String(e); statusEl.textContent = "boot failed"; });
+  </script>
+</body>
+</html>

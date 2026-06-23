@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPIKE — pause/resume the cooperative run loop</title>
+<style>
+  body { background:#14151a; color:#d8dae5; font:14px ui-monospace,monospace; margin:0; padding:12px; }
+  #status { display:inline-block; padding:2px 8px; border-radius:6px; background:#1c1e26; }
+  #status.running { color:#7bd88f; }
+  #status.paused  { color:#f0a45d; }
+  #status.error   { color:#ff6e7f; }
+  canvas { display:block; image-rendering:pixelated; border:1px solid #2c2f3a; margin-top:8px; }
+  #log { white-space:pre; margin-top:8px; color:#8a8fa3; max-height:200px; overflow:auto; }
+</style>
+</head>
+<body>
+  <div>
+    status: <span id="status">starting…</span>
+    &nbsp; counter: <span id="counter">–</span>
+  </div>
+  <canvas id="canvas" width="160" height="120"></canvas>
+  <div id="log"></div>
+
+<script type="module">
+// ---------------------------------------------------------------------------
+// DE-RISK SPIKE: prove PAUSE/RESUME for the cooperative run loop.
+//
+// We reproduce the engine's REAL cooperative pattern from index.html — the
+// single per-frame chokepoint __yield__ (619-631), the _state dict (566), the
+// task slot _state['task'], _start/_stop (759-770) — then ADD the proposed
+// mechanism: a paused asyncio.Event that __yield__ awaits at the TOP of every
+// frame. Pause clears the event (loop blocks at next frame, task stays alive);
+// Resume sets it (loop continues from where it left off). 'paused' is a new
+// ADDITIVE status token alongside the existing running/finished/stopped.
+//
+// Two sample loops are exercised to demonstrate the gate covers BOTH the
+// single-file flavor (_start, top-level while + await __yield__) and the
+// project flavor (_start_project, entry awaits an imported module's async
+// game loop) — they share the SAME __yield__, so ONE event gates both.
+// ---------------------------------------------------------------------------
+
+const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";   // matches index.html
+const statusEl  = document.getElementById("status");
+const counterEl = document.getElementById("counter");
+const logEl     = document.getElementById("log");
+const canvasEl  = document.getElementById("canvas");
+const ctx = canvasEl.getContext("2d");
+
+function setStatus(cls, text) { statusEl.className = cls; statusEl.textContent = text; }
+function log(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+// The harness reads these JS-side mirrors so it can assert without poking Python.
+window.__counter = 0;
+window.__setCounter = (n) => { window.__counter = n; counterEl.textContent = n; };
+// Draw a frame whose top-left pixel encodes the counter — the harness samples it
+// to detect "advancing" vs "frozen" purely from canvas pixels (like verify.mjs).
+window.__draw = (n) => {
+  ctx.fillStyle = `rgb(${n % 256}, ${(n * 3) % 256}, 90)`;
+  ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+};
+
+// --- The cooperative core, copied verbatim-in-spirit from index.html BOOT_PY ---
+// Only ADDITIVE lines (marked  # +PAUSE) differ from the shipped engine. This is
+// exactly what the real wiring would insert.
+const SPIKE_PY = String.raw`
+import asyncio, traceback
+from js import window
+
+_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0, "via_project": False}
+
+# +PAUSE: a gate the loop awaits. set() == running, clear() == paused.
+# Created already-set so the default (un-paused) path is a no-op cost.
+_pause_gate = asyncio.Event()
+_pause_gate.set()
+_state["paused"] = False
+
+async def __yield__():
+    # +PAUSE: the ONLY new line in the real __yield__ — wait here while paused.
+    # When set (normal), wait() returns immediately (cheap). When cleared, this
+    # suspends the coroutine at the frame boundary; the task object stays alive.
+    await _pause_gate.wait()
+    d, ticked, flipped = _state["delay"], _state["ticked"], _state["flipped"]
+    _state.update(delay=0.0, ticked=False, flipped=False)
+    if d > 0:
+        await asyncio.sleep(d)
+    elif ticked:
+        await asyncio.sleep(0)
+    elif flipped:
+        await asyncio.sleep(1 / 60)
+    else:
+        _state["n"] += 1
+        if _state["n"] % 256 == 0:
+            await asyncio.sleep(0)
+
+# +PAUSE: additive controls. They do NOT touch _state['task'] (pause != stop).
+def _pause():
+    if _state["task"] and not _state["task"].done():
+        _pause_gate.clear()
+        _state["paused"] = True
+        return True
+    return False
+
+def _resume():
+    if _state["paused"]:
+        _pause_gate.set()
+        _state["paused"] = False
+        return True
+    return False
+
+# --- existing run management (unchanged shape from index.html) ---
+async def _run(coro_factory):
+    try:
+        # +PAUSE: a fresh run must start un-paused (mirror _start's _state reset).
+        await coro_factory()
+        return "ok"
+    except asyncio.CancelledError:
+        return "stopped"
+    except BaseException:
+        traceback.print_exc()
+        return "error"
+
+def _start(coro_factory):
+    _stop()
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, paused=False)
+    _pause_gate.set()                 # +PAUSE: clear any leftover pause from a prior run
+    _state["task"] = asyncio.ensure_future(_run(coro_factory))
+    return _state["task"]
+
+def _stop():
+    t = _state["task"]
+    if t and not t.done():
+        t.cancel()
+        _pause_gate.set()             # +PAUSE: don't leave a cancelled task wedged behind the gate
+        _state["paused"] = False
+        return True
+    return False
+
+# ----------------------------------------------------------------------------
+# Sample loop #1 — SINGLE-FILE flavor: a top-level 'while True' that advances a
+# visible counter and draws each frame, awaiting __yield__ every iteration. This
+# is exactly the shape index.html's AST transform produces from user code:
+#     while True:
+#         ... draw ...
+#         await __yield__()
+async def _single_file_loop():
+    n = 0
+    while True:
+        n += 1
+        window.__setCounter(n)
+        window.__draw(n)
+        _state["ticked"] = True       # emulate clock.tick(): ~next-tick cadence
+        await __yield__()
+
+# Sample loop #2 — PROJECT flavor: the entry awaits a "module" coroutine that
+# owns the game loop (mirrors _run_project: entry -> await imported async def
+# game()). Same __yield__, so the SAME gate suspends it.
+async def _project_module_game():
+    n = 1000                          # distinct base so we can tell which loop ran
+    while True:
+        n += 1
+        window.__setCounter(n)
+        window.__draw(n)
+        _state["ticked"] = True
+        await __yield__()
+
+async def _project_entry():
+    # entry-file code that hands off to an imported module's cooperative function
+    await _project_module_game()
+
+def _start_single():
+    return _start(_single_file_loop)
+
+def _start_project():
+    return _start(_project_entry)
+
+# Status-token protocol check: 'paused' is purely ADDITIVE. Prove the existing
+# tokens are untouched by listing them next to the new one.
+_STATUS_TOKENS = ("running", "finished", "stopped", "error", "paused")
+`;
+
+let pyodide = null;
+async function boot() {
+  setStatus("boot", "loading Python…");
+  const mod = await import(PYODIDE_BASE + "pyodide.mjs");
+  pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
+  pyodide.setStdout({ batched: (s) => log("[py] " + s) });
+  pyodide.setStderr({ batched: (s) => log("[py-err] " + s) });
+  await pyodide.runPythonAsync(SPIKE_PY);
+  window.pyodide = pyodide;          // harness reaches pyodide like index.html does
+  setStatus("ready", "ready");
+  log("booted, ready");
+}
+const booted = boot().catch((e) => { setStatus("error", "boot failed"); log(String(e)); throw e; });
+
+// JS-side run wrappers that mirror index.html's run()/stop() status mapping, so
+// the harness can assert on #status exactly as it does against the real app.
+let runTask = null;
+async function runLoop(which) {
+  await booted;
+  window.__setCounter(0);
+  const startName = which === "project" ? "_start_project" : "_start_single";
+  const start = pyodide.globals.get(startName);
+  const task = start(); start.destroy();
+  runTask = task;
+  setStatus("running", "running");
+  task.then((kind) => {
+    if (runTask !== task) return;
+    if (kind === "error") return setStatus("error", "error — see console");
+    setStatus("ready", kind === "stopped" ? "stopped" : "finished");
+  }).catch(() => { if (runTask === task) setStatus("ready", "stopped"); });
+}
+function pauseLoop()  { if (pyodide && pyodide.runPython("_pause()"))  setStatus("paused", "paused"); }
+function resumeLoop() { if (pyodide && pyodide.runPython("_resume()")) setStatus("running", "running"); }
+
+// Expose for the headless harness (and a tiny manual-test surface).
+window.spike = { runLoop, pauseLoop, resumeLoop };
+</script>
+</body>
+</html>

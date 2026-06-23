@@ -96,15 +96,26 @@ else fail('no AudioContext captured (shim not installed?)');
 const acState = await page.evaluate(() => (window.__audioContexts || []).map(c => c.state));
 console.log('info - AudioContext states after Run gesture: ' + acState.join(','));
 
-// 6. Oversize file (>10 MB) is rejected: no MEMFS file, chip count unchanged.
-const chipBefore = await page.textContent('#assetChip');
+// 6. No hard cap: a >10 MB file is accepted, and the popover shows a real
+//    browser-storage metric (used vs available).
 await page.setInputFiles('#assetInput',
   { name: 'big.png', mimeType: 'image/png', buffer: Buffer.alloc(11 * 1024 * 1024) });
-await page.waitForTimeout(150);
-const chipAfterBig = await page.textContent('#assetChip');
+await page.waitForTimeout(250);
 const bigInFs = await page.evaluate(() => pyodide.FS.analyzePath('big.png').exists);
-if (chipBefore === chipAfterBig && !bigInFs) ok('oversize file rejected');
-else fail(`oversize not rejected (chip ${chipBefore}->${chipAfterBig}, memfs=${bigInFs})`);
+if (bigInFs) ok('large (11 MB) file accepted — no hard cap');
+else fail('large file rejected — cap not removed');
+await page.evaluate(() => {
+  const p = document.getElementById('assetPanel'); p.hidden = false;
+  if (typeof renderAssetPanel === 'function') renderAssetPanel();
+});
+await page.waitForFunction(() => {
+  const el = document.getElementById('apStorage');
+  return el && /storage/i.test(el.textContent) && /\d/.test(el.textContent);
+}, null, { timeout: 5000 }).catch(() => {});
+const storageText = await page.evaluate(() => document.getElementById('apStorage')?.textContent || '');
+if (/storage/i.test(storageText) && /\d/.test(storageText)) ok('popover shows browser-storage metric: ' + storageText.trim());
+else fail('no storage metric in popover (got ' + JSON.stringify(storageText) + ')');
+await page.evaluate(() => { document.getElementById('assetPanel').hidden = true; });  // reset for test 7's chip toggle
 
 // 7. MP3 upload shows a warning flag in the popover.
 await page.setInputFiles('#assetInput',

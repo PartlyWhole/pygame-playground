@@ -56,9 +56,12 @@ blip.play()                 # call from a key/mouse handler — see the autoplay
 - **Autoplay:** browsers won't play audio until you interact with the page.
   Pressing **▶ Run** counts, and so does clicking the canvas; if a sound seems
   silent, click the canvas once.
-- **Where they live:** uploads persist in your browser (IndexedDB), up to 10 MB
-  per file / 64 MB total. They are **local to your browser** — they do not travel
-  with 🔗 Share links or collab rooms. Use the 📁 popover to remove or clear them.
+- **Where they live:** uploads persist in your browser (IndexedDB) — as much as
+  your browser's storage quota allows (often a few GB). The 📁 popover shows how
+  much storage is used vs available and warns when you cross ~80%; if a save ever
+  fails you're told the file works for that session only. Assets are **local to
+  your browser** — they do not travel with 🔗 Share links or collab rooms. Use the
+  popover to remove or clear them.
 
 `test/assets.mjs` is the headless asset test battery (upload → blit → pixel,
 persistence across reload, sound API path, drop-anywhere). Audio *output* can't be

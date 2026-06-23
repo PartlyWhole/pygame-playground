@@ -59,8 +59,11 @@ real headless Chromium before this design. Findings — these are load-bearing:
   handoff and exercised by the test harness. (User decision — keeps shipped
   surface small.)
 - **Formats:** images PNG/JPG/GIF/BMP; sound **WAV/OGG only** (warn on MP3/M4A).
-- **Size budget:** 10 MB per file, 64 MB total; oversize rejected with a clear
-  message.
+- **Size budget:** ~~10 MB per file, 64 MB total; oversize rejected~~ —
+  **superseded 2026-06-22 (post-deploy, at user request):** no app-imposed cap.
+  The popover shows real browser storage used vs available (Storage API
+  `navigator.storage.estimate()`), warns at ~80% full, and a failed save degrades
+  to session-only with a message.
 - **Name collision:** a new upload with an existing name **overwrites** it (noted
   in the UI).
 

@@ -69,6 +69,10 @@ try {
     await A.waitForFunction(() => document.querySelector('.remote-cursor') !== null, null, { timeout: 20000 })
       .then(() => console.log('REMOTE CURSOR OK'), () => { console.error('REMOTE CURSOR FAIL'); process.exitCode = 1; });
     // fun anon name (adjective + animal, not "anon-xxxx")
+    // Wait for the name to propagate via presence before sampling (it can lag the
+    // cursor render by a beat — sampling immediately was flaky and read "").
+    await A.waitForFunction(() => /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(document.querySelector('.remote-flag')?.textContent || ''),
+      null, { timeout: 20000 }).catch(() => {});
     const flag = await A.evaluate(() => document.querySelector('.remote-flag')?.textContent || '');
     console.log('peer name:', JSON.stringify(flag), /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(flag) ? '(OK)' : '(BAD)');
     if (!/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(flag)) { console.error('NAME FAIL'); process.exitCode = 1; }

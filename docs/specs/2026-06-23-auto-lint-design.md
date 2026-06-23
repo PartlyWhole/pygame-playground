@@ -38,10 +38,11 @@ Non-goals (v1): style/formatting lint (deliberately suppressed — see noise); a
 ## Decisions (locked)
 
 - **Engine: `@astral-sh/ruff-wasm-web`, pinned `@0.15.18`, loaded lazily from
-  esm.sh.** Chosen over pyflakes-in-Pyodide because it runs off the main thread
-  (lint never hitches a running game or the cooperative loop), needs no Pyodide
-  boot or `micropip` install, is fast on every keystroke, and gives syntax +
-  semantic checks in one tool. **Trade-offs (accepted):** a new CDN origin
+  esm.sh.** Chosen over pyflakes-in-Pyodide because it runs in its own wasm module,
+  independent of the Pyodide interpreter (so a check never competes with a running
+  game for the Python runtime, and a check is ~2 ms vs pyflakes' ~27 ms — no
+  perceptible hitch), needs no Pyodide boot or `micropip` install, and gives syntax
+  + semantic checks in one tool. **Trade-offs (accepted):** a new CDN origin
   (esm.sh — pinned for reproducibility; jsdelivr `/+esm` is a documented backup)
   and a one-time wasm download — both paid lazily, so the solo first-paint /
   run-a-game path is unaffected. (Alternative considered: pyflakes via the
@@ -134,4 +135,4 @@ edit / switch tab ─► CM lint addon (debounced 350ms) ─► getAnnotations(t
 
 Single static `index.html`, no backend, no app build step, no API keys. The
 linter (ruff-wasm + CM lint addon) loads lazily on first edit, so first paint and
-the run-a-game path are unchanged. Lint is off-thread and advisory.
+the run-a-game path are unchanged. Lint is independent of Pyodide and advisory.

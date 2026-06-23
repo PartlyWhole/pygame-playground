@@ -181,5 +181,19 @@ and first paint stay library-free.
 
 `test/save.mjs` is the headless battery for this feature.
 
+## Auto-lint
+
+The editor checks your Python as you type — undefined names (typos), unused
+imports, and syntax errors show up as gutter markers with a hover message
+(powered by [ruff-wasm](https://github.com/astral-sh/ruff), loaded lazily from a
+CDN only on your first edit; style/formatting nits are intentionally *not*
+flagged, so good game code stays marker-free). It runs in its own wasm module
+(independent of the Python runtime, and a check is ~2 ms), so it never interrupts a
+running game, and stays out of the way until you start typing —
+first paint and the run-a-game path load nothing extra. If the checker can't load
+(offline / CDN down), linting silently stays off and the editor works as usual.
+
+`test/lint.mjs` is the headless battery for this feature.
+
 `verify.mjs` is a local headless-Chromium smoke test (boot, animation, input, error paths);
 it expects a local server on port 8923 and a machine with Playwright's Chromium cache.

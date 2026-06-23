@@ -103,5 +103,69 @@ top-level loops are always safe, and the Stop button covers those.
 Uploaded assets are kept in your browser only (IndexedDB); clearing site data removes them,
 and they're never uploaded anywhere.
 
+## Multiple files
+
+Click **+** in the editor tab strip to add `.py` files. One file is the **entry**
+(marked with a ▸ badge, defaults to `main.py`); **▶ Run** always runs the entry,
+which can `import` the others by name. The **⋯** menu on each tab handles *set as
+entry* / *rename* / *delete*.
+
+```python
+# main.py  (the entry)
+import pygame
+from enemy import Enemy
+pygame.init()
+screen = pygame.display.set_mode((480, 320))
+goblin = Enemy("goblin.png")     # a normal cross-file import
+clock = pygame.time.Clock()
+while True:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            raise SystemExit
+    screen.fill((18, 22, 30))
+    goblin.draw(screen)
+    pygame.display.flip()
+    clock.tick(60)
+```
+
+```python
+# enemy.py
+import pygame
+class Enemy:
+    def __init__(self, sprite):
+        self.image = pygame.image.load(sprite).convert_alpha()   # returns a real value
+    def draw(self, screen):
+        screen.blit(self.image, (200, 140))
+```
+
+**Pacing works across files.** A game loop, `time.sleep`, or `pygame.time.wait`
+inside a **module-level function** of an imported file runs cooperatively — it
+paces without freezing the tab, exactly like a loop in the entry. And **pure
+helper functions and classes work normally**: a call like
+`self.image = sprites.load("x.png")` in a method, or a module-level
+`IMG = load(...)`, returns a real value (not something you have to await).
+
+Limitations (v1):
+
+- **Flat files only** — no folders, packages, or subdirectories. Names are bare
+  `name.py` sharing one namespace.
+- **Renaming a file does not rewrite `import` statements** in other files — fix
+  those references by hand (you'll get an inline reminder when you rename).
+- **A game loop at a module's top level, or inside a class method, isn't
+  supported.** You'll get a clear message instead of a freeze. Keep game loops in
+  the entry or in a module-level function.
+- **A loop/pause-bearing function must be called from the entry or another
+  cooperative function.** Calling one by its bare same-module name from a class
+  method or module-level code gives a friendly error; reaching it indirectly via a
+  cross-module attribute (`other.run()`) or an alias is silently skipped (a rare
+  edge — you don't normally call a game-loop function that way).
+- **Multi-file projects are solo.** Live **👥 Collaborate** shares only the entry
+  file (you'll be asked to confirm); your full project stays saved locally and
+  returns when you reload. The **🔗 Share** link carries the *whole* project — but
+  a very large project may exceed the URL size limit, in which case use the browser
+  save instead.
+
+`test/multifile.mjs` is the headless battery for this feature.
+
 `verify.mjs` is a local headless-Chromium smoke test (boot, animation, input, error paths);
 it expects a local server on port 8923 and a machine with Playwright's Chromium cache.

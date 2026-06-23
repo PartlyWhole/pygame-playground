@@ -129,6 +129,7 @@
   <button id="runBtn">▶ Run</button>
   <button id="stopBtn">■ Stop</button>
   <button id="shareBtn" title="Copy a link that opens this code">🔗 Share</button>
+  <button id="saveBtn" title="Download your program (.py, or a project .zip)">💾 Save</button>
   <button id="collabBtn" title="Start a live collaboration room">👥 Collaborate</button>
   <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
   <span id="assetChip" title="Uploaded assets — drop files anywhere, or click to add">📁</span>
@@ -1011,6 +1012,8 @@ const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
     "Ctrl-[": (cm) => cm.indentSelection("subtract"),
     "Cmd-/": "toggleComment",
     "Ctrl-/": "toggleComment",
+    "Cmd-S": () => { saveProject(); },
+    "Ctrl-S": () => { saveProject(); },
     "Cmd-Backspace": "delGroupBefore",
   },
 });
@@ -1414,6 +1417,48 @@ document.getElementById("shareBtn").addEventListener("click", async (e) => {
   btn.textContent = await navigator.clipboard.writeText(url).then(() => "✓ copied", () => "✓ in URL bar");
   setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
 });
+
+// ---------------------------------------------------------------- save / download
+const JSZIP_CDN = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+let _jszip = null;
+function loadJSZip() {
+  // Lazy: only fetched the first time a zip is produced, so the .py-only path
+  // and first paint stay library-free.
+  return _jszip ??= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = JSZIP_CDN;
+    s.onload = () => resolve(window.JSZip);
+    s.onerror = () => { _jszip = null; reject(new Error("JSZip load failed")); };
+    document.head.appendChild(s);
+  });
+}
+function downloadBlob(data, filename, type = "application/octet-stream") {
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function saveProject() {
+  // Lone file with no uploaded assets -> a plain .py (no library needed).
+  if (!project.isMulti() && assetFS.list.length === 0) {
+    downloadBlob(project.text(project.entry), project.entry, "text/x-python");
+    return;
+  }
+  // Otherwise a self-contained zip of all .py files + all assets.
+  let JSZip;
+  try { JSZip = await loadJSZip(); }
+  catch { logLine("Couldn't load the zip library — check your connection.", "sys"); return; }
+  const zip = new JSZip();
+  const files = project.serialize().files;
+  for (const name of Object.keys(files)) zip.file(name, files[name]);
+  for (const rec of await assetStore.getAll()) zip.file(rec.name, new Uint8Array(rec.bytes));
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, "pygame-project.zip");
+}
+document.getElementById("saveBtn").addEventListener("click", saveProject);
+
 exampleSel.addEventListener("change", () => {
   const differs = project.isMulti() || editor.getValue() !== loadedExample;
   const msg = project.isMulti()

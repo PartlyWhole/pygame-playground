@@ -788,6 +788,83 @@ const storage = {
   get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
   set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch {} },
 };
+// ---------------------------------------------------------------- project model (multi-file)
+// One source of truth for the set of .py files + which is the entry. Text lives
+// in per-file CodeMirror.Doc objects (per-file undo). Zero pyodide dependency.
+const PROJECT_KEY = "pygame-playground:project";
+const isModuleName = (name) =>
+  /^[A-Za-z_][A-Za-z0-9_]*\.py$/.test(name);     // identifier stem + .py
+const project = {
+  files: {}, order: [], entry: "main.py", active: "main.py",
+  text(name) { return this.files[name].getValue(); },     // live Doc read, never cached
+  isMulti() { return this.order.length > 1; },
+  serialize() {
+    const files = {};
+    for (const name of this.order) files[name] = this.files[name].getValue();
+    return { files, order: [...this.order], entry: this.entry };
+  },
+  // Build docs from a plain record; the `active` doc becomes editor.getDoc() (adopt).
+  load(rec) {
+    const order = (rec.order && rec.order.length ? rec.order : Object.keys(rec.files));
+    this.files = {};
+    for (const name of order) this.files[name] = new CodeMirror.Doc(rec.files[name] ?? "", "python");
+    this.order = order;
+    this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
+    this.active = order.includes(rec.active) ? rec.active : this.entry;
+    editor.swapDoc(this.files[this.active]);
+  },
+  setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); } },
+  add(name, text = "") {
+    if (!isModuleName(name) || this.files[name]) return false;
+    this.files[name] = new CodeMirror.Doc(text, "python");
+    this.order.push(name);
+    return true;
+  },
+  rename(oldName, newName) {
+    if (!isModuleName(newName) || this.files[newName] || !this.files[oldName]) return false;
+    this.files[newName] = this.files[oldName]; delete this.files[oldName];
+    this.order[this.order.indexOf(oldName)] = newName;
+    if (this.entry === oldName) this.entry = newName;
+    if (this.active === oldName) this.active = newName;
+    if (window.pyodide) try { if (pyodide.FS.analyzePath(oldName).exists) pyodide.FS.unlink(oldName); } catch {}
+    return true;
+  },
+  remove(name) {
+    if (this.order.length <= 1 || !this.files[name]) return false;
+    delete this.files[name];
+    this.order = this.order.filter(n => n !== name);
+    if (this.entry === name) this.entry = this.order.includes("main.py") ? "main.py" : this.order[0];
+    if (this.active === name) this.setActive(this.entry);
+    if (window.pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {}
+    return true;
+  },
+  setEntry(name) { if (this.files[name]) this.entry = name; },
+};
+window.project = project;   // test seam
+
+// Tolerant deserialize for saved-project / #project= / migration seed.
+function deserializeProject(obj) {
+  if (!obj || typeof obj.files !== "object" || !obj.files) return null;
+  const names = Object.keys(obj.files);
+  if (!names.length) return null;
+  for (const n of names) if (!isModuleName(n) || typeof obj.files[n] !== "string") return null;
+  // Keep every file reachable: honor obj.order but append any files it omits, so a
+  // hand-crafted / older #project= record can never silently drop a file.
+  const order = Array.isArray(obj.order)
+    ? [...obj.order.filter(n => names.includes(n)), ...names.filter(n => !obj.order.includes(n))]
+    : names;
+  return { files: obj.files, order, entry: obj.entry, active: obj.active };
+}
+function projectFromHash() {
+  try {
+    if (!location.hash.startsWith("#project=")) return null;
+    return deserializeProject(JSON.parse(b64url.dec(location.hash.slice(9))));
+  } catch { return null; }
+}
+function savedProject() {
+  try { const raw = localStorage.getItem(PROJECT_KEY); return raw ? deserializeProject(JSON.parse(raw)) : null; }
+  catch { return null; }
+}
 // ---------------------------------------------------------------- assets (uploadable sprites & sounds)
 // Bytes live in IndexedDB (assetStore) and are mirrored into Pyodide's MEMFS
 // (assetFS) so plain pygame code resolves them by name. Lazy + additive: the
@@ -954,20 +1031,40 @@ let _amCache = null;
 
 let loadedExample = EXAMPLES[exampleSel.value];
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
-if (roomFromHash) {
-  editor.setValue("");                                  // blank until the room's code arrives (no default flash)
-  joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
-} else {
-  editor.setValue(codeFromHash() ?? storage.get() ?? loadedExample);
+loadInitialProject();
+if (roomFromHash) joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
+
+// Build the initial project. Precedence: #room (single-file, joined async above) >
+// #project > #code > saved project > legacy code > default example.
+function loadInitialProject() {
+  if (roomFromHash) { project.load({ files: { "main.py": "" } }); return; }   // blank until room arrives
+  const fromProject = projectFromHash();
+  if (fromProject) { project.load(fromProject); return; }
+  const fromCode = codeFromHash();
+  if (fromCode != null) { project.load({ files: { "main.py": fromCode } }); return; }
+  const saved = savedProject();
+  if (saved) { project.load(saved); return; }
+  const legacy = storage.get();
+  if (legacy != null) { project.load({ files: { "main.py": legacy } }); return; }   // migrate
+  project.load({ files: { "main.py": loadedExample } });
 }
 
 let saveTimer = null;
-editor.on("change", () => {
-  if (collab.active) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => storage.set(editor.getValue()), 400);
-});
-addEventListener("beforeunload", () => { if (!collab.active) storage.set(editor.getValue()); });   // flush latest on close
+let dirty = false;                                        // a real edit happened since the last persist
+function flushSave() {
+  if (collab.active) return;                              // never clobber the solo draft while in a room
+  dirty = false;
+  const rec = project.serialize(); rec.active = project.active;
+  try { localStorage.setItem(PROJECT_KEY, JSON.stringify(rec)); } catch {}
+  // Rollback safety: mirror single-file text into the legacy key so an older
+  // cached build still sees recent work. Never write a partial multi-file state.
+  if (!project.isMulti()) storage.set(project.text(project.active));
+}
+window.__flushSave = flushSave;                            // test seam
+editor.on("change", () => { if (collab.active) return; dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 400); });
+// Only flush on close when there's an unsaved edit, so navigating away never
+// re-persists the loaded project over a programmatically-cleared key.
+addEventListener("beforeunload", () => { if (dirty) flushSave(); });
 
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
   const url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());

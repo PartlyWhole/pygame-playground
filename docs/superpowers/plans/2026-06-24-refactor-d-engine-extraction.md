@@ -463,7 +463,9 @@ Inside the object returned by `createEngine`, add (preserving the EXACT order of
       return inst;
     },
 ```
-Update `createEngine` so `getPyodide` falls back to the engine's own `_py` if the host did not inject one — i.e. `const py = () => (deps && deps.getPyodide && deps.getPyodide()) || self._py;`. Simplest: keep `getPyodide: () => pyodide` injected by the host (the host assigns `pyodide` from the return value), so `py()` keeps working unchanged. **Do NOT remove the host's `getPyodide` injection.**
+Keep `getPyodide: () => pyodide` injected by the host so `py()` keeps working unchanged. **Do NOT remove the host's `getPyodide` injection.**
+
+**DEVIATION FROM THE DESIGN DEP LIST (discovered during P3, required):** add a `setPyodide(inst)` dep and call it inside `engine.boot()` *immediately* after `const inst = await d.loadPyodide();` (before stdout/canvas/runPython/hydrate). Reason: the original host `boot()` assigned `pyodide` right after `loadPyodide()`, so every later step ran against a live host `pyodide`. If the host only assigns `pyodide = await engine.boot(...)` (after boot returns), then `assetFS.hydrateAll()` → `_memfs` (which guards `if (!pyodide) return;`, index.html:1249) runs mid-boot with `pyodide === null` and silently no-ops every MEMFS write — the asset model rehydrates but MEMFS stays empty (`assets.mjs` persist check fails `treeRow=true memfs=false`, plus the sprite-blit pixel check). The setter restores the exact original ordering. Host injects `setPyodide: (inst) => { pyodide = inst; }`.
 
 - [ ] **Step 3: Collapse the host `boot()` to a deps-injecting wrapper**
 
@@ -478,6 +480,7 @@ async function boot() {
       const mod = await import(PYODIDE_BASE + "pyodide.mjs");
       return mod.loadPyodide({ indexURL: PYODIDE_BASE });
     },
+    setPyodide: (inst) => { pyodide = inst; },   // publish to the bare-name seam BEFORE hydrate reads it
     canvas: canvasEl,
     setStatus,                                   // host owns the exact #status token strings
     logSink: { out: (s) => logLine(s, "out"), err: (s) => logLine(s, "err") },

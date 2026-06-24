@@ -585,6 +585,58 @@ def _purge_project_files():
 export function createEngine(deps) {
   const py = () => deps.getPyodide();
   return {
+    // Full boot, in the EXACT order of the old host boot(): audio-proxy first, then Pyodide
+    // load, canvas+SDL registration, pygame-ce, BOOT_PY then PROJECT_PY (strict order —
+    // PROJECT_PY reuses BOOT_PY's names), then host asset hydration. Returns the pyodide
+    // instance so the host can assign it to its top-level `let pyodide` (the bare-name test
+    // seam). deps for boot:
+    //   loadPyodide: async () => pyodide   (host owns the CDN base + version pin)
+    //   setPyodide: (inst) => void         (host publishes the instance to its top-level
+    //                                       `let pyodide` IMMEDIATELY — before stdout/canvas/
+    //                                       runPython/hydrate, all of which read the host var;
+    //                                       e.g. assetFS._memfs guards on `if (!pyodide)`)
+    //   canvas: the #canvas element
+    //   setStatus: (cls, token) => void    (host owns the exact #status token strings)
+    //   logSink: { out:(s)=>void, err:(s)=>void }
+    //   hydrateAssets: async () => void     (host's assetFS.hydrateAll)
+    async boot(d) {
+      // Capture SDL's Web Audio context(s) so the Run click (a user gesture) can resume
+      // them — headed browsers start an AudioContext suspended until a gesture. Inert
+      // unless the user's program calls pygame.mixer. (Proxy returns real instances.)
+      // MUST run before pygame.mixer loads → keep it first.
+      window.__audioContexts = window.__audioContexts || [];
+      for (const key of ["AudioContext", "webkitAudioContext"]) {
+        const Orig = window[key];
+        if (!Orig || Orig.__wrapped) continue;
+        const Wrapped = new Proxy(Orig, { construct(T, a) { const c = new T(...a); window.__audioContexts.push(c); return c; } });
+        Wrapped.__wrapped = true;
+        window[key] = Wrapped;
+      }
+      d.setStatus("boot", "loading Python…");
+      const inst = await d.loadPyodide();
+      // Publish to the host's bare-name `pyodide` NOW (matches the original boot order, where
+      // `pyodide = await loadPyodide()` was set before everything below). hydrateAssets()/
+      // _memfs and the lazy loaders read the host var, not this local `inst`.
+      if (d.setPyodide) d.setPyodide(inst);
+      inst.setStdout({ batched: (s) => d.logSink.out(s) });
+      inst.setStderr({ batched: (s) => d.logSink.err(s) });
+      // Register the canvas with SDL BEFORE pygame is imported (load-bearing order),
+      // and scope SDL's keyboard capture to the canvas so the editor keeps working.
+      if (inst.canvas && inst.canvas.setCanvas2D) {
+        inst.canvas.setCanvas2D(d.canvas);
+      } else {
+        inst._module.canvas = d.canvas;
+      }
+      inst.runPython(
+        'import os; os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"');
+      d.setStatus("boot", "loading pygame…");
+      await inst.loadPackage("pygame-ce");
+      await inst.runPythonAsync(BOOT_PY);
+      await inst.runPythonAsync(PROJECT_PY);
+      await d.hydrateAssets();   // rehydrate any persisted uploads into MEMFS
+      d.setStatus("ready", "ready");
+      return inst;
+    },
     // Single-file path: snapshot `src` NOW and schedule the cooperative task.
     start(src) {
       const f = py().globals.get("_start");

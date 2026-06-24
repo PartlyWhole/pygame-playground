@@ -2812,39 +2812,27 @@ function syncRunControls() {
 }
 
 async function boot() {
-  // Capture SDL's Web Audio context(s) so the Run click (a user gesture) can resume
-  // them — headed browsers start an AudioContext suspended until a gesture. Inert
-  // unless the user's program calls pygame.mixer. (Proxy returns real instances.)
-  window.__audioContexts = window.__audioContexts || [];
-  for (const key of ["AudioContext", "webkitAudioContext"]) {
-    const Orig = window[key];
-    if (!Orig || Orig.__wrapped) continue;
-    const Wrapped = new Proxy(Orig, { construct(T, a) { const c = new T(...a); window.__audioContexts.push(c); return c; } });
-    Wrapped.__wrapped = true;
-    window[key] = Wrapped;
-  }
-  setStatus("boot", "loading Python…");
-  const ENG = await loadEngine();   // cooperative-engine Python source + createEngine (vendor/engine.mjs)
+  // The cooperative engine owns the boot sequence (audio-proxy → Pyodide load → canvas/SDL
+  // → pygame-ce → BOOT_PY/PROJECT_PY → asset hydrate). The host injects the few things the
+  // engine must stay agnostic of: the Pyodide loader (CDN base + version pin live HERE), the
+  // canvas element, the #status writer (host owns the exact token strings), the log sink, and
+  // asset hydration. CRITICAL: assign the returned instance to the top-level `let pyodide` —
+  // ~40 tests reach the interpreter by BARE NAME `pyodide` (not window.pyodide).
+  const ENG = await loadEngine();
   engine = engine || ENG.createEngine({ getPyodide: () => pyodide });
-  const mod = await import(PYODIDE_BASE + "pyodide.mjs");
-  pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
-  pyodide.setStdout({ batched: (s) => logLine(s, "out") });
-  pyodide.setStderr({ batched: (s) => logLine(s, "err") });
-  // Register the canvas with SDL BEFORE pygame is imported (load-bearing order),
-  // and scope SDL's keyboard capture to the canvas so the editor keeps working.
-  if (pyodide.canvas && pyodide.canvas.setCanvas2D) {
-    pyodide.canvas.setCanvas2D(canvasEl);
-  } else {
-    pyodide._module.canvas = canvasEl;
-  }
-  pyodide.runPython(
-    'import os; os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"');
-  setStatus("boot", "loading pygame…");
-  await pyodide.loadPackage("pygame-ce");
-  await pyodide.runPythonAsync(ENG.BOOT_PY);
-  await pyodide.runPythonAsync(ENG.PROJECT_PY);
-  await assetFS.hydrateAll();   // rehydrate any persisted uploads into MEMFS
-  setStatus("ready", "ready");
+  pyodide = await engine.boot({
+    loadPyodide: async () => {
+      const mod = await import(PYODIDE_BASE + "pyodide.mjs");
+      return mod.loadPyodide({ indexURL: PYODIDE_BASE });
+    },
+    setPyodide: (inst) => { pyodide = inst; },   // publish the instance to the bare-name seam
+                                                 // BEFORE hydrate/_memfs/lazy-loaders read it
+    canvas: canvasEl,
+    setStatus,                                                    // host owns the exact #status tokens
+    logSink: { out: (s) => logLine(s, "out"), err: (s) => logLine(s, "err") },
+    hydrateAssets: () => assetFS.hydrateAll(),
+  });
+  return pyodide;
 }
 const booted = boot().catch((e) => {
   setStatus("error", "boot failed");

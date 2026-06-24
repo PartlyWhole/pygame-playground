@@ -74,6 +74,19 @@ const stopped = await page.evaluate(() =>
 if (live === 1 && stopped === 1) ok('host run() → engine.start drives exactly one task; engine.stop clears it');
 else fail(`P2 task lifecycle wrong: live=${live} stopped=${stopped}`);
 
+// C5 (P3): engine.mjs is loaded by DYNAMIC import (no static <script type=module> for it),
+// and the host <script> stays classic so bare-name `pyodide` survives. Assert no module
+// script tag references engine.mjs and the seam still resolves post-boot.
+const paint = await page.evaluate(() => ({
+  noStaticEngineScript: ![...document.querySelectorAll('script[type="module"]')]
+    .some((s) => (s.src || '').includes('engine.mjs')),
+  bareSeam: typeof pyodide !== 'undefined' && !!pyodide
+    && !!pyodide.runPython("1 if '_start' in dict(globals()) else 0"),
+}));
+if (paint.noStaticEngineScript && paint.bareSeam)
+  ok('engine.mjs is dynamic-imported (no static module script); bare-name seam intact post-boot');
+else fail(`P3 first-paint/seam wrong: ${JSON.stringify(paint)}`);
+
 await browser.close();
 console.log(`\nengine-extraction: ${pass} passed, ${failn} failed`);
 process.exit(failn ? 1 : 0);

@@ -314,36 +314,12 @@ const enemyAfter = await page.evaluate(() => window.project.files['enemy.py']?.g
 if (enemyAfter && enemyAfter.includes('ZZ = 9')) ok('non-active tab edit survives reload');
 else fail('non-active edit lost: ' + enemyAfter);
 
-// 7. Share button emits #project= for multi-file and round-trips on reload.
-await page.evaluate(() => {
-  window.project.load({ files: { 'main.py': 'import helper\nhelper.f()\n', 'helper.py': 'def f():\n    print("HI")\n' },
-                        order: ['main.py','helper.py'], entry: 'main.py', active: 'main.py' });
-  window.renderTabs();
-  navigator.clipboard.writeText = () => Promise.resolve();   // avoid clipboard perms
-});
-await page.click('#shareBtn');
-const hash = await page.evaluate(() => location.hash);
-if (hash.startsWith('#project=')) ok('Share emits #project= in multi-file mode');
-else fail('Share did not emit #project=: ' + hash);
-await page.goto(URL + hash, { waitUntil: 'load' });
-await booted().catch(() => fail('did not boot from #project='));
-const round = await page.evaluate(() => ({ order: window.project.order,
-  helper: window.project.files['helper.py']?.getValue() }));
-if (JSON.stringify(round.order) === '["main.py","helper.py"]' && round.helper.includes('HI'))
-  ok('#project= round-trips the whole project');
-else fail('#project= round-trip wrong: ' + JSON.stringify(round));
-
-// 7b. A malformed #project= falls through to the saved project (no clobber).
-await page.evaluate(() => localStorage.setItem('pygame-playground:project',
-  JSON.stringify({ files: { 'main.py': 'SAVED = 1\n' }, order: ['main.py'], entry: 'main.py' })));
-// Force a real document load (not a same-path fragment nav, which would only fire the
-// hashchange handler) so this exercises loadInitialProject's precedence as intended.
-await page.goto('about:blank');
-await page.goto(URL + '#project=not%20valid%20base64!!', { waitUntil: 'load' });
-await booted().catch(() => fail('did not boot (bad #project=)'));
-const fellThrough = await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
-if (fellThrough.includes('SAVED')) ok('malformed #project= falls through to saved project');
-else fail('bad #project= clobbered saved project: ' + fellThrough);
+// 7. (S7) REMOVED — the Share button (#shareBtn) + the legacy #project= LOAD reader
+//    were deleted (open-decisions #2, verdict B). The producer round-trip, the
+//    malformed-#project= fall-through (old check 7b), and the same-tab hashchange
+//    share-link test (formerly below check 10) all exercised the now-removed
+//    feature and were reconciled away. The NEW contract — button gone, #project=/
+//    #code= URLs ignored on boot, #room= unaffected — lives in test/share-removed.mjs.
 
 // 8 (perf sanity): a 2-file game with a per-frame cross-module call sustains animation.
 await page.goto(URL, { waitUntil: 'load' }); await booted();
@@ -371,27 +347,9 @@ await page.waitForFunction(() => /ModuleNotFoundError|No module named/.test(
   null, { timeout: 12_000 }).then(() => ok('no cross-run contamination: stale module unlinked'))
   .catch(() => fail('stale module still importable after dropping to single file'));
 
-// hashchange handler: same-tab share link prompts; cancel preserves the project, accept loads it.
-await page.goto(URL, { waitUntil: 'load' }); await booted();
-const hcHash = '#project=' + Buffer.from(JSON.stringify(
-  { files: { 'main.py': 'SHARED_HC = 9\n' }, order: ['main.py'], entry: 'main.py' })).toString('base64url');
-await page.evaluate(() => {
-  window.project.load({ files: { 'main.py': 'KEEP_HC = 1\n', 'x.py': 'Y = 2\n' }, order: ['main.py','x.py'], entry: 'main.py', active: 'main.py' });
-  window.renderTabs();
-});
-// cancel: confirm=false -> project NOT replaced
-await page.evaluate((h) => { window.confirm = () => false; location.hash = h; }, hcHash);
-await page.waitForTimeout(250);
-const hcCancel = await page.evaluate(() => ({ order: window.project.order,
-  val: document.querySelector('.CodeMirror').CodeMirror.getValue() }));
-if (hcCancel.order.length === 2 && hcCancel.val.includes('KEEP_HC')) ok('hashchange cancel preserves the current project');
-else fail('hashchange cancel lost the project: ' + JSON.stringify(hcCancel));
-// accept: confirm=true -> loads the shared single file (hash was stripped on cancel, so set it again)
-await page.evaluate((h) => { window.confirm = () => true; location.hash = h; }, hcHash);
-await page.waitForTimeout(250);
-const hcAccept = await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
-if (hcAccept.includes('SHARED_HC')) ok('hashchange accept loads a same-tab share link');
-else fail('hashchange accept did not load: ' + hcAccept);
+// (S7) REMOVED — the same-tab hashchange share-link handler (#project=/#code=)
+// was deleted with the legacy readers (open-decisions #2, verdict B). Opening a
+// share link in the current tab no longer prompts or loads. See test/share-removed.mjs.
 
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) fail('JS console errors: ' + realErrors.join(' | '));

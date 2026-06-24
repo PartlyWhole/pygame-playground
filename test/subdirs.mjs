@@ -299,39 +299,13 @@ await waitConsole(/RELOADED Enemy\(lvl=3, hp=30\)/)
 await stop();
 
 // =====================================================================================
-// 8. `#project=` round-trip with paths (design §7.1 #12). Produce a #project= share of a nested
-//    project via the share path, open that URL, assert project.order (with slashes) + a nested
-//    file's content round-trip. Extends multifile.mjs check 7 to paths.
+// 8. (S7) REMOVED — the `#project=`-with-paths round-trip (the share button PRODUCER +
+//    the legacy #project= LOAD reader) was deleted (open-decisions #2, verdict B).
+//    Path persistence still rides save→reload + zip, which §7.1 #11 already covers above
+//    (the package import that survives save→reload). The button/loader contract now lives
+//    in test/share-removed.mjs. The path-shaped deserialize tolerance stays exercised via
+//    savedProject() (localStorage), unaffected by the share-reader removal.
 // =====================================================================================
-await page.goto(URL, { waitUntil: 'load' }); await booted();
-await page.evaluate(({ pkg }) => {
-  window.project.load({
-    files: { ...pkg, 'main.py': 'from sprites import enemy\n' },
-    order: [...Object.keys(pkg), 'main.py'], entry: 'main.py', active: 'main.py',
-  });
-  if (typeof window.renderTabs === 'function') window.renderTabs();
-  navigator.clipboard.writeText = () => Promise.resolve();   // avoid clipboard perms
-}, { pkg: PKG });
-await page.click('#shareBtn');
-const shareHash = await page.evaluate(() => location.hash);
-if (shareHash.startsWith('#project=')) ok('Share emits #project= for a nested multi-file project');
-else fail('Share did not emit #project= for nested project: ' + shareHash);
-// Force a REAL document load (about:blank first), so this exercises loadInitialProject /
-// deserializeProject — NOT a same-path fragment nav (which only fires the hashchange handler
-// and would leave the in-memory project untouched, masking a RED). Mirrors multifile.mjs:341.
-await page.goto('about:blank');
-await page.goto(URL + shareHash, { waitUntil: 'load' });
-await booted().catch(() => fail('did not boot from nested #project='));
-{
-  const round = await page.evaluate(() => ({
-    order: window.project.order,
-    enemy: window.project.files['sprites/enemy.py']?.getValue(),
-  }));
-  const hasSlashKey = Array.isArray(round.order) && round.order.includes('sprites/enemy.py');
-  if (hasSlashKey && round.enemy && round.enemy.includes('class Enemy'))
-    ok('#project= round-trips path keys (order has slashes + nested file content intact)');
-  else fail('#project= path round-trip wrong: ' + JSON.stringify({ order: round.order, hasEnemy: !!round.enemy }));
-}
 
 // =====================================================================================
 // 9. isModuleName path validation (design §7.1 #13). project.add ACCEPTS a/b/c.py and REJECTS

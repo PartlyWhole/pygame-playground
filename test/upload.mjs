@@ -123,14 +123,16 @@ await page.evaluate(() => { window.renderTabs(); });
 await page.click('#tabs .tab.folder[data-path="pkg"]');
 await page.setInputFiles('#assetInput', { name: 'tile.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
 await page.waitForFunction(() => window.assetFS.list.some(a => a.name === 'pkg/tile.png'), null, { timeout: 5000 }).catch(() => {});
+// pyodide is a module-scope `let` reachable by BARE NAME in evaluate (NOT window.pyodide
+// — see test/assets.mjs + spike-bridge.mjs, which all probe MEMFS via bare `pyodide`).
 const folderLand = await page.evaluate(() => ({
   codeAtPath: !!window.project.files['pkg/enemy.py'],
   assetAtPath: window.assetFS.list.some(a => a.name === 'pkg/tile.png'),
-  memfsCode: !!(window.pyodide && pyodide.FS.analyzePath('pkg/enemy.py').exists),
-  memfsAsset: !!(window.pyodide && pyodide.FS.analyzePath('pkg/tile.png').exists),
+  memfsAsset: !!(typeof pyodide !== 'undefined' && pyodide.FS.analyzePath('pkg/tile.png').exists),
 }));
-if (folderLand.codeAtPath && folderLand.assetAtPath && folderLand.memfsCode && folderLand.memfsAsset)
-  ok('uploads land in the SELECTED folder (pkg/enemy.py code + pkg/tile.png asset, nested in MEMFS)');
+// code is written to MEMFS at run, not upload — model path proves the nested code landing.
+if (folderLand.codeAtPath && folderLand.assetAtPath && folderLand.memfsAsset)
+  ok('uploads land in the SELECTED folder (pkg/enemy.py code via model + pkg/tile.png asset nested in MEMFS)');
 else fail('selected-folder landing wrong: ' + JSON.stringify(folderLand));
 
 // 4b. With NO folder selected, an upload lands at ROOT.
@@ -147,7 +149,9 @@ else fail('root-default landing wrong: ' + JSON.stringify(rootLand));
 
 // ----------------------------------------------------------------------------
 // 5. COLLISION (CODE): uploading a name that already exists at that path
-//    auto-suffixes (helper.py -> helper-2.py), does NOT overwrite, and warns (sys line).
+//    auto-suffixes (helper.py -> helper_2.py), does NOT overwrite, and warns (sys line).
+//    Code uses an UNDERSCORE suffix: a hyphen fails isModuleName so a .py can't be
+//    named helper-2.py (assets use the hyphen form — check 6 below).
 // ----------------------------------------------------------------------------
 await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'import pygame\n', 'helper.py': 'ORIGINAL = 1\n' },
@@ -156,17 +160,17 @@ await page.evaluate(() => {
   window.__consoleLen = document.getElementById('console').children.length;
 });
 await page.setInputFiles('#assetInput', { name: 'helper.py', mimeType: 'text/x-python', buffer: Buffer.from('UPLOADED = 2\n') });
-await page.waitForFunction(() => window.project.order.includes('helper-2.py'), null, { timeout: 5000 }).catch(() => {});
+await page.waitForFunction(() => window.project.order.includes('helper_2.py'), null, { timeout: 5000 }).catch(() => {});
 const codeClash = await page.evaluate(() => ({
-  suffixed: !!window.project.files['helper-2.py'],
-  suffixedContent: window.project.files['helper-2.py'] ? window.project.files['helper-2.py'].getValue() : null,
+  suffixed: !!window.project.files['helper_2.py'],
+  suffixedContent: window.project.files['helper_2.py'] ? window.project.files['helper_2.py'].getValue() : null,
   originalIntact: window.project.files['helper.py'] ? window.project.files['helper.py'].getValue() : null,
   warned: Array.from(document.getElementById('console').children).slice(window.__consoleLen)
-    .some(c => /already exists|helper-2\.py/.test(c.textContent)),
+    .some(c => /already exists|helper_2\.py/.test(c.textContent)),
 }));
 if (codeClash.suffixed && codeClash.suffixedContent === 'UPLOADED = 2\n' &&
     codeClash.originalIntact === 'ORIGINAL = 1\n' && codeClash.warned)
-  ok('code collision: suffixes to helper-2.py, original preserved, sys warn shown');
+  ok('code collision: suffixes to helper_2.py, original preserved, sys warn shown');
 else fail('code collision wrong: ' + JSON.stringify(codeClash));
 
 // ----------------------------------------------------------------------------
@@ -204,7 +208,8 @@ else fail('asset collision wrong: ' + JSON.stringify({ ...assetClash, origMatche
 // 7. CROSS-NAMESPACE clash within a dir: code and assets share the per-directory
 //    MEMFS namespace, so existsAnywhere(path) MUST span BOTH. Seed an ASSET at the
 //    path `data.py` (a pre-routing/legacy state), then upload a CODE `data.py`: it
-//    must SEE the asset and suffix to `data-2.py` (not silently clobber the asset).
+//    must SEE the asset and suffix to `data_2.py` (not silently clobber the asset).
+//    Code suffix is an UNDERSCORE (isModuleName rejects a hyphen for a .py leaf).
 //    (Complements save.mjs check 9, which is the zip-time asset_ prefix — a different layer.)
 // ----------------------------------------------------------------------------
 await page.evaluate(async () => {
@@ -218,14 +223,14 @@ await page.evaluate(async () => {
 await page.waitForFunction(() => window.assetFS.list.some(a => a.name === 'data.py'), null, { timeout: 5000 }).catch(() => {});
 // Now upload a CODE data.py — routes to code, but the path is taken by the asset.
 await page.setInputFiles('#assetInput', { name: 'data.py', mimeType: 'text/x-python', buffer: Buffer.from('CODE = 99\n') });
-await page.waitForFunction(() => window.project.order.includes('data-2.py'), null, { timeout: 5000 }).catch(() => {});
+await page.waitForFunction(() => window.project.order.includes('data_2.py'), null, { timeout: 5000 }).catch(() => {});
 const crossClash = await page.evaluate(() => ({
-  codeSuffixed: !!window.project.files['data-2.py'],
+  codeSuffixed: !!window.project.files['data_2.py'],
   codeNotAtTakenPath: !window.project.files['data.py'],
   assetIntact: window.assetFS.list.some(a => a.name === 'data.py'),
 }));
 if (crossClash.codeSuffixed && crossClash.codeNotAtTakenPath && crossClash.assetIntact)
-  ok('cross-namespace clash: code upload sees the asset at data.py, suffixes to data-2.py, asset intact');
+  ok('cross-namespace clash: code upload sees the asset at data.py, suffixes to data_2.py, asset intact');
 else fail('cross-namespace clash wrong: ' + JSON.stringify(crossClash));
 
 // ----------------------------------------------------------------------------

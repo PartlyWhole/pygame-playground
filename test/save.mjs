@@ -232,6 +232,17 @@ await page.evaluate(async () => { await window.assetFS.clearAll(); window.projec
 await page.setInputFiles('#assetInput', { name: 'art.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
 await page.waitForFunction(() => window.assetFS.list.some(a => a.name === 'art.png'), null, { timeout: 5000 });
 await page.evaluate(() => window.renderTabs());
+// Readiness gate: the asset .dl reads the bare bytes SYNCHRONOUSLY from MEMFS, so wait
+// until art.png is actually present in pyodide's FS — the real byte source — before the
+// click (bare `pyodide`, not window.pyodide; see assets.mjs/spike-bridge.mjs). This also
+// lets Chromium's brief post-file-input download cooldown clear, so the synthesized
+// <a download> isn't suppressed — a headless-shell timing quirk that suppresses ANY
+// download (even #saveBtn) fired microseconds after setInputFiles, NOT a product issue.
+// The byte-identical assertion below is fully preserved.
+await page.waitForFunction(
+  () => typeof pyodide !== 'undefined' && pyodide.FS.analyzePath('art.png').exists,
+  null, { timeout: 5000 }).catch(() => {});
+await page.waitForTimeout(600);
 const assetRowDl = await clickDownload('#tabs .tab.asset[data-name="art.png"] .dl');
 if (!assetRowDl) fail('asset row .dl missing or no download (expected bare art.png)');
 else if (assetRowDl.suggestedFilename() !== 'art.png') fail('asset row .dl wrong filename (expected art.png): ' + assetRowDl.suggestedFilename());

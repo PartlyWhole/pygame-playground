@@ -155,6 +155,10 @@
   #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
   #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
+  /* S5: per-row download button (bare file / asset; folder -> subtree zip). */
+  #tabs .tab .dl { color: var(--dim); border: none; background: none; cursor: pointer; padding: 0 2px; border-radius: 3px; flex: 0 0 auto; display: inline-flex; align-items: center; }
+  #tabs .tab .dl svg { display: block; }
+  #tabs .tab .dl:hover { color: var(--text); background: #34384a; }
   #tabs .tab-add { display: block; padding: 5px 8px; color: var(--accent); cursor: pointer; user-select: none; font-size: 12px; }
   /* S2: folder rows + caret + DnD drop affordances (retargeted from proto/sandbox.html) */
   #tabs .tab .caret { width: 12px; flex: 0 0 12px; text-align: center; color: var(--dim); font-size: 9px; transition: transform .12s; }
@@ -1508,6 +1512,22 @@ const project = {
     }
     return dirs;
   },
+  // S5: the empty `__init__.py` package markers a zip needs to be a faithful, importable
+  // package on desktop CPython — JS twin of the engine's _ensure_init_py. For every dir
+  // (and ancestor) that contains a `.py`, the path `<dir>/__init__.py` UNLESS the user
+  // already authored one (a real file at that path wins; never overwritten). Returns the
+  // marker paths only (callers add them as EMPTY zip entries). Optional `under` scopes to
+  // a subtree (used by downloadFolder), with markers still keyed by their full path.
+  _autoInitPaths(under = "") {
+    const prefix = under ? under.replace(/\/$/, "") + "/" : "";
+    const out = [];
+    for (const d of this._fileDirs()) {
+      if (prefix && !(d === under || d.startsWith(prefix))) continue;
+      const init = d + "/__init__.py";
+      if (!this.files[init]) out.push(init);   // user-authored __init__.py wins
+    }
+    return out;
+  },
   serialize() {
     const files = {};
     for (const name of this.order) files[name] = this.files[name].getValue();
@@ -1801,16 +1821,20 @@ const assetFS = {
     renderAssets();
   },
   totalSize() { return this.list.reduce((n, a) => n + a.size, 0); },
-  async add(file) {
+  async add(file, name = file.name) {
     // No app-imposed size cap: store as much as the browser's quota allows. If a
     // save fails (quota exceeded / unavailable) the file still works this session;
     // we say so, and the popover shows live usage vs available.
+    // S5: an optional `name` override lets routeUpload land a suffixed / folder-prefixed
+    // asset at its computed PROJECT PATH (assetStore name = the real path the zip, tree,
+    // and _memfs all key off). Defaults to file.name so boot/hydrate + legacy callers
+    // are untouched.
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const saved = await assetStore.put({ name: file.name, bytes: bytes.buffer, type: file.type, size: bytes.length, addedAt: Date.now() });
-    if (!saved) assetMsg(`Couldn't save "${file.name}" to persist for next time (storage full or unavailable) — it'll work this session only.`);
-    this._memfs(file.name, bytes);
-    this.list = this.list.filter(a => a.name !== file.name);
-    this.list.push({ name: file.name, size: bytes.length, type: file.type, warn: UNSUPPORTED_AUDIO.test(file.name) });
+    const saved = await assetStore.put({ name, bytes: bytes.buffer, type: file.type, size: bytes.length, addedAt: Date.now() });
+    if (!saved) assetMsg(`Couldn't save "${name}" to persist for next time (storage full or unavailable) — it'll work this session only.`);
+    this._memfs(name, bytes);
+    this.list = this.list.filter(a => a.name !== name);
+    this.list.push({ name, size: bytes.length, type: file.type, warn: UNSUPPORTED_AUDIO.test(name) });
     renderAssets();
     warnIfStorageLow();
   },
@@ -1826,6 +1850,87 @@ const assetFS = {
   async addFiles(files) { for (const f of files) await this.add(f); },
 };
 window.assetFS = assetFS;   // test seam (nested-asset-write mechanism; S2a)
+
+// ----------------------------------------------------------------- upload routing (S5 #6)
+// One router for BOTH live entry points (#assetInput change + document drop). Boot
+// hydrate is NOT routed (it replays already-classified IndexedDB records, asset-only).
+// Route by EXTENSION only: `.py` -> code (project.add, path-validated, editor via a
+// fresh Doc + setActive, NEVER editor.setValue); everything else -> asset (assetFS.add).
+// Land at <selectedFolder>/<name> (root default), unifying collisions through uniquePath.
+
+// True if a path is taken by EITHER a code file OR an asset. A CODE upload yields to
+// both (it must never silently clobber an asset OR a module at the same path), so the
+// code lane suffixes against this unified predicate.
+const existsAnywhere = (p) =>
+  !!(project.files && project.files[p]) || assetFS.list.some(a => a.name === p);
+// An ASSET upload only collides with ANOTHER ASSET at the same path: code + assets live
+// in separate stores (project.files vs assetStore) and the zip-time `asset_` prefix
+// disambiguates an asset that shares a CODE file's path — so an asset may coexist with a
+// same-named module (it is NOT suffixed for that), but two assets can't share a path.
+const assetExists = (p) => assetFS.list.some(a => a.name === p);
+
+// Auto-suffix the LEAF before the extension until the path is free: `helper.py` ->
+// `helper_2.py`, `sprites/ship.png` -> `sprites/ship-2.png`. CODE uses an UNDERSCORE
+// (a hyphen fails isModuleName so a `.py` can't be `helper-2.py`); ASSETS use a HYPHEN
+// (decision #6). `sep` is supplied by the caller per branch. Returns the free path.
+function uniquePath(path, exists, sep = "-") {
+  if (!exists(path)) return path;
+  const slash = path.lastIndexOf("/");
+  const dir = slash < 0 ? "" : path.slice(0, slash + 1);
+  const leaf = slash < 0 ? path : path.slice(slash + 1);
+  const dot = leaf.lastIndexOf(".");
+  const stem = dot <= 0 ? leaf : leaf.slice(0, dot);
+  const ext = dot <= 0 ? "" : leaf.slice(dot);
+  for (let n = 2; ; n++) {
+    const candidate = dir + stem + sep + n + ext;
+    if (!exists(candidate)) return candidate;
+  }
+}
+
+// Decide a file's lane. By EXTENSION (`.py` -> code) — with one guard: a file that is
+// genuinely binary media (an image/audio MIME) but happens to carry a `.py` name is NOT
+// code, it's an asset (the adversarial "asset named like a code file" case). Plain `.py`
+// text (text/x-python, or no MIME) routes to code.
+const isCodeUpload = (file) =>
+  /\.py$/i.test(file.name) && !/^(image|audio|video)\//.test(file.type || "");
+
+// Route ONE file into the SELECTED folder (root default), warning + auto-suffixing on a
+// same-path clash via the unified helper.
+async function routeUpload(file, destFolder = selectedFolder) {
+  const folder = destFolder ? destFolder.replace(/\/$/, "") : "";
+  const target = folder ? folder + "/" + file.name : file.name;
+  const isCode = isCodeUpload(file);
+  // Code uses an underscore suffix (isModuleName-safe) and yields to ANY same-path file
+  // (code or asset); an asset uses a hyphen (decision #6) and only yields to another asset
+  // (it coexists with a same-named module — the zip `asset_` prefix disambiguates).
+  const final = uniquePath(target, isCode ? existsAnywhere : assetExists, isCode ? "_" : "-");
+  if (final !== target)
+    logLine(`"${target}" already exists — added as "${final}".`, "sys");
+  if (isCode) {
+    const text = await file.text();
+    // project.add builds a fresh Doc; reach the editor via setActive/swapDoc — NEVER
+    // editor.setValue (which arms lint + breaks first-paint laziness).
+    if (project.add(final, text)) {
+      // Mirror the asset path: write the new module to MEMFS now (nested-capable) so it's
+      // importable without waiting for the next run. Reuses assetFS._memfs as a generic
+      // bytes-to-path writer (not asset-specific).
+      assetFS._memfs(final, new TextEncoder().encode(text));
+      project.setActive(final);
+      renderTabs();
+    } else {
+      logLine(`Couldn't add "${final}" — not a valid module path.`, "sys");
+    }
+  } else {
+    await assetFS.add(file, final);   // name override lands the asset at `final`
+  }
+}
+
+// The router both live entry points call. Sequential so collisions resolve against the
+// growing project (two same-name uploads in one drop suffix the second).
+async function uploadFiles(files, destFolder = selectedFolder) {
+  for (const f of files) await routeUpload(f, destFolder);
+}
+window.uploadFiles = uploadFiles;   // test seam
 
 const assetChipEl = document.getElementById('assetChip');
 function assetMsg(text) { logLine(text, 'sys'); }
@@ -1897,7 +2002,7 @@ assetPanelEl.addEventListener('click', (e) => {
 });
 
 document.getElementById('assetInput').addEventListener('change', (e) => {
-  assetFS.addFiles([...e.target.files]); e.target.value = '';
+  uploadFiles([...e.target.files], selectedFolder); e.target.value = '';
 });
 
 // Drop files anywhere on the page to add them as assets.
@@ -1909,7 +2014,9 @@ addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dro
 addEventListener('drop', (e) => {
   if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
   e.preventDefault(); dragDepth = 0; dropOverlayEl.classList.remove('show');
-  assetFS.addFiles([...e.dataTransfer.files]);
+  // Route by extension into the CURRENT selected folder (root default); code -> project,
+  // assets -> assetFS. Same router as #assetInput so drop-anywhere stays consistent.
+  uploadFiles([...e.dataTransfer.files], selectedFolder);
 });
 
 // ---------------------------------------------------------------- history UI
@@ -2187,6 +2294,7 @@ function renderTabs() {
         `<span class="caret" aria-hidden="true">▸</span>` +
         `<span class="ic" aria-hidden="true">📁</span>` +
         `<span class="tab-name">${escTab(d.name)}</span>` +
+        dlBtn(d.name, true) +
         `<button class="tab-menu" title="Folder actions" aria-label="Folder actions for ${escTab(d.path)}">⋯</button>` +
         `</div>`);
       if (open) emit(d, depth + 1);
@@ -2198,12 +2306,14 @@ function renderTabs() {
           `<span class="ic" aria-hidden="true">${f.kind === "image" ? "🖼️" : f.kind === "audio" ? "🔊" : "📄"}</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
+          dlBtn(basename(f.path), false) +
           `</div>`);
       } else {
         out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
+          dlBtn(basename(f.path), false) +
           `<button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       }
@@ -2216,8 +2326,25 @@ function renderTabs() {
 window.renderTabs = renderTabs;   // test seam
 const basename = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
 const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); };
+// S5: the per-row download affordance. A file row downloads the bare item; a folder row
+// (isFolder) downloads a zip of its subtree. Glyph reused from the proto's download path.
+function dlBtn(label, isFolder) {
+  const tip = isFolder ? `Download ${label} (zip)` : `Download ${label}`;
+  return `<button class="dl" title="${escTab(tip)}" aria-label="${escTab(tip)}" data-tip="${escTab(tip)}">` +
+    `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>`;
+}
 
 tabsEl.addEventListener("click", (e) => {
+  // S5: a .dl click downloads the item and must NOT select the row or toggle the folder.
+  const dl = e.target.closest(".dl");
+  if (dl) {
+    e.stopPropagation();
+    const folder = e.target.closest(".tab.folder");
+    if (folder) downloadFolder(folder.dataset.path);
+    else downloadItem(e.target.closest(".tab").dataset.name);
+    return;
+  }
   const add = e.target.closest(".tab-add");
   if (add) { newFilePrompt(); return; }
   const folder = e.target.closest(".tab.folder");
@@ -2526,18 +2653,19 @@ function downloadBlob(data, filename, type = "application/octet-stream") {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function saveProject() {
-  // Lone file with no uploaded assets -> a plain .py (no library needed).
-  if (!project.isMulti() && assetFS.list.length === 0) {
-    downloadBlob(project.text(project.entry), project.entry, "text/x-python");
-    return;
-  }
-  // Otherwise a self-contained zip of all .py files + all assets.
+  // Always-zip: Download = "my whole project" as a self-contained pygame-project.zip of
+  // every .py file + every asset (Branch A's lone-.py fast-path is deleted; the per-row
+  // bare-.py download (§3) is the offline escape hatch for a single file). JSZip stays
+  // lazy: this is the first place it loads (first PAINT still loads none).
   let JSZip;
   try { JSZip = await loadJSZip(); }
   catch { logLine("Couldn't load the zip library — check your connection.", "sys"); return; }
   const zip = new JSZip();
   const files = project.serialize().files;
   for (const name of Object.keys(files)) zip.file(name, files[name]);
+  // Faithful package: an EMPTY __init__.py marker for every .py-bearing dir the user
+  // didn't author one in (mirrors the engine's _ensure_init_py; never overwrites).
+  for (const init of project._autoInitPaths()) zip.file(init, "");
   for (const rec of await assetStore.getAll()) {
     // Never let an asset clobber a code file at the SAME path (zip.file overwrites).
     // Path keys give folders for free; a clash prefixes the LEAF within its directory
@@ -2556,6 +2684,64 @@ async function saveProject() {
   downloadBlob(blob, "pygame-project.zip");
 }
 document.getElementById("saveBtn").addEventListener("click", saveProject);
+
+// ---- per-item row download (S5 §3): a .py/asset row downloads the BARE item (no zip,
+//      no JSZip); a folder row downloads a zip of its SUBTREE (entries relative to it).
+// SYNCHRONOUS by design: downloadBlob must run inside the click's user-gesture tick (an
+// `await` before it severs the gesture chain — the browser then blocks the synthesized
+// <a download> click). So a .py reads its live Doc and an asset reads MEMFS, both sync;
+// only the (rare) MEMFS-miss falls back to the async assetStore.
+function memfsBytes(path) {
+  if (!pyodide) return null;
+  try {
+    const abs = path.startsWith("/") ? path : pyodide.FS.cwd().replace(/\/$/, "") + "/" + path;
+    if (!pyodide.FS.analyzePath(abs).exists) return null;
+    return pyodide.FS.readFile(abs);   // Uint8Array, synchronous
+  } catch { return null; }
+}
+function downloadItem(path) {
+  if (project.files[path]) {            // a .py file -> bare bytes, NO zip / NO JSZip.
+    downloadBlob(project.text(path), basename(path), "text/x-python");
+    return;
+  }
+  // An asset -> bare bytes. Read MEMFS synchronously to keep the user-gesture chain.
+  // Pass the raw bytes (not a pre-made Blob) so downloadBlob tags an explicit
+  // octet-stream type — a typeless Blob can be mis-handled as navigation, not a download.
+  const bytes = memfsBytes(path);
+  if (bytes) { downloadBlob(new Uint8Array(bytes), basename(path)); return; }
+  // Fallback (MEMFS unavailable / pre-run): the durable assetStore (async; gesture may
+  // be lost, but this only triggers when MEMFS has no copy).
+  assetStore.getAll().then(recs => {
+    const rec = recs.find(r => r.name === path);
+    if (!rec) { logLine(`Couldn't find "${path}" to download.`, "sys"); return; }
+    downloadBlob(new Blob([new Uint8Array(rec.bytes)]), basename(path));
+  });
+}
+async function downloadFolder(folderPath) {
+  let JSZip;
+  try { JSZip = await loadJSZip(); }
+  catch { logLine("Couldn't load the zip library — check your connection.", "sys"); return; }
+  const prefix = folderPath.replace(/\/$/, "") + "/";
+  const rel = (p) => p.slice(prefix.length);   // strip the folder prefix -> zip-root-relative
+  const zip = new JSZip();
+  const codePaths = project.order.filter(p => p.startsWith(prefix));
+  for (const p of codePaths) zip.file(rel(p), project.text(p));
+  // Auto-__init__.py markers for this subtree (relative), never overwriting a user one.
+  for (const init of project._autoInitPaths(folderPath)) if (init.startsWith(prefix)) zip.file(rel(init), "");
+  const codeSet = new Set(codePaths);
+  for (const rec of await assetStore.getAll()) {
+    if (!rec.name.startsWith(prefix)) continue;
+    let name = rec.name;
+    if (codeSet.has(rec.name)) {        // same per-directory asset_ clash rule as saveProject
+      const slash = rec.name.lastIndexOf("/");
+      name = rec.name.slice(0, slash + 1) + "asset_" + rec.name.slice(slash + 1);
+      logLine(`Asset "${rec.name}" clashes with a code file — zipped as "${name}".`, "sys");
+    }
+    zip.file(rel(name), new Uint8Array(rec.bytes));
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, basename(folderPath) + ".zip");
+}
 
 // The legacy #examples <select> is kept HIDDEN as a compatibility seam: verify.mjs drives it
 // via getElementById('examples') + a dispatched change event to load + run the Snake example

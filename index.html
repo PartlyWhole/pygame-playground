@@ -1263,7 +1263,7 @@ function logLine(text, cls) {
   consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 function clearConsole() { consoleEl.textContent = ""; }
-function setStatus(cls, text) { statusEl.className = cls; statusEl.textContent = text; }
+function setStatus(cls, text) { statusEl.className = "pill" + (cls ? " " + cls : ""); statusEl.textContent = text; }
 
 const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
   mode: "python", theme: "material-darker", lineNumbers: true,
@@ -2061,14 +2061,10 @@ const panelviews = [...document.querySelectorAll(".panelview")];
 const sideEl = document.getElementById("side");
 const sideSplitEl = document.querySelector('[data-split="side"]');
 let activeView = "explorer";
-// Click-collapse (§3.1): clicking the already-open view collapses the side panel (rail stays).
-// Collapse requires (a) a REAL pointer press on the icon (mousedown→click), and (b) collapse being
-// "armed" (set when a view is shown via a rail click, cleared by any non-rail pointer interaction
-// such as a splitter drag). (a) means a deliberate user re-click collapses, while programmatic
-// `.click()` (no mousedown) used to *ensure* a view is open always re-asserts show. (b) means a
-// click after other UI interaction re-asserts show rather than collapsing.
-let collapseArmed = false;
-let realDownOnTab = null;
+// Click-collapse (§3.1): a clean toggle. Clicking the rail icon of the currently active AND
+// expanded view collapses the side panel (the rail stays visible). Clicking any rail icon while
+// the panel is collapsed — or clicking a different view's icon — opens/switches to that view.
+// No armed flag: the gesture works for a real user after ANY intervening interaction.
 
 function onViewOpened(v) {
   if (v === "history") { historyOpen = true; historyPanelEl.hidden = false; renderHistory(); }
@@ -2094,23 +2090,12 @@ function collapsePanel() {
   sideSplitEl.style.display = "none";
   acttabs.forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected", "false"); });
 }
-// Track real pointer-downs: a down on a rail icon records which icon (so its click can collapse);
-// a down anywhere else disarms collapse + clears the record (so the next rail click re-asserts show).
-document.addEventListener("mousedown", (e) => {
-  const tab = e.target.closest(".acttab");
-  if (tab) realDownOnTab = tab.dataset.view;
-  else { collapseArmed = false; realDownOnTab = null; }
-});
 acttabs.forEach((b, i) => {
   b.addEventListener("click", () => {
     const v = b.dataset.view;
-    const hadRealDown = realDownOnTab === v;
-    realDownOnTab = null;
-    if (activeView === v && !sideEl.classList.contains("collapsed") && collapseArmed && hadRealDown) {
-      collapsePanel(); collapseArmed = false;
-    } else {
-      showView(v); collapseArmed = true;
-    }
+    // Toggle: clicking the active + expanded view's icon collapses; otherwise open/switch.
+    if (activeView === v && !sideEl.classList.contains("collapsed")) collapsePanel();
+    else showView(v);
   });
   // Roving tabindex + Arrow/Home/End/Enter/Space.
   b.addEventListener("keydown", (e) => {

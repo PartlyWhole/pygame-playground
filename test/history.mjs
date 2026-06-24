@@ -11,6 +11,25 @@ const ok = (m) => console.log('ok -', m);
 const setCode = (s) => page.evaluate((v) => document.querySelector('.CodeMirror').CodeMirror.setValue(v), s);
 const runAndSnap = async () => { await page.click('#runBtn'); await page.waitForTimeout(600); };
 const snapCount = () => page.evaluate(async () => (await window.historyStore.getAll()).length);
+// State-aware "ensure the History view is open". The app's rail click is a clean toggle (§3.1), so
+// an unconditional re-click on the History icon while it is already the open view would COLLAPSE it.
+// Click the rail icon ONLY when it would OPEN (side collapsed OR History not active). If History is
+// already the active view but its panel was hidden out-of-band, re-assert it via showView (no toggle).
+const ensureHistoryOpen = async () => {
+  const plan = await page.evaluate(() => {
+    const side = document.getElementById('side');
+    const tab = document.querySelector('[data-view="history"]');
+    const panel = document.getElementById('historyPanel');
+    const collapsed = !!side && side.classList.contains('collapsed');
+    const active = !!tab && tab.getAttribute('aria-selected') === 'true';
+    const panelHidden = !panel || panel.hidden || panel.offsetParent === null;
+    if (collapsed || !active) return 'click';     // rail click will OPEN, not collapse
+    if (panelHidden) return 'show';               // active but hidden out-of-band -> re-assert
+    return 'noop';                                // already open
+  });
+  if (plan === 'click') await page.click('[data-view="history"]');
+  else if (plan === 'show') await page.evaluate(() => showView('history'));
+};
 
 await page.goto(URL, { waitUntil: 'load' });
 await page.waitForFunction(
@@ -89,7 +108,7 @@ await page.evaluate(() => window.project.load({ files: { 'main.py': 'import e\n'
   order: ['main.py','e.py'], entry: 'main.py', active: 'main.py' }));
 await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'solo = 1\n' } }));   // collapse to one file
-await page.click('[data-view="history"]'); await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
+await ensureHistoryOpen(); await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
 await page.evaluate(() => { window.confirm = () => true; });
 await page.click('#historyPanel .hist-row:last-child');
 await page.waitForSelector('#historyPanel .hp-restore', { timeout: 10_000 });
@@ -104,7 +123,7 @@ await page.evaluate(() => { document.getElementById('historyPanel').hidden = tru
 await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('v = 2\n'));
 await page.click('#runBtn'); await page.waitForTimeout(600);
-await page.click('[data-view="history"]');   // S1: History opens via the rail icon
+await ensureHistoryOpen();   // S1: History opens via the rail icon (state-aware: clean toggle)
 await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
 await page.click('#historyPanel .hist-row:last-child');          // select the oldest -> opens its diff
 await page.waitForSelector('#historyPanel .hp-diffbody', { timeout: 10_000 });

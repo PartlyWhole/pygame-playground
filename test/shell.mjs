@@ -21,6 +21,20 @@ const info = (msg) => console.log('info -', msg);
 // (RED phase) instead of hanging 30s and aborting the whole battery. In GREEN the seam
 // exists and the click resolves immediately.
 const click = (sel) => page.click(sel, { timeout: 2500 }).catch(() => {});
+// State-aware "ensure the Explorer is open" helper. The app's rail click is a clean toggle, so an
+// unconditional click on the Explorer icon would COLLAPSE an already-open Explorer. This clicks the
+// icon ONLY when the side panel is collapsed OR Explorer is not the active view — never toggling an
+// already-open Explorer shut. (Distinct from assertion #3, which deliberately toggles it.)
+const ensureExplorerOpen = async () => {
+  const needsClick = await page.evaluate(() => {
+    const side = document.getElementById('side');
+    const tab = document.querySelector('nav.rail [data-view="explorer"]');
+    const collapsed = !!side && side.classList.contains('collapsed');
+    const active = !!tab && tab.getAttribute('aria-selected') === 'true';
+    return collapsed || !active;
+  });
+  if (needsClick) await click('nav.rail [data-view="explorer"]');
+};
 
 await page.goto(URL, { waitUntil: 'load' });
 // Boot to a quiescent state (the existing status seam) before probing the shell.
@@ -44,6 +58,10 @@ else fail('rail wrong: ' + JSON.stringify(rail));
 //    three, sets aria-selected="true" on exactly one tab.
 // ----------------------------------------------------------------------------
 const views = ['explorer', 'history', 'examples', 'collab'];
+// Start from a non-Explorer active view so the first loop click (Explorer) is a genuine view SWITCH,
+// not a re-click on the boot-active Explorer (which the clean toggle (§3.1) would collapse). With the
+// active view != the clicked view on every iteration, each click is a switch that shows its panel.
+await click('nav.rail [data-view="collab"]');
 let switchOk = true;
 for (const v of views) {
   await click(`nav.rail [data-view="${v}"]`);
@@ -117,7 +135,11 @@ const statusOk =
   sRun.text === 'running' && sRun.classList.includes('running')
   && sErr.text === 'error — see console' && sErr.classList.includes('error')
   && sBoot.text === 'loading Python…' && sBoot.classList.includes('boot')
-  && sDim.text === 'ready';
+  && sDim.text === 'ready'
+  // The .pill chrome class must SURVIVE every setStatus write — the pill bg/border/radius and
+  // per-state color hang off `.pill`/`.pill.<state>`, so a writer that clobbers className loses them.
+  && sRun.classList.includes('pill') && sErr.classList.includes('pill')
+  && sBoot.classList.includes('pill') && sDim.classList.includes('pill');
 if (statusOk) ok('status pill reflects the real #status seam (running/error/boot/dim)');
 else fail('status pill wrong: ' + JSON.stringify({ sRun, sErr, sBoot, sDim }));
 // Restore a quiescent status so later assertions are not confused by 'error'.
@@ -129,7 +151,7 @@ await page.evaluate(() => setStatus('', 'ready'));
 //    surface, and #runBtn is hidden for non-.py, visible for .py.
 // ----------------------------------------------------------------------------
 // Make sure Explorer is open so rows are clickable.
-await click('nav.rail [data-view="explorer"]');
+await ensureExplorerOpen();
 for (const u of [
   { name: 'pic.png', mime: 'image/png', b64: PNG_B64 },
   { name: 'tune.mp3', mime: 'audio/mpeg', b64: MP3_B64 },
@@ -313,10 +335,7 @@ if (splitsPresent.side && splitsPresent.viewer && splitsPresent.console)
   ok('all three splitters present (side / viewer / console)');
 else fail('missing splitter(s): ' + JSON.stringify(splitsPresent));
 // Make sure the side panel is expanded (the side splitter is disabled when collapsed).
-await click('nav.rail [data-view="explorer"]');
-const sideExpanded = await page.evaluate(() =>
-  document.getElementById('side') && !document.getElementById('side').classList.contains('collapsed'));
-if (!sideExpanded) await click('nav.rail [data-view="explorer"]');
+await ensureExplorerOpen();
 // Simulate a mousedown -> mousemove -> mouseup drag on the side splitter, dragging right.
 const widthBefore = await page.evaluate(() => {
   const s = document.getElementById('side');
@@ -351,7 +370,7 @@ await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'a = 1\n' } });   // single file
   window.renderTabs();
 });
-await click('nav.rail [data-view="explorer"]');   // ensure explorer open
+await ensureExplorerOpen();   // ensure explorer open
 const explorerAlwaysOn = await page.evaluate(() => {
   const t = document.getElementById('tabs');
   if (!t || t.offsetParent === null) return { visible: false };

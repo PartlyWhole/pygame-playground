@@ -98,9 +98,14 @@ console.log('info - AudioContext states after Run gesture: ' + acState.join(',')
 
 // S1: assets are re-homed into the always-on Explorer. Open the Explorer rail view to
 // surface the asset section (#assetChip/#assetPanel + .asset-row selectors preserved).
+// State-aware: the app's rail click is a clean toggle, so clicking an already-open Explorer would
+// collapse it. Click the icon ONLY when the side panel is collapsed OR Explorer is not active.
 const openExplorer = () => page.evaluate(() => {
   const tab = document.querySelector('[data-view="explorer"]');
-  if (tab) tab.click();
+  const side = document.getElementById('side');
+  const collapsed = !!side && side.classList.contains('collapsed');
+  const active = !!tab && tab.getAttribute('aria-selected') === 'true';
+  if (tab && (collapsed || !active)) tab.click();
   if (typeof renderAssetPanel === 'function') renderAssetPanel();
 });
 

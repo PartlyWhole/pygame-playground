@@ -386,10 +386,24 @@ else fail('explorer not always-on: ' + JSON.stringify(explorerAlwaysOn));
 // 11. First-paint laziness regression guard (additive). After boot + opening each rail
 //     panel (History, Examples, Collaboration) WITHOUT Run/diff/collab-start, assert
 //     nothing eagerly loaded.
+//
+//     S4 lockstep: the Examples panel is no longer the S1 INERT/read-only list — it now LISTS
+//     examples and clicking a row OPENS a preview (swapDoc, never setValue). So the loop now also
+//     CLICKS an example row to exercise that interactive open. The laziness invariant must STILL
+//     hold: a preview-open arms nothing (swapDoc doesn't fire CM "change", so lint stays unarmed;
+//     no JSZip/Automerge/jsdiff). Only a real EDIT promotes + arms lint (covered by test/examples.mjs).
 // ----------------------------------------------------------------------------
 for (const v of ['history', 'examples', 'collab']) {
   await click(`nav.rail [data-view="${v}"]`);
   await page.waitForTimeout(150);
+  if (v === 'examples') {
+    // Interactive open: click the first Examples row -> preview via swapDoc (no edit, no setValue).
+    await page.evaluate(() => {
+      const row = document.querySelector('#examplesPanel .exrow');
+      if (row) row.click();
+    });
+    await page.waitForTimeout(150);
+  }
 }
 const lazy = await page.evaluate(() => ({
   amLoaded: !!window.__amLoaded,

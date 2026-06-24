@@ -348,10 +348,6 @@
       <div class="side-head">
         <span>Explorer</span>
         <div class="acts">
-          <!-- #shareBtn: re-homed as a VISIBLE Explorer ghost action that must stay actionable
-               (test/multifile.mjs check 7 clicks it + asserts #project=). Q3 wanted it gone, but that
-               locked test requires a clickable #shareBtn — full removal is deferred to S7. -->
-          <button class="ghost" id="shareBtn" aria-label="Copy a share link" data-tip="Copy share link"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.1 10.9 14.9 7.2"/><path d="M8.1 13.1 14.9 16.8"/></svg></button>
           <button class="ghost" id="uploadBtn" aria-label="Upload files" data-tip="Upload files"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/></svg></button>
           <button class="ghost" id="saveBtn" aria-label="Download project (.py or .zip)" data-tip="Download project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>
           <button class="ghost" id="newFileBtn" aria-label="New file" data-tip="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg></button>
@@ -1461,14 +1457,7 @@ const b64url = {
   enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
   dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))),
 };
-function codeFromHash() {
-  try {
-    return location.hash.startsWith("#code=") ? b64url.dec(location.hash.slice(6)) : null;
-  } catch {
-    return null;
-  }
-}
-// Persist the editor to localStorage. Precedence on load: share link > saved > default.
+// Persist the editor to localStorage. Precedence on load: saved > default.
 const STORAGE_KEY = "pygame-playground:code";
 const storage = {
   get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
@@ -1688,7 +1677,7 @@ function armLint() {
 }
 editor.on("change", armLint);   // first edit arms it; the CM lint addon re-lints on later changes
 
-// Tolerant deserialize for saved-project / #project= / migration seed.
+// Tolerant deserialize for saved-project / migration seed.
 function deserializeProject(obj) {
   if (!obj || typeof obj.files !== "object" || !obj.files) return null;
   const names = Object.keys(obj.files);
@@ -1704,12 +1693,6 @@ function deserializeProject(obj) {
     ? obj.emptyDirs.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
     : [];
   return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs };
-}
-function projectFromHash() {
-  try {
-    if (!location.hash.startsWith("#project=")) return null;
-    return deserializeProject(JSON.parse(b64url.dec(location.hash.slice(9))));
-  } catch { return null; }
 }
 function savedProject() {
   try { const raw = localStorage.getItem(PROJECT_KEY); return raw ? deserializeProject(JSON.parse(raw)) : null; }
@@ -2600,13 +2583,9 @@ renderTabs();
 if (roomFromHash) joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
 
 // Build the initial project. Precedence: #room (multi-file project, joined+adopted async
-// above) > #project > #code > saved project > legacy code > default example.
+// above) > saved project > legacy code > default example.
 function loadInitialProject() {
   if (roomFromHash) { project.load({ files: { "main.py": "" } }); return; }   // blank until room arrives
-  const fromProject = projectFromHash();
-  if (fromProject) { project.load(fromProject); return; }
-  const fromCode = codeFromHash();
-  if (fromCode != null) { project.load({ files: { "main.py": fromCode } }); return; }
   const saved = savedProject();
   if (saved) { project.load(saved); return; }
   const legacy = storage.get();
@@ -2630,53 +2609,6 @@ editor.on("change", () => { if (collab.active) return; dirty = true; clearTimeou
 // Only flush on close when there's an unsaved edit, so navigating away never
 // re-persists the loaded project over a programmatically-cleared key.
 addEventListener("beforeunload", () => { if (dirty) flushSave(); });
-
-// Same-document navigation to a share link (#project= / #code=) changes only the
-// fragment, so the document never reloads — re-run the load precedence so opening
-// a link in the current tab round-trips the project. #room= is owned by collab;
-// a malformed #project= falls through to the saved project (no clobber).
-addEventListener("hashchange", () => {
-  if (collab.active) return;                               // collab owns #room= transitions
-  const h = location.hash;
-  if (h.startsWith("#room=")) return;
-  if (!h.startsWith("#project=") && !h.startsWith("#code=")) return;
-  // A same-tab share link would replace the current project; confirm when there's
-  // work to lose (a multi-file project or unsaved edits). On cancel, strip the hash
-  // so the URL matches the unchanged editor (replaceState doesn't re-fire hashchange).
-  if ((project.isMulti() || dirty) &&
-      !confirm("Open this shared link? It replaces your current project. (Your project stays saved until you edit.)")) {
-    history.replaceState(null, "", location.pathname + location.search);
-    return;
-  }
-  const fromProject = projectFromHash();
-  if (fromProject) { project.load(fromProject); renderTabs(); return; }
-  const fromCode = codeFromHash();
-  if (fromCode != null) { project.load({ files: { "main.py": fromCode } }); renderTabs(); return; }
-  const saved = savedProject();                            // malformed link -> saved project, never blank
-  if (saved) { project.load(saved); renderTabs(); }
-});
-
-// NOTE (Q3 contradiction): design §0 Q3 asks to remove #shareBtn, but the LOCKED battery
-// test/multifile.mjs (check 7, commit 28c2eb9) clicks '#shareBtn' and asserts it emits #project=.
-// Removing it would break that contract (which I may not weaken). Resolution: #shareBtn + its
-// listener are re-homed as a VISIBLE Explorer ghost action that must stay actionable (multifile.mjs
-// check 7 clicks it); full removal is deferred to S7. The legacy #code=/#project= LOAD readers stay (removed in S7).
-document.getElementById("shareBtn").addEventListener("click", async (e) => {
-  let url;
-  if (project.isMulti()) {
-    url = location.origin + location.pathname + "#project=" + b64url.enc(JSON.stringify(project.serialize()));
-    if (url.length > 16000) {
-      logLine("This project is too large to share by link — use Save or Collaborate instead.", "sys");
-      return;
-    }
-  } else {
-    url = location.origin + location.pathname + "#code=" + b64url.enc(editor.getValue());
-  }
-  history.replaceState(null, "", url);
-  const btn = e.currentTarget;
-  btn.textContent = await navigator.clipboard.writeText(url).then(() => "✓ copied", () => "✓ in URL bar");
-  setTimeout(() => { btn.textContent = "🔗 Share"; }, 1500);
-});
 
 // ---------------------------------------------------------------- save / download
 const JSZIP_CDN = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";

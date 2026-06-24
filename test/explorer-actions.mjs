@@ -642,6 +642,28 @@ if (codeMenuRight)
   ok('same-path: the CODE row\'s ⋯ opens the FILE menu (Set as start, no Download): ' + JSON.stringify(codeClashMenu.items));
 else fail('same-path: CODE row\'s ⋯ opened the WRONG menu: ' + JSON.stringify(codeClashMenu));
 
+// Slice-C follow-up A (rename leg): choosing "Rename" from the CODE row's menu must attach the inline
+// <input> to the .tab.py row — NOT the same-path .tab.asset row. fileRenameInline must qualify its
+// selector to `.tab.py` (mirroring tabMenu's anchor); an unqualified `.tab[data-name]` selector would
+// land the input on whichever typed row is first in DOM order (the asset row interleaves), corrupting
+// the asset row instead of the code file. RED before the selector fix; GREEN after.
+await page.evaluate(() => { window.__prompts = []; });
+await clickRowMenu('#tabs .tab.py[data-name="dup.png"]');
+await page.waitForTimeout(150);
+const codeRenameChosen = await activateMenuItem('Rename');
+await page.waitForTimeout(150);
+const renameTarget = await page.evaluate(() => ({
+  pyRowHasInput: !!document.querySelector('#tabs .tab.py[data-name="dup.png"] input'),
+  assetRowHasInput: !!document.querySelector('#tabs .tab.asset[data-name="dup.png"] input'),
+}));
+// cancel the inline edit so we leave the DOM clean for any later steps.
+await inlineRename('#tabs .tab.py[data-name="dup.png"]', '', 'Escape').catch(() => {});
+await inlineRename('#tabs .tab.asset[data-name="dup.png"]', '', 'Escape').catch(() => {});
+await page.waitForTimeout(80);
+if (codeRenameChosen && renameTarget.pyRowHasInput && !renameTarget.assetRowHasInput)
+  ok('same-path: CODE "Rename" attaches the inline <input> to the .tab.py row (not the asset row)');
+else fail('same-path: CODE "Rename" did NOT land on the .tab.py row (selector not qualified to code): ' + JSON.stringify({ codeRenameChosen, renameTarget }));
+
 // ================================================================================================
 // 13. SLICE-C FOLLOW-UP B — popup-menu Tab focus-trap (a11y) (design Slice C §3).
 //     A LOW Slice-B review finding: pressing Tab while the [role=menu] is open must NOT leak focus to

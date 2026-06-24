@@ -2802,7 +2802,9 @@ function tabMenu(name) {
   ]);
 }
 function fileRenameInline(name) {
-  startInlineRename(`#tabs .tab[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
+  // Qualify to the .py row (Slice C: a same-path asset row may share this data-name; renderTabs emits
+  // assets and .py files interleaved, so an unqualified selector could land the input on the asset row).
+  startInlineRename(`#tabs .tab.py[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
     if (!next.endsWith(".py")) next += ".py";
     if (next === name) return true;   // no-op
     if (!project.rename(name, next)) { hint("invalid or in use"); return false; }

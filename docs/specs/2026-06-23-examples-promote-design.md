@@ -41,6 +41,12 @@ reasoning. The design below assumes the recommended answers unless the orchestra
 > Start in a multi-file project): promote the preview, then run via the normal S3 dispatch** (fresh/
 > single-file project → runs the example; established multi-file project → runs the entry, set-as-entry to
 > choose). Re-opening an already-promoted example **selects the existing file** (no duplicate).
+>
+> **IMPLEMENTED DEVIATIONS (validated correct at `2768ae9`):** (1) **Q4 superseded — the legacy `#examples`
+> `<select>` is KEPT**, because the root `verify.mjs:51-54` drives it (the "no verify.mjs" claim was stale);
+> only the dead `loadedExample` was removed. (2) **§3.1's "promote does not steal entry" is SUPERSEDED by
+> §0 Q5b** — promote SETS the new file as `entry` (gated to the promote path only) so Start runs the example
+> you just edited.
 
 - **Q1 — Promote naming.** Map the example display name → a snake_case `.py` stem
   (`"Bouncing balls"` → `bouncy_balls.py`). Recommend a **fixed per-example filename table** (each

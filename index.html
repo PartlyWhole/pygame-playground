@@ -151,6 +151,7 @@
   #tabs .tab.running { border-left-color: var(--warn); }
   #tabs .tab.running .tab-name { color: var(--warn); }
   #tabs .tab.running .tab-name::after { content: " ▶"; color: var(--warn); font-size: 10px; }
+  #tabs .tab .moddot { color: var(--accent); font-size: 10px; flex: 0 0 auto; margin-right: 2px; }
   #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
   #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
@@ -183,10 +184,16 @@
   #apStorage { color: var(--dim); font-size: 11.5px; padding: 8px 6px; border-top: 1px solid var(--edge); }
   #apStorage.low { color: var(--warn); }
 
-  /* ---------- examples rail panel (inert read-only list) ---------- */
-  #examplesPanel .exrow { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 5px; border-left: 2px solid transparent; color: var(--text); }
+  /* ---------- examples rail panel (S4: editable, promote-on-edit) ---------- */
+  #examplesPanel .exrow { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 5px; border-left: 2px solid transparent; color: var(--text); cursor: pointer; }
+  #examplesPanel .exrow:hover { background: var(--color-row-hover); }
+  #examplesPanel .exrow.sel { background: var(--color-row-selected); border-left-color: var(--accent); }
   #examplesPanel .exrow .ic { width: 16px; flex: 0 0 16px; text-align: center; color: var(--color-py-icon); }
   #examplesPanel .exrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #examplesPanel .exrow .moddot { color: var(--accent); font-size: 10px; flex: 0 0 auto; }
+  #examplesPanel .exrow .reset { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 13px; padding: 0 3px; border-radius: 3px; flex: 0 0 auto; opacity: 0; }
+  #examplesPanel .exrow:hover .reset { opacity: 1; }
+  #examplesPanel .exrow .reset:hover { color: var(--accent); background: var(--color-border-hover); }
 
   /* ---------- history rail panel (#historyPanel — in-flow) ---------- */
   #historyPanel { font-size: 12.5px; }
@@ -363,10 +370,10 @@
       <div class="side-body"><div id="historyPanel"></div></div>
     </section>
 
-    <!-- EXAMPLES (inert read-only list; legacy #examples select kept hidden as a seam) -->
+    <!-- EXAMPLES (S4: editable, runnable, promote-on-edit; legacy #examples select kept hidden as a verify.mjs seam) -->
     <section class="panelview" id="panel-examples" data-panel="examples" role="tabpanel" aria-labelledby="tab-examples" hidden>
       <div class="side-head"><span>Examples</span></div>
-      <div class="panel-note">Read-only in this build — full editable examples are coming.</div>
+      <div class="panel-note">Open one to edit &amp; run — editing makes it your file.</div>
       <div class="side-body"><div id="examplesPanel"></div></div>
       <select id="examples" title="Load an example" hidden></select>
     </section>
@@ -820,6 +827,20 @@ def main():
 main()
 `,
 };
+window.EXAMPLES = EXAMPLES;   // read-only test hook (mirrors window.project / window.renderTabs / window.runFile)
+
+// S4: the canonical promote filename for each example (a fixed table, not a runtime slugify — every
+// stem is a valid isModuleName). Source of truth for the six current examples; the first is also the
+// default boot seed.
+const EXAMPLE_FILENAME = {
+  "Swimming fish": "swimming_fish.py",
+  "Bouncy balls": "bouncy_balls.py",
+  "Arrow-key square": "arrow_key_square.py",
+  "Mouse painter": "mouse_painter.py",
+  "Starfield": "starfield.py",
+  "Snake": "snake.py",
+};
+const DEFAULT_EXAMPLE = "Swimming fish";   // boot seed (replaces the removed `loadedExample` var)
 
 // ---------------------------------------------------------------- python bootstrap
 const BOOT_PY = String.raw`
@@ -1506,6 +1527,11 @@ const project = {
     this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
     this.active = order.includes(rec.active) ? rec.active : this.entry;
     if (typeof closedFolders !== "undefined") closedFolders.clear();   // S3 fold-in: don't leak collapsed-folder state across a load
+    // S4: a load swaps the entire file set, so every example-promotion link + any floating preview is
+    // stale — clearing them prevents a re-opened example from re-using an unrelated file under the same name.
+    if (typeof exampleOf !== "undefined") { for (const k in exampleOf) delete exampleOf[k]; }
+    if (typeof modifiedExamples !== "undefined") modifiedExamples.clear();
+    if (typeof previewExample !== "undefined") previewExample = null;
     editor.swapDoc(this.files[this.active]);
   },
   setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); editor.performLint?.(); } },
@@ -1513,6 +1539,16 @@ const project = {
     if (!isModuleName(name) || this.files[name]) return false;
     this.files[name] = new CodeMirror.Doc(text, "python");
     this.order.push(name);
+    return true;
+  },
+  // S4: ADOPT an existing live Doc (the preview Doc the user is typing into) instead of
+  // re-creating one — preserves the promoting keystroke + the Doc's undo history. Same
+  // validation + collision refusal as add(); makes the adopted file the active one.
+  adoptDoc(name, doc) {
+    if (!isModuleName(name) || this.files[name]) return false;
+    this.files[name] = doc;
+    this.order.push(name);
+    this.active = name;
     return true;
   },
   // Register a created-but-empty folder so it persists (via emptyDirs) until a file
@@ -1994,6 +2030,14 @@ const runBtnEl = document.getElementById("runBtn");
 // cleared on finish/stop/error/End. Pause/Resume do NOT change it.
 let runFile = null;
 window.runFile = () => runFile;   // test seam (mirrors window.project / window.renderTabs)
+// S4 promote-on-edit state. Declared here (before renderTabs, which reads modifiedExamples for the
+// `●` dot, and before the first renderTabs() call so neither is in the temporal dead zone).
+//   previewExample   — { name, doc } while an UNPROMOTED example is shown via swapDoc; null otherwise.
+//   exampleOf        — promoted filename -> EXAMPLES key (links a real file back to its example source).
+//   modifiedExamples — set of promoted filenames that diverge from EXAMPLES (drives the `●` in both surfaces).
+let previewExample = null;
+const exampleOf = Object.create(null);
+const modifiedExamples = new Set();
 // A hidden, off-screen holder for the ONE CodeMirror element while a non-.py file is shown.
 // Moving the wrapper element (never destroying it) keeps the single instance alive (identity
 // invariant) AND removes .CodeMirror from #viewerBody so the empty-state assertion holds.
@@ -2159,6 +2203,7 @@ function renderTabs() {
         out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
+          (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
           `<button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       }
@@ -2374,7 +2419,6 @@ document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
 document.getElementById("newFolderBtn").addEventListener("click", newFolderPrompt);
 document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("assetInput").click());
 
-let loadedExample = EXAMPLES[exampleSel.value];
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
 loadInitialProject();
 renderTabs();
@@ -2392,7 +2436,7 @@ function loadInitialProject() {
   if (saved) { project.load(saved); return; }
   const legacy = storage.get();
   if (legacy != null) { project.load({ files: { "main.py": legacy } }); return; }   // migrate
-  project.load({ files: { "main.py": loadedExample } });
+  project.load({ files: { "main.py": EXAMPLES[DEFAULT_EXAMPLE] } });
 }
 
 let saveTimer = null;
@@ -2513,32 +2557,148 @@ async function saveProject() {
 }
 document.getElementById("saveBtn").addEventListener("click", saveProject);
 
-// The legacy #examples <select> is kept HIDDEN as a compatibility seam (verify.mjs drives it
-// via getElementById('examples') + a change event). Its change handler still loads + runs an
-// example. The visible Examples rail panel is INERT/read-only (Q4) — see renderExamplesPanel().
+// The legacy #examples <select> is kept HIDDEN as a compatibility seam: verify.mjs drives it
+// via getElementById('examples') + a dispatched change event to load + run the Snake example
+// (the asyncify smoke test). The visible, editable Examples rail panel (S4) is the user-facing
+// path — see renderExamplesPanel(); this select is the headless test seam only.
 exampleSel.addEventListener("change", () => {
-  const differs = project.isMulti() || editor.getValue() !== loadedExample;
+  const chosen = EXAMPLES[exampleSel.value];
+  const differs = project.isMulti() || editor.getValue() !== chosen;
   const msg = project.isMulti()
     ? `Replace your whole project (${project.order.length} files) with this example?`
     : "Replace your current code with the example?";
   if (differs && !confirm(msg)) return;
-  loadedExample = EXAMPLES[exampleSel.value];
-  project.load({ files: { "main.py": loadedExample } });   // collapse to a one-file project
+  project.load({ files: { "main.py": chosen } });   // collapse to a one-file project
   viewerSel = "main.py";
   renderViewer("main.py");
   renderTabs();
   run();
 });
 
-// ---------------------------------------------------------------- examples rail panel (INERT, read-only)
-// Q4: shows the example NAMES from EXAMPLES as a non-destructive styled list. No load-into-editor,
-// no change handler, no setValue — full editable examples are S4.
+// ---------------------------------------------------------------- examples rail panel (S4: editable, promote-on-edit)
+// Clicking a row PREVIEWS the example in the ONE CodeMirror via swapDoc (NEVER setValue, so lint stays
+// unarmed and the preview lives OUTSIDE project.files). The FIRST real edit promotes the live Doc into
+// the project (adoptDoc — keystroke + undo preserved), names it from EXAMPLE_FILENAME with an underscore
+// auto-suffix on collision, and shows a `●` in both the panel row and the Explorer tree. `↺` (behind the
+// native confirm) restores a fresh Doc from the immutable EXAMPLES source.
+
+// The canonical promote filename for an example key (fixed table; slugify fallback for any future key,
+// validated against isModuleName so the result is always a real module).
+function exampleFilename(key) {
+  if (EXAMPLE_FILENAME[key]) return EXAMPLE_FILENAME[key];
+  let stem = key.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!/^[a-z_]/.test(stem)) stem = "_" + stem;
+  const cand = (stem || "example") + ".py";
+  return isModuleName(cand) ? cand : "example.py";
+}
+// First free name on collision: bouncy_balls.py -> bouncy_balls_2.py (UNDERSCORE — a hyphen fails
+// isModuleName). Returns the base if it's free.
+function freePromoteName(base) {
+  if (!project.files[base]) return base;
+  const stem = base.replace(/\.py$/, "");
+  for (let n = 2; ; n++) {
+    const cand = `${stem}_${n}.py`;
+    if (!project.files[cand]) return cand;
+  }
+}
+
+// Open an example: select its already-promoted file if one exists, else build a fresh preview Doc and
+// swapDoc into it (no setValue → lint stays unarmed → the Doc is not yet a project file).
+function openExample(key) {
+  if (!(key in EXAMPLES)) return;
+  // Re-opening an already-promoted example selects the existing file (no duplicate preview).
+  const promoted = Object.keys(exampleOf).find(fn => exampleOf[fn] === key && project.files[fn]);
+  if (promoted) {
+    previewExample = null;
+    renderViewer(promoted);   // .py -> setActive -> swapDoc into the real Doc
+    renderTabs();
+    renderExamplesPanel();
+    return;
+  }
+  const doc = new CodeMirror.Doc(EXAMPLES[key], "python");   // immutable source -> fresh Doc (own undo)
+  previewExample = { name: key, doc };
+  editor.swapDoc(doc);                                       // NEVER setValue (landmine b)
+  // Viewer chrome: show the ONE CodeMirror in "preview" mode with the prospective filename.
+  const cmWrap = editor.getWrapperElement();
+  viewerBodyEl.querySelectorAll(".imgview, .sound, .empty").forEach(n => n.remove());
+  if (cmWrap.parentElement !== viewerBodyEl) viewerBodyEl.appendChild(cmWrap);
+  viewerSel = null;                                          // the preview is not a project file
+  vNameEl.textContent = exampleFilename(key);
+  vMetaEl.textContent = "· Python · from example";
+  runBtnEl.style.display = "";
+  editor.refresh();
+  renderTabs();                                             // drop any stale .active in the tree
+  renderExamplesPanel();                                     // mark this row .sel
+}
+
+// Promote the current preview into the project on its first real edit. Returns the final filename.
+function promotePreview() {
+  const { name: key, doc } = previewExample;
+  const finalName = freePromoteName(exampleFilename(key));
+  const taken = finalName !== exampleFilename(key);
+  project.adoptDoc(finalName, doc);                          // ADOPT the live Doc (keystroke + undo survive)
+  project.setEntry(finalName);                              // a promoted single edit becomes the runnable entry
+  exampleOf[finalName] = key;
+  modifiedExamples.add(finalName);
+  previewExample = null;                                     // it's a real file now, no longer floating
+  viewerSel = finalName;
+  vNameEl.textContent = finalName;
+  vMetaEl.textContent = "· Python" + (finalName === project.entry ? " · entry point" : "");
+  if (taken) logLine(`That name was taken — saved your edit as ${finalName}.`, "sys");
+  renderTabs();
+  renderExamplesPanel();
+  flushSave();                                              // synchronous, before the autosave debounce fires
+}
+
+// A dedicated change listener (independent of armLint): the FIRST edit of a preview Doc promotes it.
+editor.on("change", () => {
+  if (previewExample && editor.getDoc() === previewExample.doc) promotePreview();
+});
+
+// Reset a promoted+modified example to its immutable source: a FRESH Doc (fresh undo), behind confirm.
+function resetExampleFile(fileName) {
+  const key = exampleOf[fileName];
+  if (!key) return;
+  if (!confirm(`Reset "${fileName}" to the original example? Your edits to this file will be lost.`)) return;
+  const fresh = new CodeMirror.Doc(EXAMPLES[key], "python");   // FRESH Doc = FRESH undo stack
+  project.files[fileName] = fresh;                             // replace the Doc in-place (key unchanged)
+  if (project.active === fileName) editor.swapDoc(fresh);       // re-show it (swapDoc, never setValue)
+  modifiedExamples.delete(fileName);                           // body == EXAMPLES[key] again -> clear the ●
+  renderTabs();
+  renderExamplesPanel();
+  flushSave();
+}
+
 function renderExamplesPanel() {
   const panel = document.getElementById("examplesPanel");
   if (!panel) return;
-  panel.innerHTML = Object.keys(EXAMPLES).map(name => `
-    <div class="exrow"><span class="ic" aria-hidden="true">🐍</span><span class="nm">${escTab(name)}</span></div>`).join("");
+  panel.innerHTML = Object.keys(EXAMPLES).map(key => {
+    const promotedName = Object.keys(exampleOf).find(f => exampleOf[f] === key && project.files[f]);
+    const sel = (previewExample && previewExample.name === key) || (promotedName && viewerSel === promotedName);
+    const modified = promotedName && modifiedExamples.has(promotedName);
+    return `<div class="exrow${sel ? " sel" : ""}" data-ex="${escTab(key)}">` +
+      `<span class="ic" aria-hidden="true">🐍</span>` +
+      `<span class="nm">${escTab(key)}</span>` +
+      (modified ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
+      (modified ? `<button class="reset" title="Reset to the original example" aria-label="Reset ${escTab(key)} to the original">↺</button>` : "") +
+      `</div>`;
+  }).join("");
 }
+
+// One delegated click handler for the panel: a `.reset` click resets (and never opens); anything else
+// on a row opens/previews it.
+document.getElementById("examplesPanel").addEventListener("click", (e) => {
+  const row = e.target.closest(".exrow");
+  if (!row) return;
+  const key = row.dataset.ex;
+  const resetBtn = e.target.closest(".reset");
+  if (resetBtn) {
+    const fileName = Object.keys(exampleOf).find(f => exampleOf[f] === key && project.files[f]);
+    if (fileName) resetExampleFile(fileName);
+    return;
+  }
+  openExample(key);
+});
 
 // ---------------------------------------------------------------- activity rail (§3) + roving tabindex (§8.1)
 const railEl = document.querySelector("nav.rail");

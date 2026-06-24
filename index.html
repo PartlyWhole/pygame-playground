@@ -146,6 +146,14 @@
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
   #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
   #tabs .tab-add { display: block; padding: 5px 8px; color: var(--accent); cursor: pointer; user-select: none; font-size: 12px; }
+  /* S2: folder rows + caret + DnD drop affordances (retargeted from proto/sandbox.html) */
+  #tabs .tab .caret { width: 12px; flex: 0 0 12px; text-align: center; color: var(--dim); font-size: 9px; transition: transform .12s; }
+  #tabs .tab .caret.spacer { visibility: hidden; }
+  #tabs .tab.folder.open > .caret { transform: rotate(90deg); }
+  #tabs .tab.folder .ic { color: var(--dim); }
+  #tabs .tab.drop-into { background: #26402f; box-shadow: inset 0 0 0 1px var(--accent); }
+  #tabs .tab.drag-ghost { opacity: .4; }
+  #tabs .drop-line { height: 2px; background: var(--accent); margin: 0 6px; border-radius: 1px; }
 
   /* ---------- explorer asset compat section (#assetPanel — in-flow inside Explorer) ---------- */
   #assetChip { font-size: 12.5px; color: var(--dim); user-select: none; }
@@ -327,7 +335,7 @@
           <button class="ghost" id="uploadBtn" aria-label="Upload files" data-tip="Upload files"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/></svg></button>
           <button class="ghost" id="saveBtn" aria-label="Download project (.py or .zip)" data-tip="Download project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>
           <button class="ghost" id="newFileBtn" aria-label="New file" data-tip="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg></button>
-          <button class="ghost" id="newFolderBtn" hidden aria-label="New folder" data-tip="New folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/></svg></button>
+          <button class="ghost" id="newFolderBtn" aria-label="New folder" data-tip="New folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.8 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/></svg></button>
         </div>
       </div>
       <div class="side-body">
@@ -2032,43 +2040,270 @@ function renderViewer(name) {
   viewerBodyEl.appendChild(surface);
 }
 
+// S2: the nested folder tree. The source of truth stays project.order (files) +
+// assetFS.list (assets) + project.emptyDirs (created-but-empty folders); renderTabs
+// derives a transient display tree each render (no separate node model to desync).
+// Folder open/closed is a RENDER-ONLY flag — a Set of COLLAPSED folder paths — so a
+// toggle never mutates the model and never touches editor.setValue. Folders default to
+// OPEN (a path is open unless the user collapsed it), so freshly-loaded/created folders
+// reveal their children without bookkeeping per load.
+const closedFolders = new Set();   // collapsed folder paths (render-only)
+const isFolderOpen = (path) => !closedFolders.has(path);
+// The folder a new file/folder is created relative to (the selected file's dir, or a
+// selected folder). Cleared to ROOT on a folder toggle/delete.
+let selectedFolder = "";
+
+// Build a nested display tree: { name, path, dirs:Map<seg,node>, files:[{path,kind,asset,warn,entry,active}] }
+function buildTree() {
+  const root = { name: "", path: "", dirs: new Map(), files: [] };
+  const ensureDir = (path) => {
+    if (!path) return root;
+    let node = root;
+    const segs = path.split("/");
+    let acc = "";
+    for (const seg of segs) {
+      acc = acc ? acc + "/" + seg : seg;
+      if (!node.dirs.has(seg)) node.dirs.set(seg, { name: seg, path: acc, dirs: new Map(), files: [] });
+      node = node.dirs.get(seg);
+    }
+    return node;
+  };
+  const place = (path, meta) => {
+    const slash = path.lastIndexOf("/");
+    const dir = slash < 0 ? "" : path.slice(0, slash);
+    ensureDir(dir).files.push({ path, ...meta });
+  };
+  for (const name of project.order)
+    place(name, { kind: "py", asset: false, entry: name === project.entry, active: name === viewerSel });
+  for (const a of assetFS.list)
+    place(a.name, { kind: classifyKind(a.name), asset: true, warn: a.warn, active: a.name === viewerSel });
+  for (const d of project.emptyDirs) ensureDir(d);
+  return root;
+}
+
 function renderTabs() {
-  // Always-on, flat: .py files first, then assets — both as .tab[data-name] rows.
-  const fileRows = project.order.map(name => `
-    <div class="tab py${name === viewerSel ? " active" : ""}${name === project.entry ? " entry" : ""}" data-name="${escTab(name)}">
-      <span class="ic" aria-hidden="true">🐍</span>
-      <span class="tab-name">${escTab(name)}</span>
-      <button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(name)}">⋯</button>
-    </div>`).join("");
-  const assetRows = assetFS.list.map(a => `
-    <div class="tab asset${a.name === viewerSel ? " active" : ""}" data-name="${escTab(a.name)}">
-      <span class="ic" aria-hidden="true">${classifyKind(a.name) === "image" ? "🖼️" : classifyKind(a.name) === "audio" ? "🔊" : "📄"}</span>
-      <span class="tab-name">${escTab(a.name)}</span>
-      ${a.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : ""}
-    </div>`).join("");
-  tabsEl.innerHTML = fileRows + assetRows + `<span class="tab-add" title="New file">+ new file</span>`;
+  // Drop a stale selected-folder (e.g. after a project.load swapped the file set) so a
+  // new file/folder isn't created under a directory that no longer exists.
+  if (selectedFolder && !project._fileDirs().has(selectedFolder) && !project.emptyDirs.has(selectedFolder))
+    selectedFolder = "";
+  const tree = buildTree();
+  const out = [];
+  const emit = (node, depth) => {
+    // Folders first (alphabetical), then files in project order within this dir.
+    const dirNames = [...node.dirs.keys()].sort();
+    for (const seg of dirNames) {
+      const d = node.dirs.get(seg);
+      const open = isFolderOpen(d.path);
+      const pad = 6 + depth * 14;
+      out.push(`<div class="tab folder${open ? " open" : ""}" data-path="${escTab(d.path)}" draggable="true" style="padding-left:${pad}px">` +
+        `<span class="caret" aria-hidden="true">▸</span>` +
+        `<span class="ic" aria-hidden="true">📁</span>` +
+        `<span class="tab-name">${escTab(d.name)}</span>` +
+        `<button class="tab-menu" title="Folder actions" aria-label="Folder actions for ${escTab(d.path)}">⋯</button>` +
+        `</div>`);
+      if (open) emit(d, depth + 1);
+    }
+    for (const f of node.files) {
+      const pad = 6 + depth * 14 + 12;   // +12 to align past where a caret would sit
+      if (f.asset) {
+        out.push(`<div class="tab asset${f.active ? " active" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+          `<span class="ic" aria-hidden="true">${f.kind === "image" ? "🖼️" : f.kind === "audio" ? "🔊" : "📄"}</span>` +
+          `<span class="tab-name">${escTab(basename(f.path))}</span>` +
+          (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
+          `</div>`);
+      } else {
+        out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+          `<span class="ic" aria-hidden="true">🐍</span>` +
+          `<span class="tab-name">${escTab(basename(f.path))}</span>` +
+          `<button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
+          `</div>`);
+      }
+    }
+  };
+  emit(tree, 0);
+  tabsEl.innerHTML = out.join("") + `<span class="tab-add" title="New file">+ new file</span>`;
   editor.refresh();
 }
 window.renderTabs = renderTabs;   // test seam
+const basename = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
+const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); };
+
 tabsEl.addEventListener("click", (e) => {
   const add = e.target.closest(".tab-add");
   if (add) { newFilePrompt(); return; }
+  const folder = e.target.closest(".tab.folder");
+  if (folder) {
+    const path = folder.dataset.path;
+    const menuBtn = e.target.closest(".tab-menu");
+    if (menuBtn) { folderMenu(path); return; }
+    // caret / folder row → render-only toggle (no model mutation, no setValue).
+    selectedFolder = path;
+    if (closedFolders.has(path)) closedFolders.delete(path); else closedFolders.add(path);
+    renderTabs();
+    return;
+  }
   const menuBtn = e.target.closest(".tab-menu");
   const tab = e.target.closest(".tab");
   if (!tab) return;
   const name = tab.dataset.name;
   if (menuBtn) { tabMenu(name); return; }
+  selectedFolder = dirname(name);
   renderViewer(name);   // .py -> CM swapDoc via setActive; asset -> media surface
   renderTabs();
+});
+
+// ----- drag & drop (move-into-folder + reorder + descendant guard), from the proto.
+// The dragged path rides BOTH a closure var and the DataTransfer text/plain (the test
+// drives either). A move/reorder mutates the model + render — never editor.setValue.
+let dragPath = null;
+let dropLineEl = null;
+function clearDropMarks() {
+  tabsEl.querySelectorAll(".drop-into").forEach(r => r.classList.remove("drop-into"));
+  if (dropLineEl) { dropLineEl.remove(); dropLineEl = null; }
+}
+// dest folder is a descendant of (or equal to) the dragged folder path → block.
+function isDescendantDrop(draggedFolder, destFolder) {
+  if (!draggedFolder) return false;
+  return destFolder === draggedFolder || (destFolder + "/").startsWith(draggedFolder + "/");
+}
+tabsEl.addEventListener("dragstart", (e) => {
+  const row = e.target.closest(".tab");
+  if (!row) return;
+  dragPath = row.dataset.name || row.dataset.path || null;
+  if (!dragPath) return;
+  row.classList.add("drag-ghost");
+  try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragPath); } catch {}
+});
+tabsEl.addEventListener("dragend", (e) => {
+  const row = e.target.closest(".tab");
+  if (row) row.classList.remove("drag-ghost");
+  dragPath = null; clearDropMarks();
+});
+tabsEl.addEventListener("dragover", (e) => {
+  const dragged = dragPath || (e.dataTransfer && e.dataTransfer.getData && (() => { try { return e.dataTransfer.getData("text/plain"); } catch { return null; } })());
+  if (!dragged) return;
+  const folder = e.target.closest(".tab.folder");
+  const fileRow = e.target.closest(".tab[data-name]");
+  e.preventDefault();
+  clearDropMarks();
+  if (folder) {
+    const dest = folder.dataset.path;
+    // a folder being dragged into itself / a descendant is blocked.
+    const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
+    if (draggedIsFolder && isDescendantDrop(dragged, dest)) return;
+    if (dest === dirname(dragged) && !draggedIsFolder) return;   // already there
+    folder.classList.add("drop-into");
+  } else if (fileRow) {
+    const r = fileRow.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    dropLineEl = document.createElement("div");
+    dropLineEl.className = "drop-line";
+    if (after) fileRow.after(dropLineEl); else fileRow.before(dropLineEl);
+  }
+});
+tabsEl.addEventListener("dragleave", (e) => {
+  const row = e.target.closest(".tab");
+  if (row) row.classList.remove("drop-into");
+});
+tabsEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  let dragged = dragPath;
+  try { if (!dragged && e.dataTransfer) dragged = e.dataTransfer.getData("text/plain"); } catch {}
+  clearDropMarks();
+  if (!dragged) return;
+  const folder = e.target.closest(".tab.folder");
+  const fileRow = e.target.closest(".tab[data-name]");
+  if (folder) {
+    const dest = folder.dataset.path;
+    const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
+    if (draggedIsFolder && isDescendantDrop(dragged, dest)) { dragPath = null; return; }   // descendant guard
+    if (project.move(dragged, dest)) { closedFolders.delete(dest); renderTabs(); flushSave(); }
+  } else if (fileRow) {
+    // reorder within project.order (files only; folders aren't in order).
+    const target = fileRow.dataset.name;
+    if (project.files[dragged] && project.files[target] && dragged !== target) {
+      const r = fileRow.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height / 2;
+      const ord = project.order;
+      ord.splice(ord.indexOf(dragged), 1);
+      let idx = ord.indexOf(target) + (after ? 1 : 0);
+      ord.splice(idx, 0, dragged);
+      renderTabs(); flushSave();
+    }
+  }
+  dragPath = null;
 });
 function newFilePrompt() {
   const raw = prompt("New file name (e.g. enemy.py):", "");
   if (raw == null) return;
-  const name = raw.endsWith(".py") ? raw : raw + ".py";
+  let leaf = raw.endsWith(".py") ? raw : raw + ".py";
+  // Create relative to the selected folder (if a folder/file in one is selected), unless
+  // the typed name already carries a path.
+  const name = (selectedFolder && !leaf.includes("/")) ? selectedFolder + "/" + leaf : leaf;
   if (!project.add(name)) { alert("Use a valid, unique name ending in .py"); return; }
+  if (selectedFolder) project.emptyDirs.delete(selectedFolder);   // folder now occupied
+  if (dirname(name)) closedFolders.delete(dirname(name));
   project.setActive(name);
   renderViewer(name);
   renderTabs(); flushSave();
+}
+// S2: create an empty folder. Validated as a Python-identifier-safe segment. Created
+// relative to the selected folder when one is selected, else ROOT. Persists via emptyDirs.
+function newFolderPrompt() {
+  const raw = prompt("New folder name (letters, digits, underscore):", "");
+  if (raw == null) return;
+  const seg = raw.trim();
+  if (!isFolderSegment(seg)) { alert("Folder names must be a Python identifier (letters, digits, underscore; no leading digit)."); return; }
+  const path = selectedFolder ? selectedFolder + "/" + seg : seg;
+  if (!project.addFolder(path)) { alert("That folder already exists or has an invalid name."); return; }
+  closedFolders.delete(path);
+  renderTabs(); flushSave();
+}
+// S2: folder actions via the folder row's ⋯ menu (the app has no modal framework, so
+// prompt/confirm is the house style). Rename re-keys every descendant; delete removes
+// the subtree behind the shared confirm. All model+render — never editor.setValue.
+function folderMenu(path) {
+  const action = prompt(`Folder "${path}" — type: rename / delete`, "");
+  if (!action) return;
+  if (action === "rename") {
+    const seg = prompt(`Rename folder "${path}" to:`, basename(path));
+    if (seg == null) return;
+    const next = (seg || "").trim();
+    if (!isFolderSegment(next)) { alert("Folder names must be a Python identifier (letters, digits, underscore; no leading digit)."); return; }
+    const parent = dirname(path);
+    const newPath = parent ? parent + "/" + next : next;
+    if (newPath === path) return;
+    // Re-key every descendant file under the new prefix (project.move keeps the
+    // basename, so a leaf-rename is done per-child here).
+    const prefix = path + "/";
+    const kids = project.order.filter(p => p.startsWith(prefix));
+    if (project.files[newPath] || project.order.some(p => p.startsWith(newPath + "/"))) { alert("That folder already exists."); return; }
+    for (const k of kids) {
+      const child = newPath + k.slice(path.length);
+      project.rename(k, child);
+    }
+    // carry the empty-folder marker.
+    if (project.emptyDirs.delete(path)) project.emptyDirs.add(newPath);
+    // carry collapsed state across the re-key (folders are open-by-default).
+    for (const p of [...closedFolders]) {
+      if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(newPath + p.slice(path.length)); }
+    }
+    if (viewerSel.startsWith(prefix)) viewerSel = newPath + viewerSel.slice(path.length);
+    selectedFolder = "";
+    alert(`Renamed. Note: 'import ${path.replace(/\//g, ".")}' references in other files are NOT updated — fix them manually.`);
+    renderTabs(); flushSave();
+  } else if (action === "delete") {
+    const prefix = path + "/";
+    const kids = project.order.filter(p => p.startsWith(prefix));
+    if (kids.length && project.order.length - kids.length < 1) { alert("Can't delete every file — keep at least one."); return; }
+    if (!confirm(`Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+    for (const k of kids) project.remove(k);
+    project.emptyDirs.delete(path);
+    for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
+    if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
+    selectedFolder = "";
+    renderTabs(); flushSave();
+  }
 }
 function tabMenu(name) {
   if (!project.files[name]) return;   // asset rows have no file-menu actions in S1
@@ -2092,6 +2327,7 @@ function tabMenu(name) {
 }
 // Explorer header actions
 document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
+document.getElementById("newFolderBtn").addEventListener("click", newFolderPrompt);
 document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("assetInput").click());
 
 let loadedExample = EXAMPLES[exampleSel.value];

@@ -576,6 +576,141 @@ if (openedBeforeEsc && !openAfterEsc)
 else fail('Esc did not close the menu (or it never opened): ' + JSON.stringify({ openedBeforeEsc, openAfterEsc }));
 
 // ================================================================================================
+// 12. SLICE-C FOLLOW-UP A — code+asset SAME-PATH selector disambiguation (design Slice C §3).
+//     A LOW Slice-B review finding: the ⋯ click delegate reads `tab.dataset.name` and routes via
+//     `tabMenu(name)`, which dispatches by a PATH LOOKUP (`if (!project.files[name]) assetMenu(name)`,
+//     ~index.html:2780). So when a CODE file and an ASSET share the exact same path, clicking the
+//     ASSET row's ⋯ still hits `project.files[name]` first and opens the FILE menu (Set as start /
+//     no Download) — the WRONG row. Slice C must disambiguate by the CLICKED ROW'S TYPE
+//     (`.tab.py` vs `.tab.asset`), not the path lookup.
+//
+//     We construct the clash directly via the model seams: project.files carries a code key "dup.png"
+//     AND assetFS carries an asset "dup.png", so BOTH a .tab.py[data-name="dup.png"] and a
+//     .tab.asset[data-name="dup.png"] render. Then we open EACH row's ⋯ and assert the menu targets
+//     the right type: the asset row's menu has Download (asset-only); the code row's has Set as start
+//     (code-only) and NO Download. RED today: the asset row opens the FILE menu (no Download).
+// ================================================================================================
+await page.evaluate(() => {
+  window.project.load({
+    files: { 'main.py': 'a = 1\n', 'dup.png': '# a CODE file that happens to be keyed dup.png\n' },
+    order: ['main.py', 'dup.png'], entry: 'main.py', active: 'main.py',
+  });
+  window.renderTabs();
+});
+// add the colliding ASSET at the same path (low-level model seam; bypasses the upload de-dupe).
+await page.evaluate((b64) => {
+  const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return window.assetFS.add(new File([bytes], 'dup.png', { type: 'image/png' }));
+}, PNG_B64).catch(() => {});
+await page.waitForTimeout(250);
+await ensureExplorerOpen();
+// sanity: both typed rows really do render for the same data-name (the clash exists in the DOM).
+const clashRows = await page.evaluate(() => ({
+  codeRow: !!document.querySelector('#tabs .tab.py[data-name="dup.png"]'),
+  assetRow: !!document.querySelector('#tabs .tab.asset[data-name="dup.png"]'),
+}));
+if (clashRows.codeRow && clashRows.assetRow)
+  ok('clash constructed: both .tab.py and .tab.asset render for data-name="dup.png"');
+else fail('could not construct the code+asset clash rows: ' + JSON.stringify(clashRows));
+
+// open the ASSET row's ⋯ — its menu must be the ASSET menu (Download present, no "Set as start").
+await page.evaluate(() => { window.__prompts = []; });
+await clickRowMenu('#tabs .tab.asset[data-name="dup.png"]');
+await page.waitForTimeout(150);
+const assetClashMenu = await readMenu();
+await page.evaluate(() => window.__closePopMenu && window.__closePopMenu(false));
+await page.waitForTimeout(80);
+const assetMenuRight = assetClashMenu.open &&
+  assetClashMenu.items.some(t => /download/i.test(t)) &&
+  !assetClashMenu.items.some(t => /set as start/i.test(t));
+if (assetMenuRight)
+  ok('same-path: the ASSET row\'s ⋯ opens the ASSET menu (Download, no "Set as start"): ' + JSON.stringify(assetClashMenu.items));
+else fail('same-path: ASSET row\'s ⋯ opened the WRONG menu (path-lookup routes to the code file): ' + JSON.stringify(assetClashMenu));
+
+// open the CODE row's ⋯ — its menu must be the FILE menu (Set as start present, no Download).
+await page.evaluate(() => { window.__prompts = []; });
+await clickRowMenu('#tabs .tab.py[data-name="dup.png"]');
+await page.waitForTimeout(150);
+const codeClashMenu = await readMenu();
+await page.evaluate(() => window.__closePopMenu && window.__closePopMenu(false));
+await page.waitForTimeout(80);
+const codeMenuRight = codeClashMenu.open &&
+  codeClashMenu.items.some(t => /set as start/i.test(t)) &&
+  !codeClashMenu.items.some(t => /download/i.test(t));
+if (codeMenuRight)
+  ok('same-path: the CODE row\'s ⋯ opens the FILE menu (Set as start, no Download): ' + JSON.stringify(codeClashMenu.items));
+else fail('same-path: CODE row\'s ⋯ opened the WRONG menu: ' + JSON.stringify(codeClashMenu));
+
+// ================================================================================================
+// 13. SLICE-C FOLLOW-UP B — popup-menu Tab focus-trap (a11y) (design Slice C §3).
+//     A LOW Slice-B review finding: pressing Tab while the [role=menu] is open must NOT leak focus to
+//     an unrelated page control — it must either keep focus WITHIN the menu items OR close the menu and
+//     return focus to the ⋯ anchor. We put a known, focusable page control (#runBtn) in a state where a
+//     real Tab COULD land on it, open the menu, dispatch a Tab keydown, and assert document.activeElement
+//     is NOT that unrelated control: it is a menuitem, the menu container, or the ⋯ anchor.
+//     RED rationale + the synthetic-event subtlety: a dispatched KeyboardEvent does NOT trigger the
+//     browser's NATIVE Tab focus move, so we can't observe the real focus leak by reading
+//     document.activeElement after a synthetic Tab. The observable contract-level seam is that the
+//     menu's Tab handler must SUPPRESS the browser's default Tab (e.preventDefault()) — either while
+//     trapping focus among the items or while closing + returning focus to the ⋯. Today the handler
+//     (~index.html:2636) is `else if (e.key === "Tab") { closePopMenu(); }` — it closes but does NOT
+//     call preventDefault(), so the native Tab still runs AFTER the handler and advances focus off the
+//     anchor to the next tabbable page control. We assert the dispatched Tab event was
+//     defaultPrevented (RED today) AND that focus did not land on an unrelated page control.
+// ================================================================================================
+await page.evaluate(() => {
+  window.project.load({ files: { 'main.py': 'a = 1\n', 'enemy.py': 'E = 1\n' }, order: ['main.py', 'enemy.py'], entry: 'main.py', active: 'main.py' });
+  window.renderTabs();
+});
+await ensureExplorerOpen();
+await clickRowMenu('#tabs .tab[data-name="enemy.py"]');
+await page.waitForTimeout(150);
+const trapBefore = await page.evaluate(() => {
+  const menu = [...document.querySelectorAll('[role="menu"]')].find(m => m.offsetParent !== null);
+  return {
+    open: !!menu,
+    // focus starts inside the menu (openPopMenu focuses the first item).
+    activeInMenu: !!menu && (menu.contains(document.activeElement) || document.activeElement === menu),
+  };
+});
+// Dispatch a CANCELABLE Tab keydown on the focused element (bubbles to the menu's handler). Read back
+// whether the handler called preventDefault — the synthetic signal for "the native Tab is suppressed".
+const trapAfter = await page.evaluate(() => {
+  const el = document.activeElement || document.body;
+  const ev = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true });
+  el.dispatchEvent(ev);
+  const menu = document.querySelector('[role="menu"]');
+  const menuOpen = !!menu && menu.classList.contains('open') && menu.offsetParent !== null;
+  const ae = document.activeElement;
+  const inMenu = !!menu && (menu.contains(ae) || ae === menu);
+  const onAnchor = !!ae && ae.classList && ae.classList.contains('tab-menu');
+  // an UNRELATED page control = a real focusable element that is neither a menuitem/menu nor the ⋯.
+  const leakedToPage = !inMenu && !onAnchor && !!ae &&
+    /^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
+  const leakedToCM = !inMenu && !onAnchor && !!ae && !!(ae.closest && ae.closest('.CodeMirror'));
+  return {
+    defaultPrevented: ev.defaultPrevented,   // RED today: handler closes but doesn't preventDefault
+    menuOpen, activeTag: ae ? ae.tagName : null,
+    activeClass: ae && ae.className ? String(ae.className) : '',
+    inMenu, onAnchor, leakedToPage, leakedToCM,
+  };
+});
+if (trapBefore.open && trapBefore.activeInMenu)
+  ok('focus-trap setup: menu opened with focus inside it');
+else fail('focus-trap setup failed (menu/focus not in menu): ' + JSON.stringify(trapBefore));
+// The load-bearing contract: Tab inside the open menu must SUPPRESS the browser default (so the native
+// Tab can't leak focus to the page) — preventDefault() while trapping among items OR while closing +
+// returning to the ⋯. RED today: the handler closes without preventDefault.
+if (trapAfter.defaultPrevented)
+  ok('Tab inside the open menu suppresses the browser default (preventDefault — native Tab can\'t leak to the page): ' + JSON.stringify(trapAfter));
+else fail('Tab inside the open menu does NOT preventDefault — the native Tab leaks focus to the next page control: ' + JSON.stringify(trapAfter));
+// Secondary guard: synthetic focus must not have landed on an unrelated page control / the editor.
+if (!trapAfter.leakedToPage && !trapAfter.leakedToCM && (trapAfter.inMenu || trapAfter.onAnchor))
+  ok('  ...and focus stays within the menu or returns to the ⋯ (not an unrelated page control): ' + JSON.stringify({ inMenu: trapAfter.inMenu, onAnchor: trapAfter.onAnchor }));
+else fail('  Tab landed focus on an unrelated page control / the editor: ' + JSON.stringify(trapAfter));
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) info('JS console errors observed (informational during RED): ' + realErrors.join(' | '));
 else ok('no JS console errors');

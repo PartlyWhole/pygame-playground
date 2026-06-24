@@ -532,6 +532,180 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
 }
 
 // ================================================================================================
+// 9. ROW DE-CLUTTER (Slice C — design docs/specs/2026-06-24-explorer-row-declutter-design.md §1-§2, §4).
+//    Resolves request #3 ("🐍 + two play triangles is too much; the stage already labels what's
+//    running"). Three contracts, every one RED today:
+//      9a. a RUNNING .py row carries NO in-row run "▶" glyph (today CSS `.tab.running .tab-name::after
+//          { content:" ▶" }` ~index.html:153 → the ::after content contains ▶ → fails now) — BUT the
+//          row is STILL marked running: the `.tab.running` class is present and its highlight (the
+//          warm left-border + warm name color) still applies. The stage #runFileBadge stays the
+//          authoritative "what's running"; the row only needs the at-a-glance highlight.
+//      9b. the ENTRY row is shown by a CALM, NON-play marker (a class/element seam the implementer
+//          exposes + a non-triangle visual), NOT the play-looking "▸" (today CSS `.tab.entry
+//          .tab-name::before { content:"▸ " }` ~index.html:149 → the ::before content contains ▸ →
+//          fails now). The `.tab.entry` semantic class is PRESERVED (tests rely on it, §5).
+//      9c. the 🐍 type glyph is STILL on .py rows (.ic === 🐍) and asset glyphs (🖼️/🔊/📄) unchanged.
+//    `content` is read via getComputedStyle(el,'::after'|'::before') — the CSS-pseudo string (with
+//    quotes), NOT DOM text. We assert the play triangles are ABSENT from those pseudo strings.
+// ================================================================================================
+{
+  await page.goto(URL, { waitUntil: 'load' });
+  await booted().catch(() => fail('never rebooted (de-clutter)'));
+  await ensureExplorerOpen();
+
+  // ---- 9b + 9c first (no run needed): entry marker is calm; 🐍 + asset glyphs intact. -----------
+  // ISOLATE the entry row from the .active and .running confounders (both recolor .tab-name and
+  // would mask an entry-specific cue): End any live boot task so nothing is .running, load THREE
+  // code files (main.py = entry, boss.py = the selected/active row, util.py = a PLAIN reference row
+  // that is neither entry nor active nor running), then click boss.py so main.py is entry-ONLY.
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+  await page.waitForFunction(() => !window.runFile(), null, { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': 'a = 1\n', 'boss.py': 'b = 2\n', 'util.py': 'c = 3\n' },
+      order: ['main.py', 'boss.py', 'util.py'], entry: 'main.py', active: 'boss.py',
+    });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  await click('#tabs .tab.py[data-name="boss.py"]');   // select boss.py → main.py is entry-only
+  await page.waitForTimeout(120);
+  // seed an asset so we can confirm asset glyphs are unchanged by Slice C.
+  await page.evaluate((b64) => {
+    const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return window.assetFS.add(new File([bytes], 'jump.wav', { type: 'audio/wav' }));
+  }, WAV_B64).catch(() => {});
+  await page.waitForTimeout(250);
+  await ensureExplorerOpen();
+
+  const entry = await page.evaluate(() => {
+    const entryRow = document.querySelector('#tabs .tab.py.entry[data-name="main.py"]');
+    // util.py is the PLAIN reference: not entry, not active, not running — its .tab-name color is the
+    // baseline so an "accent-colored entry name" cue is detected against a true plain row.
+    const plainRow = document.querySelector('#tabs .tab.py[data-name="util.py"]');
+    const entryName = entryRow && entryRow.querySelector('.tab-name');
+    const plainName = plainRow && plainRow.querySelector('.tab-name');
+    const before = entryName ? (getComputedStyle(entryName, '::before').content || '') : '(no entry row)';
+    // The CALM entry-marker seam: ANY non-play indicator the implementer exposes. Accept any of:
+    //  - a dedicated marker element inside the entry row (a class containing entry/start/run-from,
+    //    or a [data-entry] / [data-start] hook), OR
+    //  - the entry filename rendered in the accent color (a calm color cue distinct from a plain
+    //    row's dim name color), OR
+    //  - a calm NON-triangle ::before/::after text tag on the entry name.
+    const markerEl = !!entryRow && !!entryRow.querySelector(
+      '.entry-tag, .entry-marker, .start-tag, .start-marker, .run-from, [data-entry], [data-start]');
+    const accentColored = !!entryName && !!plainName &&
+      getComputedStyle(entryName).color !== getComputedStyle(plainName).color;
+    const after = entryName ? (getComputedStyle(entryName, '::after').content || '') : '';
+    // a "calm text tag" = a QUOTED pseudo string carrying letters (e.g. "start"). getComputedStyle
+    // returns the keyword `none`/`normal` (UNQUOTED) when there is no generated content — exclude
+    // those so the absence of a tag isn't mistaken for one.
+    const quotedLetters = (s) => {
+      const m = /^["'](.*)["']$/s.exec(s);          // only a quoted content string counts
+      return !!m && /[A-Za-z]/.test(m[1]);
+    };
+    const calmPseudoTag = quotedLetters(before) || quotedLetters(after);
+    // the accent-color cue is only trustworthy when the entry row is ISOLATED (not .active/.running,
+    // which recolor the name on their own) — otherwise a color delta is a confounder, not the marker.
+    const isolated = !!entryRow && !entryRow.classList.contains('active') && !entryRow.classList.contains('running');
+    return {
+      hasEntryRow: !!entryRow,
+      isolated,
+      entryClassKept: !!entryRow,                 // the .tab.entry semantic seam (§5) is preserved
+      beforeContent: before,
+      // RED today: ::before is "▸ " → contains the play triangle. GREEN: no ▸ and no ▶.
+      noEntryTriangle: !/▸/.test(before) && !/▶/.test(before),
+      // the calm marker exists by SOME seam (element / accent color while isolated / text tag).
+      calmMarker: markerEl || (accentColored && isolated) || calmPseudoTag,
+      pyGlyph: entryRow ? (entryRow.querySelector('.ic') || {}).textContent : null,
+    };
+  });
+  if (entry.hasEntryRow && entry.entryClassKept)
+    ok('entry row keeps the .tab.entry semantic class (the seam tests rely on, §5)');
+  else fail('entry row / .tab.entry class missing: ' + JSON.stringify(entry));
+  if (entry.noEntryTriangle)
+    ok('entry marker is CALM: ::before carries no "▸"/"▶" play triangle: ' + JSON.stringify(entry.beforeContent));
+  else fail('entry marker still a play triangle (CSS .tab.entry .tab-name::before "▸ "): ' + JSON.stringify(entry.beforeContent));
+  if (entry.calmMarker)
+    ok('  ...a calm NON-play entry marker is exposed (element / accent color / text tag)');
+  else fail('  no calm entry-marker seam found (need an element/accent-color/text-tag indicator): ' + JSON.stringify(entry));
+  if (entry.pyGlyph === '🐍')
+    ok('🐍 type glyph STILL present on .py rows (.ic === 🐍)');
+  else fail('🐍 type glyph missing/changed on .py rows: ' + JSON.stringify(entry.pyGlyph));
+
+  // asset glyphs unchanged: a .wav asset still shows 🔊 (the audio glyph).
+  const assetGlyph = await page.evaluate(() => {
+    const a = document.querySelector('#tabs .tab.asset[data-name="jump.wav"] .ic');
+    return a ? a.textContent : null;
+  });
+  if (assetGlyph === '🔊')
+    ok('asset type glyphs unchanged by Slice C (.wav still shows 🔊)');
+  else fail('asset glyph changed by Slice C: ' + JSON.stringify(assetGlyph));
+
+  // ---- 9a: a LIVE program leaves NO in-row "▶" but DOES keep the .running highlight. ------------
+  // Start a frame-paced (non-terminating) program so runFile stays set and the entry/active row is
+  // .running while we sample it. Single-file run model: runFile = project.active, so make main.py
+  // the active+entry single file and Start it.
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': [
+        'import pygame',
+        'pygame.init()',
+        'screen = pygame.display.set_mode((160, 120))',
+        'clock = pygame.time.Clock()',
+        'n = 0',
+        'while True:',
+        '    screen.fill(((n*7)%255, (n*3)%255, 90))',
+        '    pygame.display.flip()',
+        '    pygame.event.pump()',
+        '    clock.tick(60)',
+        '    n += 1',
+      ].join('\n') + '\n' },
+      order: ['main.py'], entry: 'main.py', active: 'main.py',
+    });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  await click('#runBtn');
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'running', null, { timeout: 20_000 }
+  ).catch(() => fail('  de-clutter 9a: program never reached status "running"'));
+  await page.waitForTimeout(200);   // let renderTabs paint the .running row
+  const running = await page.evaluate(() => {
+    const row = document.querySelector('#tabs .tab.running[data-name="main.py"]');
+    const name = row && row.querySelector('.tab-name');
+    const after = name ? (getComputedStyle(name, '::after').content || '') : '(no running row)';
+    // the warm highlight that REPLACES the in-row glyph as the at-a-glance signal:
+    const bl = row ? getComputedStyle(row).borderLeftColor : '';
+    const nameColor = name ? getComputedStyle(name).color : '';
+    return {
+      hasRunningRow: !!row,
+      runningClassKept: !!row,                    // .tab.running semantic class still applied
+      afterContent: after,
+      // RED today: ::after is " ▶" → contains the play triangle. GREEN: no ▶ in the pseudo content.
+      noRunTriangle: !/▶/.test(after),
+      // the highlight still distinguishes the running row: a non-transparent warm left-border AND a
+      // warm name color (both keyed off --warn; we just assert they're set, not transparent/empty).
+      borderSet: !!bl && bl !== 'rgba(0, 0, 0, 0)' && bl !== 'transparent',
+      nameColorSet: !!nameColor,
+    };
+  });
+  if (running.hasRunningRow && running.runningClassKept)
+    ok('running row keeps the .tab.running semantic class (the running highlight seam, §5)');
+  else fail('running row / .tab.running class missing while live: ' + JSON.stringify(running));
+  if (running.noRunTriangle)
+    ok('running .py row carries NO in-row run "▶" glyph (::after has no ▶): ' + JSON.stringify(running.afterContent));
+  else fail('running row STILL shows the in-row "▶" (CSS .tab.running .tab-name::after " ▶"): ' + JSON.stringify(running.afterContent));
+  if (running.borderSet && running.nameColorSet)
+    ok('  ...the running highlight is INTACT (warm left-border + warm name color still applied)');
+  else fail('  running highlight lost (border/color) — de-clutter must keep the at-a-glance running cue: ' + JSON.stringify(running));
+  // End the live task so it doesn't leak into later batteries / hang teardown.
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+  await page.waitForTimeout(150);
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) info('JS console errors observed (informational during RED): ' + realErrors.join(' | '));
 else ok('no JS console errors');

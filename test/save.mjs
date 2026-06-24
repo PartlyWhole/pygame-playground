@@ -133,9 +133,10 @@ else fail('zip .py content wrong: ' + JSON.stringify(Object.keys(z1)));
 const { PNG_B64, buf } = await import('./fixtures.mjs');
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'import pygame\n' } }));   // lone file...
 await page.setInputFiles('#assetInput', { name: 'dot.png', mimeType: 'image/png', buffer: buf(PNG_B64) });  // ...plus an asset
-// Deterministic wait: the chip shows a count only after assetFS.add awaits the
-// IndexedDB put (so assetStore.getAll() — the zip's byte source — has it).
-await page.waitForFunction(() => /1/.test(document.getElementById('assetChip').textContent), null, { timeout: 5000 });
+// Deterministic wait: assetFS.list gains the entry only after assetFS.add awaits the IndexedDB
+// put (so assetStore.getAll() — the zip's byte source — has it). The #assetChip count was retired
+// in Slice A (assets are tree-only); the assetFS.list seam is the durable equivalent.
+await page.waitForFunction(() => window.assetFS.list.some(a => a.name === 'dot.png'), null, { timeout: 5000 });
 const [adl] = await Promise.all([ page.waitForEvent('download'), page.click('#saveBtn') ]);
 if (adl.suggestedFilename() === 'pygame-project.zip') ok('lone file + an asset still zips');
 else fail('asset-zip name wrong: ' + adl.suggestedFilename());
@@ -159,7 +160,7 @@ else fail('multi-file+asset zip wrong: ' + JSON.stringify(Object.keys(z3)));
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'M = 1\n', 'data.py': 'CODE = 99\n' },
   order: ['main.py','data.py'], entry: 'main.py', active: 'main.py' }));
 await page.setInputFiles('#assetInput', { name: 'data.py', mimeType: 'image/png', buffer: buf(PNG_B64) });  // asset named like a code file
-await page.waitForFunction(() => /2/.test(document.getElementById('assetChip').textContent), null, { timeout: 5000 });
+await page.waitForFunction(() => window.assetFS.list.some(a => a.name === 'data.py'), null, { timeout: 5000 });
 const [cdl] = await Promise.all([ page.waitForEvent('download'), page.click('#saveBtn') ]);
 const z4 = await readZip(cdl);
 if (toStr(z4['data.py']).includes('CODE = 99') && JSON.stringify(z4['asset_data.py']) === JSON.stringify(pngBytes))

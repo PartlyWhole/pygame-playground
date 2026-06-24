@@ -225,20 +225,16 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
       order: ['main.py', 'sprites/enemy.py', 'sprites/util.py'], entry: 'main.py', active: 'main.py',
     });
     window.renderTabs();
-    // Capture warn-don't-rewrite note via the app's alert (the house warn surface, mirrors
-    // tabMenu's rename alert at index.html:2084). Also accept an inline DOM note if the impl
-    // surfaces one instead.
+    // Capture warn-don't-rewrite note. Slice B retired the typed prompt: folder rename is now a
+    // popup [role=menu] (Rename · Delete) + an inline <input>, and the import warning is surfaced
+    // as a calm console line (the house warn-on-move surface) rather than an alert(). We accept the
+    // alert surface (legacy), an inline DOM note, OR the #console line.
     window.__warnText = '';
     window.alert = (m) => { window.__warnText += String(m) + '\n'; };
-    // Drive the rename through the folder row's action menu. The impl wires a per-folder menu
-    // (⋯ / .tab-menu on a folder row) or an inline rename; we stub prompt to choose rename + new
-    // name so whichever prompt-based flow the impl uses re-keys to `actors`.
-    window.__promptSeq = ['rename', 'actors'];
-    window.prompt = () => window.__promptSeq.shift();
   });
   await ensureExplorerOpen();
-  // Click the folder row's menu button if present; else click the folder row itself (some impls
-  // open the menu on the row). Both go through the short-timeout resilient click.
+  // Slice B flow: open the folder row's ⋯ popup, activate "Rename", fill the inline <input> with
+  // `actors`, press Enter. (Mirrors explorer-actions.mjs's menu+inline-rename driver.)
   const menuClicked = await page.evaluate(() => {
     const folder = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
     if (!folder) return false;
@@ -246,14 +242,34 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     (menu || folder).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     return true;
   });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const ren = items.find(el => /rename/i.test(el.textContent || ''));
+    if (ren) ren.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const row = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
+    const input = row && row.querySelector('input[type="text"], input:not([type])');
+    if (!input) return;
+    input.focus(); input.value = 'actors';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const opts = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
+    input.dispatchEvent(new KeyboardEvent('keydown', opts));
+    input.dispatchEvent(new KeyboardEvent('keyup', opts));
+  });
   await page.waitForTimeout(200);
   const renamed = await page.evaluate(() => ({
     menuClicked: true,
     hasNew: !!window.project.files['actors/enemy.py'] && !!window.project.files['actors/util.py'],
     oldGone: !window.project.files['sprites/enemy.py'] && !window.project.files['sprites/util.py'],
     warn: /import|not updated|manually|rewrit/i.test(window.__warnText || '') ||
-          // or an inline DOM warning note somewhere in the explorer.
-          /import|not updated|manually|rewrit/i.test(document.getElementById('side')?.textContent || ''),
+          /import|not updated|manually|rewrit/i.test(document.getElementById('side')?.textContent || '') ||
+          /import|not updated|manually|rewrit/i.test(document.getElementById('console')?.textContent || ''),
   }));
   if (renamed.hasNew && renamed.oldGone)
     ok('folder rename via UI re-keys descendants: sprites/* → actors/* (old keys gone)');
@@ -275,16 +291,24 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     });
     window.renderTabs();
     window.confirm = () => true;                 // accept the shared confirm
-    window.__promptSeq = ['delete'];             // prompt-based folder menu chooses delete
-    window.prompt = () => window.__promptSeq.shift();
     window.alert = () => {};
   });
   await ensureExplorerOpen();
+  // Slice B flow: open the folder row's ⋯ popup, then activate "Delete" (confirm-gated).
   await page.evaluate(() => {
     const folder = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
     if (!folder) return;
     const menu = folder.querySelector('.tab-menu');
     (menu || folder).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const del = items.find(el => /delete/i.test(el.textContent || ''));
+    if (del) del.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
   await page.waitForTimeout(200);
   const deleted = await page.evaluate(() => ({
@@ -395,10 +419,12 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
 }
 
 // ================================================================================================
-// 7. ASSETS RENDER NESTED IN THE TREE (design §0.1 Q2). Seed a nested asset via the assetFS test
-//    seam (nested write mechanism is S2a-green); assert it shows as
-//    .tab.asset[data-name="sounds/jump.wav"] INSIDE its folder node, AND #assetPanel /
-//    .asset-row[data-name] still exist (compat container preserved).
+// 7. ASSETS RENDER NESTED IN THE TREE — AS .tab.asset ONLY (Slice A: #assetPanel retired). Seed a
+//    nested asset via the assetFS test seam (nested write mechanism is S2a-green); assert it shows
+//    as .tab.asset[data-name="sounds/jump.wav"] INSIDE its folder node, indented past root, with NO
+//    #assetPanel compat container in the DOM. Then DRAG-MOVE a root asset into a folder via the
+//    synthetic HTML5 DnD protocol and assert the assetFS + MEMFS path is re-keyed.
+//    (design: docs/specs/2026-06-24-explorer-unify-assets-design.md §4, §5, §7)
 // ================================================================================================
 {
   await page.evaluate(() => {
@@ -421,20 +447,55 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     const root = t.querySelector('.tab[data-name="main.py"]');
     const pad = (el) => el ? parseFloat(getComputedStyle(el).paddingLeft || '0') : 0;
     const nestedIndented = !!assetRow && !!root && pad(assetRow) > pad(root);
-    // compat container still present + keyed by path.
-    const panel = document.getElementById('assetPanel');
-    const compatRow = panel && panel.querySelector('.asset-row[data-name="sounds/jump.wav"]');
-    return {
-      assetRow: !!assetRow, folderRow: !!folderRow, nestedIndented,
-      panelExists: !!panel, compatRow: !!compatRow,
-    };
+    // Slice A: the legacy panel is GONE from the DOM (assets live only as tree rows).
+    const panelGone = document.getElementById('assetPanel') === null;
+    return { assetRow: !!assetRow, folderRow: !!folderRow, nestedIndented, panelGone };
   });
   if (nested.assetRow && nested.folderRow && nested.nestedIndented)
     ok('assets render nested in the tree: .tab.asset[data-name="sounds/jump.wav"] inside the sounds/ folder node');
   else fail('nested asset not in the tree: ' + JSON.stringify(nested));
-  if (nested.panelExists && nested.compatRow)
-    ok('  ...#assetPanel compat container kept, .asset-row[data-name] keyed by path');
-  else fail('  asset compat container/row missing or not path-keyed: ' + JSON.stringify(nested));
+  if (nested.panelGone)
+    ok('  ...#assetPanel is gone from the DOM (assets are tree-only in Slice A)');
+  else fail('  #assetPanel still exists (Slice A retires it): ' + JSON.stringify(nested));
+
+  // 7b. DRAG-MOVE an asset row into a folder re-keys assetFS + MEMFS. Seed a root asset and an
+  //     empty target folder, then fire the synthetic dragstart/dragover/drop protocol.
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.project.addFolder('audio');
+    window.renderTabs();
+  });
+  await page.evaluate((b64) => {
+    const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return window.assetFS.add(new File([bytes], 'beep.wav', { type: 'audio/wav' }));
+  }, WAV_B64).catch(() => {});
+  await page.waitForTimeout(250);
+  await ensureExplorerOpen();
+  const dndAsset = await page.evaluate(() => {
+    const src = document.querySelector('#tabs .tab.asset[data-name="beep.wav"]');
+    const dst = document.querySelector('#tabs .tab.folder[data-path="audio"]');
+    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
+    const dt = new DataTransfer();
+    dt.setData('text/plain', src.getAttribute('data-name'));
+    const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
+    src.dispatchEvent(mk('dragstart', src)[0]);
+    dst.dispatchEvent(mk('dragover', dst)[0]);
+    dst.dispatchEvent(mk('drop', dst)[0]);
+    src.dispatchEvent(mk('dragend', src)[0]);
+    return { srcFound: true, dstFound: true };
+  });
+  await page.waitForTimeout(300);
+  const movedAsset = await page.evaluate(() => ({
+    newInList: window.assetFS.list.some(a => a.name === 'audio/beep.wav'),
+    oldInList: window.assetFS.list.some(a => a.name === 'beep.wav'),
+    newInFs: pyodide.FS.analyzePath('audio/beep.wav').exists,
+    oldInFs: pyodide.FS.analyzePath('beep.wav').exists,
+    nestedRow: !!document.querySelector('#tabs .tab.asset[data-name="audio/beep.wav"]'),
+  }));
+  if (dndAsset.srcFound && dndAsset.dstFound && movedAsset.newInList && !movedAsset.oldInList && movedAsset.newInFs && !movedAsset.oldInFs)
+    ok('drag-move asset into folder re-keys assetFS + MEMFS: beep.wav -> audio/beep.wav (old gone)');
+  else fail('asset drag-into-folder did not update the path: ' + JSON.stringify({ dndAsset, movedAsset }));
 }
 
 // ================================================================================================
@@ -468,6 +529,180 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
   if (lazy.jszip === 'undefined' && !lazy.amLoaded && !lazy.lint)
     ok('first-paint laziness intact after nested render + folder toggle: JSZip undefined, __amLoaded falsy, CM lint off');
   else fail('tree render/toggle tripped a lazy loader: ' + JSON.stringify(lazy));
+}
+
+// ================================================================================================
+// 9. ROW DE-CLUTTER (Slice C — design docs/specs/2026-06-24-explorer-row-declutter-design.md §1-§2, §4).
+//    Resolves request #3 ("🐍 + two play triangles is too much; the stage already labels what's
+//    running"). Three contracts, every one RED today:
+//      9a. a RUNNING .py row carries NO in-row run "▶" glyph (today CSS `.tab.running .tab-name::after
+//          { content:" ▶" }` ~index.html:153 → the ::after content contains ▶ → fails now) — BUT the
+//          row is STILL marked running: the `.tab.running` class is present and its highlight (the
+//          warm left-border + warm name color) still applies. The stage #runFileBadge stays the
+//          authoritative "what's running"; the row only needs the at-a-glance highlight.
+//      9b. the ENTRY row is shown by a CALM, NON-play marker (a class/element seam the implementer
+//          exposes + a non-triangle visual), NOT the play-looking "▸" (today CSS `.tab.entry
+//          .tab-name::before { content:"▸ " }` ~index.html:149 → the ::before content contains ▸ →
+//          fails now). The `.tab.entry` semantic class is PRESERVED (tests rely on it, §5).
+//      9c. the 🐍 type glyph is STILL on .py rows (.ic === 🐍) and asset glyphs (🖼️/🔊/📄) unchanged.
+//    `content` is read via getComputedStyle(el,'::after'|'::before') — the CSS-pseudo string (with
+//    quotes), NOT DOM text. We assert the play triangles are ABSENT from those pseudo strings.
+// ================================================================================================
+{
+  await page.goto(URL, { waitUntil: 'load' });
+  await booted().catch(() => fail('never rebooted (de-clutter)'));
+  await ensureExplorerOpen();
+
+  // ---- 9b + 9c first (no run needed): entry marker is calm; 🐍 + asset glyphs intact. -----------
+  // ISOLATE the entry row from the .active and .running confounders (both recolor .tab-name and
+  // would mask an entry-specific cue): End any live boot task so nothing is .running, load THREE
+  // code files (main.py = entry, boss.py = the selected/active row, util.py = a PLAIN reference row
+  // that is neither entry nor active nor running), then click boss.py so main.py is entry-ONLY.
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+  await page.waitForFunction(() => !window.runFile(), null, { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': 'a = 1\n', 'boss.py': 'b = 2\n', 'util.py': 'c = 3\n' },
+      order: ['main.py', 'boss.py', 'util.py'], entry: 'main.py', active: 'boss.py',
+    });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  await click('#tabs .tab.py[data-name="boss.py"]');   // select boss.py → main.py is entry-only
+  await page.waitForTimeout(120);
+  // seed an asset so we can confirm asset glyphs are unchanged by Slice C.
+  await page.evaluate((b64) => {
+    const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return window.assetFS.add(new File([bytes], 'jump.wav', { type: 'audio/wav' }));
+  }, WAV_B64).catch(() => {});
+  await page.waitForTimeout(250);
+  await ensureExplorerOpen();
+
+  const entry = await page.evaluate(() => {
+    const entryRow = document.querySelector('#tabs .tab.py.entry[data-name="main.py"]');
+    // util.py is the PLAIN reference: not entry, not active, not running — its .tab-name color is the
+    // baseline so an "accent-colored entry name" cue is detected against a true plain row.
+    const plainRow = document.querySelector('#tabs .tab.py[data-name="util.py"]');
+    const entryName = entryRow && entryRow.querySelector('.tab-name');
+    const plainName = plainRow && plainRow.querySelector('.tab-name');
+    const before = entryName ? (getComputedStyle(entryName, '::before').content || '') : '(no entry row)';
+    // The CALM entry-marker seam: ANY non-play indicator the implementer exposes. Accept any of:
+    //  - a dedicated marker element inside the entry row (a class containing entry/start/run-from,
+    //    or a [data-entry] / [data-start] hook), OR
+    //  - the entry filename rendered in the accent color (a calm color cue distinct from a plain
+    //    row's dim name color), OR
+    //  - a calm NON-triangle ::before/::after text tag on the entry name.
+    const markerEl = !!entryRow && !!entryRow.querySelector(
+      '.entry-tag, .entry-marker, .start-tag, .start-marker, .run-from, [data-entry], [data-start]');
+    const accentColored = !!entryName && !!plainName &&
+      getComputedStyle(entryName).color !== getComputedStyle(plainName).color;
+    const after = entryName ? (getComputedStyle(entryName, '::after').content || '') : '';
+    // a "calm text tag" = a QUOTED pseudo string carrying letters (e.g. "start"). getComputedStyle
+    // returns the keyword `none`/`normal` (UNQUOTED) when there is no generated content — exclude
+    // those so the absence of a tag isn't mistaken for one.
+    const quotedLetters = (s) => {
+      const m = /^["'](.*)["']$/s.exec(s);          // only a quoted content string counts
+      return !!m && /[A-Za-z]/.test(m[1]);
+    };
+    const calmPseudoTag = quotedLetters(before) || quotedLetters(after);
+    // the accent-color cue is only trustworthy when the entry row is ISOLATED (not .active/.running,
+    // which recolor the name on their own) — otherwise a color delta is a confounder, not the marker.
+    const isolated = !!entryRow && !entryRow.classList.contains('active') && !entryRow.classList.contains('running');
+    return {
+      hasEntryRow: !!entryRow,
+      isolated,
+      entryClassKept: !!entryRow,                 // the .tab.entry semantic seam (§5) is preserved
+      beforeContent: before,
+      // RED today: ::before is "▸ " → contains the play triangle. GREEN: no ▸ and no ▶.
+      noEntryTriangle: !/▸/.test(before) && !/▶/.test(before),
+      // the calm marker exists by SOME seam (element / accent color while isolated / text tag).
+      calmMarker: markerEl || (accentColored && isolated) || calmPseudoTag,
+      pyGlyph: entryRow ? (entryRow.querySelector('.ic') || {}).textContent : null,
+    };
+  });
+  if (entry.hasEntryRow && entry.entryClassKept)
+    ok('entry row keeps the .tab.entry semantic class (the seam tests rely on, §5)');
+  else fail('entry row / .tab.entry class missing: ' + JSON.stringify(entry));
+  if (entry.noEntryTriangle)
+    ok('entry marker is CALM: ::before carries no "▸"/"▶" play triangle: ' + JSON.stringify(entry.beforeContent));
+  else fail('entry marker still a play triangle (CSS .tab.entry .tab-name::before "▸ "): ' + JSON.stringify(entry.beforeContent));
+  if (entry.calmMarker)
+    ok('  ...a calm NON-play entry marker is exposed (element / accent color / text tag)');
+  else fail('  no calm entry-marker seam found (need an element/accent-color/text-tag indicator): ' + JSON.stringify(entry));
+  if (entry.pyGlyph === '🐍')
+    ok('🐍 type glyph STILL present on .py rows (.ic === 🐍)');
+  else fail('🐍 type glyph missing/changed on .py rows: ' + JSON.stringify(entry.pyGlyph));
+
+  // asset glyphs unchanged: a .wav asset still shows 🔊 (the audio glyph).
+  const assetGlyph = await page.evaluate(() => {
+    const a = document.querySelector('#tabs .tab.asset[data-name="jump.wav"] .ic');
+    return a ? a.textContent : null;
+  });
+  if (assetGlyph === '🔊')
+    ok('asset type glyphs unchanged by Slice C (.wav still shows 🔊)');
+  else fail('asset glyph changed by Slice C: ' + JSON.stringify(assetGlyph));
+
+  // ---- 9a: a LIVE program leaves NO in-row "▶" but DOES keep the .running highlight. ------------
+  // Start a frame-paced (non-terminating) program so runFile stays set and the entry/active row is
+  // .running while we sample it. Single-file run model: runFile = project.active, so make main.py
+  // the active+entry single file and Start it.
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': [
+        'import pygame',
+        'pygame.init()',
+        'screen = pygame.display.set_mode((160, 120))',
+        'clock = pygame.time.Clock()',
+        'n = 0',
+        'while True:',
+        '    screen.fill(((n*7)%255, (n*3)%255, 90))',
+        '    pygame.display.flip()',
+        '    pygame.event.pump()',
+        '    clock.tick(60)',
+        '    n += 1',
+      ].join('\n') + '\n' },
+      order: ['main.py'], entry: 'main.py', active: 'main.py',
+    });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  await click('#runBtn');
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'running', null, { timeout: 20_000 }
+  ).catch(() => fail('  de-clutter 9a: program never reached status "running"'));
+  await page.waitForTimeout(200);   // let renderTabs paint the .running row
+  const running = await page.evaluate(() => {
+    const row = document.querySelector('#tabs .tab.running[data-name="main.py"]');
+    const name = row && row.querySelector('.tab-name');
+    const after = name ? (getComputedStyle(name, '::after').content || '') : '(no running row)';
+    // the warm highlight that REPLACES the in-row glyph as the at-a-glance signal:
+    const bl = row ? getComputedStyle(row).borderLeftColor : '';
+    const nameColor = name ? getComputedStyle(name).color : '';
+    return {
+      hasRunningRow: !!row,
+      runningClassKept: !!row,                    // .tab.running semantic class still applied
+      afterContent: after,
+      // RED today: ::after is " ▶" → contains the play triangle. GREEN: no ▶ in the pseudo content.
+      noRunTriangle: !/▶/.test(after),
+      // the highlight still distinguishes the running row: a non-transparent warm left-border AND a
+      // warm name color (both keyed off --warn; we just assert they're set, not transparent/empty).
+      borderSet: !!bl && bl !== 'rgba(0, 0, 0, 0)' && bl !== 'transparent',
+      nameColorSet: !!nameColor,
+    };
+  });
+  if (running.hasRunningRow && running.runningClassKept)
+    ok('running row keeps the .tab.running semantic class (the running highlight seam, §5)');
+  else fail('running row / .tab.running class missing while live: ' + JSON.stringify(running));
+  if (running.noRunTriangle)
+    ok('running .py row carries NO in-row run "▶" glyph (::after has no ▶): ' + JSON.stringify(running.afterContent));
+  else fail('running row STILL shows the in-row "▶" (CSS .tab.running .tab-name::after " ▶"): ' + JSON.stringify(running.afterContent));
+  if (running.borderSet && running.nameColorSet)
+    ok('  ...the running highlight is INTACT (warm left-border + warm name color still applied)');
+  else fail('  running highlight lost (border/color) — de-clutter must keep the at-a-glance running cue: ' + JSON.stringify(running));
+  // End the live task so it doesn't leak into later batteries / hang teardown.
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+  await page.waitForTimeout(150);
 }
 
 // ================================================================================================

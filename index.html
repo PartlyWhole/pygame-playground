@@ -146,15 +146,51 @@
   #tabs .tab .ic { width: 16px; flex: 0 0 16px; text-align: center; font-size: 13px; }
   #tabs .tab.py .ic { color: var(--color-py-icon); }
   #tabs .tab .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--mono); font-size: 12px; }
-  #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
-  /* S3: the file whose program is live gets a warm left-bar + pulse dot, distinct from .active selection */
+  /* Slice C: calm, NON-play entry cue — accent-colored name + a small unobtrusive "start" tag,
+     never a play triangle. The .tab.entry semantic class is preserved (tests + run model rely on it). */
+  #tabs .tab.entry .tab-name { color: var(--accent); }
+  #tabs .tab .start-tag {
+    flex: 0 0 auto; font-size: 9px; line-height: 1; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px;
+    opacity: 0.85; font-family: var(--mono);
+  }
+  /* S3: the file whose program is live gets a warm left-bar + warm name (the at-a-glance running cue),
+     distinct from .active selection. Slice C dropped the redundant in-row ▶ — the stage #runFileBadge
+     stays the authoritative "what's running"; running shows here via border + warm name only. */
   #tabs .tab.running { border-left-color: var(--warn); }
   #tabs .tab.running .tab-name { color: var(--warn); }
-  #tabs .tab.running .tab-name::after { content: " ▶"; color: var(--warn); font-size: 10px; }
   #tabs .tab .moddot { color: var(--accent); font-size: 10px; flex: 0 0 auto; margin-right: 2px; }
   #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
   #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
+  /* Slice B: inline-rename input (replaces the row name span while editing). */
+  #tabs .tab .rename-input {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px; outline: none;
+  }
+  #tabs .tab .rename-input.invalid { border-color: var(--bad); }
+  #tabs .tab .rename-hint { color: var(--bad); font-size: 10px; flex: 0 0 auto; margin-left: 4px; white-space: nowrap; }
+
+  /* ---------- Slice B: popup action menu (one shared instance, anchored to a row's ⋯) ---------- */
+  .popmenu {
+    position: absolute; z-index: 60; min-width: 168px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    box-shadow: var(--shadow-tooltip); display: none; flex-direction: column;
+  }
+  .popmenu.open { display: flex; }
+  @media (prefers-reduced-motion: no-preference) {
+    .popmenu.open { animation: popmenu-in .1s ease-out; }
+  }
+  @keyframes popmenu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+  .popmenu .mi {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    background: none; border: 0; border-radius: 5px; cursor: pointer;
+    color: var(--text); font-size: 13px; padding: 6px 10px; line-height: 1.2;
+  }
+  .popmenu .mi .mi-ic { width: 15px; flex: 0 0 15px; text-align: center; color: var(--dim); font-size: 12px; }
+  .popmenu .mi:hover, .popmenu .mi:focus, .popmenu .mi.active { background: var(--color-row-hover); outline: none; }
+  .popmenu .mi.danger { color: var(--bad); }
+  .popmenu .mi.danger:hover, .popmenu .mi.danger:focus, .popmenu .mi.danger.active { background: #3a2329; }
   /* S5: per-row download button (bare file / asset; folder -> subtree zip). */
   #tabs .tab .dl { color: var(--dim); border: none; background: none; cursor: pointer; padding: 0 2px; border-radius: 3px; flex: 0 0 auto; display: inline-flex; align-items: center; }
   #tabs .tab .dl svg { display: block; }
@@ -169,24 +205,12 @@
   #tabs .tab.drag-ghost { opacity: .4; }
   #tabs .drop-line { height: 2px; background: var(--accent); margin: 0 6px; border-radius: 1px; }
 
-  /* ---------- explorer asset compat section (#assetPanel — in-flow inside Explorer) ---------- */
-  #assetChip { font-size: 12.5px; color: var(--dim); user-select: none; }
-  #assetChip.has { color: var(--accent); }
-  #assetPanel { font-size: 12.5px; }
-  #assetPanel[hidden] { display: none; }
-  #assetPanel .ap-head { display: flex; justify-content: space-between; align-items: center; color: var(--dim); margin: 6px 4px; }
-  #assetPanel .ap-browse { color: var(--accent); cursor: pointer; }
-  #assetPanel .asset-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; }
-  #assetPanel .asset-row:hover { background: var(--color-row-hover); }
-  #assetPanel .asset-name { flex: 1; font-family: var(--mono); word-break: break-all; }
-  #assetPanel .asset-size { color: var(--dim); }
-  #assetPanel .asset-warn { color: var(--warn); cursor: help; }
-  #assetPanel .asset-remove { color: var(--bad); cursor: pointer; border: none; background: none; font-size: 13px; }
-  #assetPanel .ap-empty { color: var(--dim); padding: 4px 6px; }
-  #assetPanel .ap-foot { display: flex; justify-content: space-between; align-items: center; color: var(--dim); margin: 6px 4px; padding-top: 6px; border-top: 1px solid var(--edge); }
-  #assetPanel .ap-clear { color: var(--bad); cursor: pointer; }
-  #apStorage { color: var(--dim); font-size: 11.5px; padding: 8px 6px; border-top: 1px solid var(--edge); }
-  #apStorage.low { color: var(--warn); }
+  /* ---------- explorer asset-row warn badge (assets now live as #tabs .tab.asset rows) ---------- */
+  #tabs .tab.asset .asset-warn { color: var(--warn); cursor: help; }
+  /* ---------- explorer tree footer (browser-storage metric — moved out of the retired #apStorage) ---------- */
+  #treeFoot { color: var(--dim); font-size: 11.5px; padding: 8px 6px 2px; margin-top: 4px; border-top: 1px solid var(--edge); }
+  #treeFoot.low { color: var(--warn); }
+  #treeFoot:empty { display: none; }
 
   /* ---------- examples rail panel (S4: editable, promote-on-edit) ---------- */
   #examplesPanel .exrow { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 5px; border-left: 2px solid transparent; color: var(--text); cursor: pointer; }
@@ -356,10 +380,7 @@
       </div>
       <div class="side-body">
         <div class="tree" id="tabs"></div>
-        <div id="assetSection" style="margin-top:8px;border-top:1px solid var(--edge);padding-top:6px">
-          <div class="side-head" style="min-height:auto;padding:0 6px 2px"><span id="assetChip">📁</span></div>
-          <div id="assetPanel"></div>
-        </div>
+        <div id="treeFoot"></div>
       </div>
       <input id="assetInput" type="file" multiple hidden>
     </section>
@@ -1729,6 +1750,7 @@ const assetStore = {
   async remove(name) { try { await this._tx('readwrite', s => s.delete(name)); } catch {} },
   async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
 };
+window.assetStore = assetStore;   // test seam (drive durable-write-failure data-safety, Slice A)
 
 // ---------------------------------------------------------------- history (version snapshots)
 // A snapshot of the whole project is saved on each Run, in a SEPARATE IndexedDB
@@ -1831,8 +1853,83 @@ const assetFS = {
     this.list = []; renderAssets();
   },
   async addFiles(files) { for (const f of files) await this.add(f); },
+  // Slice A: atomically re-key an asset (rename or folder-move). The load-path invariant
+  // (assetFS.list[].name == assetStore key == MEMFS path == the string the student passes to
+  // pygame.image.load) means a rename MUST move all three in lock-step. Returns true on success.
+  async rename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return false;
+    const rec = this.list.find(a => a.name === oldName);
+    if (!rec) return false;
+    // Validate the destination path: every folder segment must be identifier-safe and the
+    // leaf non-empty, and the path must be free in the UNIFIED namespace (no code/asset clash).
+    const slash = newName.lastIndexOf("/");
+    const segs = (slash < 0 ? "" : newName.slice(0, slash)).split("/").filter(Boolean);
+    const leaf = slash < 0 ? newName : newName.slice(slash + 1);
+    if (!leaf || newName.startsWith("/") || !segs.every(isFolderSegment)) { assetMsg(`Can't rename to "${newName}" — that's not a valid file path.`); return false; }
+    if (existsAnywhere(newName)) { assetMsg(`Can't rename to "${newName}" — something already uses that path.`); return false; }
+    // Fetch the bytes (MEMFS first; fall back to the durable assetStore).
+    let bytes = memfsBytes(oldName);
+    if (!bytes) {
+      const recs = await assetStore.getAll();
+      const stored = recs.find(r => r.name === oldName);
+      if (stored) bytes = new Uint8Array(stored.bytes);
+    }
+    if (!bytes) { assetMsg(`Couldn't read "${oldName}" to rename it.`); return false; }
+    bytes = new Uint8Array(bytes);
+    // Re-key IndexedDB DURABLY FIRST: put the new record. If that fails (quota / unavailable) we
+    // MUST NOT run the destructive half (remove(old) / _unlink(old) / mutate .list) — otherwise a
+    // storage-full move would silently destroy the only copy. Mirror assetFS.add's `if (!saved)`
+    // guard: surface a calm notice and bail, leaving the asset exactly where it was.
+    const saved = await assetStore.put({ name: newName, bytes: bytes.buffer, type: rec.type, size: bytes.length, addedAt: Date.now() });
+    if (!saved) {
+      assetMsg(`Couldn't move "${oldName}" — browser storage is full; it was left where it was.`);
+      return false;
+    }
+    await assetStore.remove(oldName);
+    // Re-key MEMFS: unlink the old path, write the bytes at the new path.
+    this._unlink(oldName);
+    this._memfs(newName, bytes);
+    // Re-key the in-memory list (keep position so the tree order is stable).
+    const i = this.list.findIndex(a => a.name === oldName);
+    if (i >= 0) this.list[i] = { name: newName, size: bytes.length, type: rec.type, warn: UNSUPPORTED_AUDIO.test(newName) };
+    if (viewerSel === oldName) viewerSel = newName;
+    renderAssets();
+    warnAssetMoved(oldName, newName);   // calm, non-destructive notice if code references the old path
+    return true;
+  },
+  // Folder-move: keep the basename, re-parent under destFolder (root if falsy). Delegates to rename.
+  async move(name, destFolder) {
+    const base = name.slice(name.lastIndexOf("/") + 1);
+    const newName = destFolder ? destFolder.replace(/\/$/, "") + "/" + base : base;
+    if (newName === name) return false;
+    return this.rename(name, newName);
+  },
 };
-window.assetFS = assetFS;   // test seam (nested-asset-write mechanism; S2a)
+window.assetFS = assetFS;   // test seam (nested-asset-write mechanism; S2a; rename/move Slice A)
+
+// Slice A warn-on-move: after an asset's path changes, scan every code doc for the OLD path
+// string. If referenced, surface a calm, dismissible notice naming the old path + an update hint
+// with file:line refs — and NEVER rewrite the student's code (the old load path stays verbatim).
+function warnAssetMoved(oldName, newName) {
+  // Quote-aware match: only flag a line where the old path is a real load-path LITERAL — i.e. it
+  // appears immediately preceded by a quote (`"path` or `'path`). A bare substring scan would
+  // false-positive on e.g. `load("boss.png")` when renaming `s.png`. Allocation-light: build the
+  // two quoted needles once and substring-scan per line (no per-line regex / no code rewrite).
+  const dq = '"' + oldName, sq = "'" + oldName;
+  const hits = [];
+  for (const file of project.order) {
+    // project.files[name] is a live CodeMirror.Doc — read its TEXT via project.text(). We only
+    // SCAN it; the student's code is never rewritten (the old load path stays verbatim).
+    let text = "";
+    try { text = project.text(file); } catch { continue; }
+    if (typeof text !== "string" || (!text.includes(dq) && !text.includes(sq))) continue;
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) if (lines[i].includes(dq) || lines[i].includes(sq)) hits.push(`${file}:${i + 1}`);
+  }
+  if (!hits.length) return;   // silent when nothing references the old path
+  assetMsg(`Heads up: "${oldName}" is now at "${newName}". Your code still references the old path ` +
+    `(${hits.join(", ")}) — update your load path to match. (Your code was not changed.)`);
+}
 
 // ----------------------------------------------------------------- upload routing (S5 #6)
 // One router for BOTH live entry points (#assetInput change + document drop). Boot
@@ -1921,16 +2018,11 @@ async function uploadFiles(files, destFolder = selectedFolder) {
 }
 window.uploadFiles = uploadFiles;   // test seam
 
-const assetChipEl = document.getElementById('assetChip');
 function assetMsg(text) { logLine(text, 'sys'); }
 function renderAssets() {
-  const n = assetFS.list.length;
-  assetChipEl.textContent = n ? `📁 ${n}` : '📁';
-  assetChipEl.classList.toggle('has', n > 0);
-  renderAssetPanel();           // keep the Explorer asset section in sync with the list
-  if (typeof renderTabs === 'function') renderTabs();   // assets also appear as #tabs rows
+  if (typeof renderTabs === 'function') renderTabs();   // assets appear as #tabs rows (tree-only since Slice A)
+  updateStorageReadout();                               // keep the tree-footer storage metric fresh
 }
-const assetPanelEl = document.getElementById('assetPanel');
 const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(0) + ' KB'
   : n < 1073741824 ? (n/1048576).toFixed(1) + ' MB' : (n/1073741824).toFixed(2) + ' GB';
 // Escape filenames before interpolating into innerHTML: a name with " or < would
@@ -1953,9 +2045,10 @@ async function warnIfStorageLow() {
              `(${fmtSize(est.usage)} of ${fmtSize(est.quota)}). Remove assets if saves start failing.`);
   }
 }
-// Fill the popover's storage line with live used/available figures (async).
+// Slice A: the browser-storage metric lives in the always-on Explorer tree footer (#treeFoot),
+// replacing the retired #apStorage line. Always-present so the user can see headroom at a glance.
 async function updateStorageReadout() {
-  const el = document.getElementById('apStorage');
+  const el = document.getElementById('treeFoot');
   if (!el) return;
   const est = await storageEstimate();
   if (!est || !est.quota) { el.textContent = 'Browser storage estimate unavailable'; el.classList.remove('low'); return; }
@@ -1963,32 +2056,6 @@ async function updateStorageReadout() {
   el.textContent = `Browser storage: ${fmtSize(est.usage)} used of ${fmtSize(est.quota)} (${Math.round(frac * 100)}%)`;
   el.classList.toggle('low', frac >= STORAGE_WARN_FRACTION);
 }
-function renderAssetPanel() {
-  if (assetPanelEl.hidden) return;
-  const rows = assetFS.list.map(a => `
-    <div class="asset-row" data-name="${esc(a.name)}">
-      <span class="asset-name">${esc(a.name)}</span>
-      ${a.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : ''}
-      <span class="asset-size">${fmtSize(a.size)}</span>
-      <button class="asset-remove" title="Remove">✕</button>
-    </div>`).join('');
-  assetPanelEl.innerHTML = `
-    <div class="ap-head"><span>Assets</span><span class="ap-browse">+ add files</span></div>
-    ${assetFS.list.length ? rows : '<div class="ap-empty">No files yet. Drop files anywhere, or "+ add files".</div>'}
-    <div class="ap-foot"><span>${assetFS.list.length} file${assetFS.list.length === 1 ? '' : 's'} · ${fmtSize(assetFS.totalSize())}</span>${assetFS.list.length ? '<span class="ap-clear">Clear all</span>' : ''}</div>
-    <div class="ap-storage" id="apStorage">checking browser storage…</div>`;
-  updateStorageReadout();
-}
-// Assets now live IN the Explorer (in-flow), not a popover — no chip-toggle / outside-close.
-// "+ add files" (and a click on the asset chip) opens the real hidden input. The file-input
-// click must NOT close the panel (assets.mjs check 10): the panel is in-flow and never auto-closes.
-assetChipEl.addEventListener('click', () => document.getElementById('assetInput').click());
-assetPanelEl.addEventListener('click', (e) => {
-  if (e.target.classList.contains('ap-browse')) document.getElementById('assetInput').click();
-  else if (e.target.classList.contains('ap-clear')) assetFS.clearAll();
-  else if (e.target.classList.contains('asset-remove'))
-    assetFS.remove(e.target.closest('.asset-row').dataset.name);
-});
 
 document.getElementById('assetInput').addEventListener('change', (e) => {
   uploadFiles([...e.target.files], selectedFolder); e.target.value = '';
@@ -2302,7 +2369,7 @@ function renderTabs() {
         `<span class="ic" aria-hidden="true">📁</span>` +
         `<span class="tab-name">${escTab(d.name)}</span>` +
         dlBtn(d.name, true) +
-        `<button class="tab-menu" title="Folder actions" aria-label="Folder actions for ${escTab(d.path)}">⋯</button>` +
+        `<button class="tab-menu" title="Folder actions" aria-haspopup="menu" aria-expanded="false" aria-label="Folder actions for ${escTab(d.path)}">⋯</button>` +
         `</div>`);
       if (open) emit(d, depth + 1);
     }
@@ -2314,14 +2381,16 @@ function renderTabs() {
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
           dlBtn(basename(f.path), false) +
+          `<button class="tab-menu" title="Asset actions" aria-haspopup="menu" aria-expanded="false" aria-label="Asset actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       } else {
         out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
+          (f.entry ? `<span class="start-tag" data-entry="true" title="Start runs this file" aria-label="Start file">start</span>` : "") +
           (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
           dlBtn(basename(f.path), false) +
-          `<button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
+          `<button class="tab-menu" title="File actions" aria-haspopup="menu" aria-expanded="false" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       }
     }
@@ -2369,7 +2438,9 @@ tabsEl.addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
   if (!tab) return;
   const name = tab.dataset.name;
-  if (menuBtn) { tabMenu(name); return; }
+  // Slice C follow-up A: route the ⋯ menu by the CLICKED ROW'S TYPE, not a project.files[name] path
+  // lookup — so a code file and an asset sharing the same data-name each open their own menu.
+  if (menuBtn) { if (tab.classList.contains("asset")) assetMenu(name); else tabMenu(name); return; }
   selectedFolder = dirname(name);
   renderViewer(name);   // .py -> CM swapDoc via setActive; asset -> media surface
   renderTabs();
@@ -2438,6 +2509,13 @@ tabsEl.addEventListener("drop", (e) => {
   const fileRow = e.target.closest(".tab[data-name]");
   if (folder) {
     const dest = folder.dataset.path;
+    // Slice A: an ASSET drag (in assetFS.list, not project.files) re-keys via assetFS.move, which
+    // atomically moves IndexedDB + MEMFS + the list and runs warn-on-move. Async; it re-renders
+    // itself (renderAssets). Assets can't be folders, so no descendant guard is needed here.
+    if (!project.files[dragged] && assetFS.list.some(a => a.name === dragged)) {
+      assetFS.move(dragged, dest).then(() => { closedFolders.delete(dest); flushSave(); });
+      dragPath = null; return;
+    }
     const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
     if (draggedIsFolder && isDescendantDrop(dragged, dest)) { dragPath = null; return; }   // descendant guard
     // Capture the pre-move path set so a file/folder move can mirror each re-keyed child.
@@ -2495,83 +2573,290 @@ function newFolderPrompt() {
   closedFolders.delete(path);
   renderTabs(); flushSave();
 }
-// S2: folder actions via the folder row's ⋯ menu (the app has no modal framework, so
-// prompt/confirm is the house style). Rename re-keys every descendant; delete removes
-// the subtree behind the shared confirm. All model+render — never editor.setValue.
-function folderMenu(path) {
-  const action = prompt(`Folder "${path}" — type: rename / delete`, "");
-  if (!action) return;
-  if (action === "rename") {
-    const seg = prompt(`Rename folder "${path}" to:`, basename(path));
-    if (seg == null) return;
-    const next = (seg || "").trim();
-    if (!isFolderSegment(next)) { alert("Folder names must be a Python identifier (letters, digits, underscore; no leading digit)."); return; }
-    const parent = dirname(path);
-    const newPath = parent ? parent + "/" + next : next;
-    if (newPath === path) return;
-    // Re-key every descendant file under the new prefix (project.move keeps the
-    // basename, so a leaf-rename is done per-child here).
-    const prefix = path + "/";
-    const kids = project.order.filter(p => p.startsWith(prefix));
-    if (project.files[newPath] || project.order.some(p => p.startsWith(newPath + "/"))) { alert("That folder already exists."); return; }
-    const beforeFolderRename = [...project.order];
-    for (const k of kids) {
-      const child = newPath + k.slice(path.length);
-      project.rename(k, child);
-    }
-    // S6b: mirror the per-descendant re-key to the shared doc as one atomic change.
-    mirrorMove(beforeFolderRename, project.order);
-    // carry the empty-folder marker.
-    if (project.emptyDirs.delete(path)) project.emptyDirs.add(newPath);
-    // carry collapsed state across the re-key (folders are open-by-default).
-    for (const p of [...closedFolders]) {
-      if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(newPath + p.slice(path.length)); }
-    }
-    if (viewerSel.startsWith(prefix)) viewerSel = newPath + viewerSel.slice(path.length);
-    selectedFolder = "";
-    alert(`Renamed. Note: 'import ${path.replace(/\//g, ".")}' references in other files are NOT updated — fix them manually.`);
-    renderTabs(); flushSave();
-  } else if (action === "delete") {
-    const prefix = path + "/";
-    const kids = project.order.filter(p => p.startsWith(prefix));
-    if (kids.length && project.order.length - kids.length < 1) { alert("Can't delete every file — keep at least one."); return; }
-    if (!confirm(`Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
-    const beforeFolderDel = [...project.order];
-    for (const k of kids) project.remove(k);
-    // S6b: mirror the removed children (those project.remove actually dropped) to the shared doc.
-    mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));
-    project.emptyDirs.delete(path);
-    for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
-    if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
-    selectedFolder = "";
-    renderTabs(); flushSave();
-  }
+// =============================================================== Slice B: popup action menu
+// ONE shared popup instance, anchored to the clicked row's ⋯. Opening it (via tabMenu /
+// folderMenu / assetMenu) replaces the typed prompt; selecting an item runs the existing
+// handler directly. role=menu / role=menuitem for a11y; arrow/Enter/Esc keyboard; focus
+// returns to the ⋯ on close; viewport-flip near an edge; outside-click / Esc / action dismiss.
+const popMenuEl = document.createElement("div");
+popMenuEl.className = "popmenu";
+popMenuEl.setAttribute("role", "menu");
+popMenuEl.tabIndex = -1;
+document.body.appendChild(popMenuEl);
+let popAnchor = null;   // the ⋯ button the menu is currently anchored to (focus returns here)
+
+function closePopMenu(restoreFocus = true) {
+  if (!popMenuEl.classList.contains("open")) return;
+  popMenuEl.classList.remove("open");
+  popMenuEl.innerHTML = "";
+  const anchor = popAnchor; popAnchor = null;
+  if (anchor) anchor.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor && anchor.isConnected) anchor.focus();
 }
-function tabMenu(name) {
-  if (!project.files[name]) return;   // asset rows have no file-menu actions in S1
-  const action = prompt(`File "${name}" — type: entry / rename / delete`, "");
-  if (!action) return;
-  if (action === "entry") {
-    project.setEntry(name);
-    roomOp(d => { d.entry = encPath(name); });   // S6b: mirror the entry change
+window.__closePopMenu = closePopMenu;   // test/debug seam
+
+// Open the popup for `anchorBtn` with a list of {label, icon, danger, run} items.
+function openPopMenu(anchorBtn, items) {
+  closePopMenu(false);
+  popAnchor = anchorBtn;
+  anchorBtn.setAttribute("aria-haspopup", "menu");
+  anchorBtn.setAttribute("aria-expanded", "true");
+  popMenuEl.innerHTML = "";
+  for (const it of items) {
+    const mi = document.createElement("button");
+    mi.type = "button";
+    mi.className = "mi" + (it.danger ? " danger" : "");
+    mi.setAttribute("role", "menuitem");
+    mi.tabIndex = -1;
+    mi.innerHTML = `<span class="mi-ic" aria-hidden="true">${it.icon || ""}</span><span class="mi-label">${escTab(it.label)}</span>`;
+    mi.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      closePopMenu(false);
+      it.run();
+    });
+    popMenuEl.appendChild(mi);
   }
-  else if (action === "rename") {
-    let next = prompt(`Rename "${name}" to:`, name);
-    if (next == null) return;
-    if (!next.endsWith(".py")) next += ".py";
-    if (!project.rename(name, next)) { alert("Invalid or duplicate name."); return; }
-    if (viewerSel === name) viewerSel = next;
-    // S6b: mirror the rename as a copy-and-delete (a one-path move).
-    mirrorMove([name], [next]);
-    alert(`Renamed. Note: 'import ${name.slice(0, -3)}' references in other files are NOT updated — fix them manually.`);
-  } else if (action === "delete") {
-    if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
-    if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
-    if (project.remove(name)) mirrorDeletes([name]);   // S6b: mirror only a successful delete
-    if (viewerSel === name) renderViewer(project.active);
-  }
+  popMenuEl.classList.add("open");
+  // Position: anchored under the ⋯, flipped above / left if it would overflow the viewport.
+  // position:absolute (so offsetParent is the body, not null as it would be for fixed), so the
+  // menu reads as VISIBLE; coordinates are page-space (viewport rect + scroll offset).
+  const r = anchorBtn.getBoundingClientRect();
+  const mw = popMenuEl.offsetWidth, mh = popMenuEl.offsetHeight;
+  const sx = window.scrollX || 0, sy = window.scrollY || 0;
+  let top = r.bottom + 4, left = r.left;
+  if (left + mw > window.innerWidth - 6) left = Math.max(6, r.right - mw);
+  if (top + mh > window.innerHeight - 6) top = Math.max(6, r.top - mh - 4);
+  popMenuEl.style.top = (top + sy) + "px";
+  popMenuEl.style.left = (left + sx) + "px";
+  // Move keyboard focus into the first item so arrow/Enter work immediately.
+  const first = popMenuEl.querySelector(".mi");
+  if (first) first.focus();
+}
+
+// Keyboard nav within the menu: ArrowUp/Down move, Enter/Space activate, Esc/Tab close.
+popMenuEl.addEventListener("keydown", (e) => {
+  const its = [...popMenuEl.querySelectorAll(".mi")];
+  if (!its.length) return;
+  let i = its.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") { e.preventDefault(); its[(i + 1 + its.length) % its.length].focus(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); its[(i - 1 + its.length) % its.length].focus(); }
+  else if (e.key === "Home") { e.preventDefault(); its[0].focus(); }
+  else if (e.key === "End") { e.preventDefault(); its[its.length - 1].focus(); }
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (document.activeElement.click ? document.activeElement : its[0]).click(); }
+  else if (e.key === "Escape") { e.preventDefault(); closePopMenu(); }
+  // Focus-trap: suppress the browser's native Tab so it can't leak focus to the next page control;
+  // close the menu and return focus to the ⋯ anchor (a11y — Slice C follow-up B).
+  else if (e.key === "Tab") { e.preventDefault(); closePopMenu(true); }
+});
+// Global Esc closes (test dispatches Escape on document/activeElement). Capture so it wins
+// even when focus is outside the menu.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && popMenuEl.classList.contains("open")) { closePopMenu(); }
+}, true);
+// Outside-click / scroll / resize dismiss (don't steal focus on an outside click).
+document.addEventListener("mousedown", (e) => {
+  if (!popMenuEl.classList.contains("open")) return;
+  if (popMenuEl.contains(e.target) || (popAnchor && popAnchor.contains(e.target))) return;
+  closePopMenu(false);
+}, true);
+addEventListener("resize", () => closePopMenu(false));
+tabsEl.addEventListener("scroll", () => closePopMenu(false), true);
+
+// Find the ⋯ button for a row identified by its model key (data-name file/asset, data-path folder).
+function rowMenuBtn(rowSel) {
+  const row = document.querySelector(rowSel);
+  return row ? row.querySelector(".tab-menu") : null;
+}
+
+// =============================================================== Slice B: inline rename
+// Swap a row's name span for an <input> (basename prefilled, stem selected). Enter validates +
+// commits via `commit(newName)` (returns true on success); Esc/blur cancels. An invalid name keeps
+// the input open with a calm inline hint. NEVER editor.setValue — commit re-keys through the model
+// seams (project.rename / assetFS.rename) which preserve the live Doc / re-key MEMFS in lock-step.
+function startInlineRename(rowSel, fullPath, commit) {
+  closePopMenu(false);
+  const row = document.querySelector(rowSel);
+  if (!row) return;
+  const nameSpan = row.querySelector(".tab-name");
+  if (!nameSpan || row.querySelector(".rename-input")) return;
+  const base = basename(fullPath);
+  const dot = base.lastIndexOf(".");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "rename-input";
+  input.value = base;
+  input.setAttribute("aria-label", `Rename ${base}`);
+  let done = false;
+  let pending = false;   // an async commit (asset rename) is in flight — block re-commit + blur-cancel
+  const cleanup = () => { try { row.classList.remove("renaming"); } catch {} };
+  const cancel = () => { if (done || pending) return; done = true; cleanup(); renderTabs(); };
+  const tryCommit = () => {
+    if (done || pending) return;
+    const raw = input.value.trim();
+    if (!raw || raw === base) { cancel(); return; }   // no-op / empty -> cancel cleanly
+    // Reconstruct the full path: keep the row's directory, swap the basename.
+    const dir = dirname(fullPath);
+    const next = dir ? dir + "/" + raw : raw;
+    const hint = (msg) => {
+      input.classList.add("invalid");
+      let h = row.querySelector(".rename-hint");
+      if (!h) { h = document.createElement("span"); h.className = "rename-hint"; row.appendChild(h); }
+      h.textContent = msg;
+      input.focus();
+    };
+    const res = commit(next, raw, hint);
+    // Async commit (asset rename: IndexedDB + MEMFS re-key validates AFTER the call). Don't close
+    // the input until the real result is known — on rejection (collision / bad path / unreadable /
+    // storage-full) keep the row in edit with a calm inline hint, mirroring the sync file/folder path.
+    if (res && typeof res.then === "function") {
+      pending = true;            // block re-commit + the blur-cancel while the async re-key runs.
+      input.readOnly = true;     // visually freeze (readOnly, NOT disabled — disabling a focused
+                                 // input fires blur, which would race the pending guard).
+      res.then((ok) => {
+        pending = false;
+        if (done) return;        // a repaint (renderTabs) already replaced the input on success
+        input.readOnly = false;
+        if (ok) { done = true; cleanup(); }       // success but no repaint happened: close cleanly
+        else { hint("invalid or in use"); }       // failure: stay in edit, surface the hint
+      }, () => { pending = false; if (!done) { input.readOnly = false; hint("rename failed"); } });
+      return;
+    }
+    if (res === false) return;   // stay in edit; hint already shown
+    done = true; cleanup();      // success -> the handler re-rendered (renderTabs)
+  };
+  nameSpan.replaceWith(input);
+  row.classList.add("renaming");
+  // select the stem (name without extension) so a quick retype keeps the ext.
+  input.focus();
+  if (dot > 0) input.setSelectionRange(0, dot); else input.select();
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tryCommit(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
+  });
+  input.addEventListener("input", () => { input.classList.remove("invalid"); const h = row.querySelector(".rename-hint"); if (h) h.remove(); });
+  input.addEventListener("blur", () => { setTimeout(() => { if (!done) cancel(); }, 0); });
+}
+
+// S2: folder actions via the folder row's ⋯ menu. Slice B: a popup [role=menu] (Rename · Delete)
+// anchored to the ⋯; Rename is inline; Delete keeps the confirm. Rename re-keys every descendant;
+// delete removes the subtree. All model+render — never editor.setValue.
+function folderMenu(path) {
+  const anchor = rowMenuBtn(`#tabs .tab.folder[data-path="${cssAttr(path)}"]`);
+  if (!anchor) return;
+  openPopMenu(anchor, [
+    { label: "Rename", icon: "✎", run: () => folderRenameInline(path) },
+    { label: "Delete", icon: "🗑", danger: true, run: () => folderDelete(path) },
+  ]);
+}
+function folderRenameInline(path) {
+  startInlineRename(`#tabs .tab.folder[data-path="${cssAttr(path)}"]`, path, (newPath, leaf, hint) => {
+    const next = (leaf || "").trim();
+    if (!isFolderSegment(next)) { hint("letters, digits, _"); return false; }
+    const parent = dirname(path);
+    const target = parent ? parent + "/" + next : next;
+    if (target === path) return true;   // no-op
+    const prefix = path + "/";
+    const kids = project.order.filter(p => p.startsWith(prefix));
+    if (project.files[target] || project.order.some(p => p.startsWith(target + "/")) || project.emptyDirs.has(target)) { hint("already exists"); return false; }
+    const beforeFolderRename = [...project.order];
+    for (const k of kids) project.rename(k, target + k.slice(path.length));
+    mirrorMove(beforeFolderRename, project.order);   // S6b: mirror the per-descendant re-key
+    if (project.emptyDirs.delete(path)) project.emptyDirs.add(target);
+    for (const p of [...closedFolders]) {
+      if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(target + p.slice(path.length)); }
+    }
+    if (viewerSel.startsWith(prefix)) viewerSel = target + viewerSel.slice(path.length);
+    selectedFolder = "";
+    // Warn-don't-rewrite: a folder re-key can't fix `import sprites.enemy` references; surface a
+    // calm console note (same house surface as the asset warn-on-move) — never rewrite student code.
+    assetMsg(`Renamed folder to "${target}". 'import ${path.replace(/\//g, ".")}' references in other files are NOT updated — fix them manually. (Your code was not changed.)`);
+    renderTabs(); flushSave();
+    return true;
+  });
+}
+function folderDelete(path) {
+  const prefix = path + "/";
+  const kids = project.order.filter(p => p.startsWith(prefix));
+  if (kids.length && project.order.length - kids.length < 1) { alert("Can't delete every file — keep at least one."); return; }
+  if (!confirm(`Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+  const beforeFolderDel = [...project.order];
+  for (const k of kids) project.remove(k);
+  mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));   // S6b: mirror dropped children
+  project.emptyDirs.delete(path);
+  for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
+  if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
+  selectedFolder = "";
   renderTabs(); flushSave();
 }
+function tabMenu(name) {
+  // Asset rows live in assetFS, not project.files — route them to the asset menu. (The click delegate
+  // routes by clicked-row TYPE; this stays as a defensive fallback for callers without a row context.)
+  if (!project.files[name]) { if (assetFS.list.some(a => a.name === name)) assetMenu(name); return; }
+  // Anchor to the .py row specifically (Slice C: a same-path asset row may share this data-name).
+  const anchor = rowMenuBtn(`#tabs .tab.py[data-name="${cssAttr(name)}"]`);
+  if (!anchor) return;
+  openPopMenu(anchor, [
+    { label: "Rename", icon: "✎", run: () => fileRenameInline(name) },
+    { label: "Set as start file", icon: "▸", run: () => fileSetEntry(name) },
+    { label: "Delete", icon: "🗑", danger: true, run: () => fileDelete(name) },
+  ]);
+}
+function fileRenameInline(name) {
+  // Qualify to the .py row (Slice C: a same-path asset row may share this data-name; renderTabs emits
+  // assets and .py files interleaved, so an unqualified selector could land the input on the asset row).
+  startInlineRename(`#tabs .tab.py[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
+    if (!next.endsWith(".py")) next += ".py";
+    if (next === name) return true;   // no-op
+    if (!project.rename(name, next)) { hint("invalid or in use"); return false; }
+    // project.rename preserves the SAME live Doc (files[next] = files[name]); the editor stays
+    // bound to it without any setValue. Carry the viewer selection across the re-key.
+    if (viewerSel === name) viewerSel = next;
+    mirrorMove([name], [next]);   // S6b: mirror as a one-path move
+    renderTabs(); flushSave();
+    return true;
+  });
+}
+function fileSetEntry(name) {
+  project.setEntry(name);
+  roomOp(d => { d.entry = encPath(name); });   // S6b: mirror the entry change
+  renderTabs(); flushSave();
+}
+function fileDelete(name) {
+  if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
+  if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+  if (project.remove(name)) mirrorDeletes([name]);   // S6b: mirror only a successful delete
+  if (viewerSel === name) renderViewer(project.active);
+  renderTabs(); flushSave();
+}
+// Asset row actions via the ⋯ menu — Rename · Delete · Download. Wired to the assetFS model seams
+// so the load-path invariant + warn-on-move + storage-full guard all run. Rename is inline + async.
+function assetMenu(name) {
+  const anchor = rowMenuBtn(`#tabs .tab.asset[data-name="${cssAttr(name)}"]`);
+  if (!anchor) return;
+  openPopMenu(anchor, [
+    { label: "Rename", icon: "✎", run: () => assetRenameInline(name) },
+    { label: "Delete", icon: "🗑", danger: true, run: () => assetDelete(name) },
+    { label: "Download", icon: "⬇", run: () => downloadItem(name) },
+  ]);
+}
+function assetRenameInline(name) {
+  startInlineRename(`#tabs .tab.asset[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
+    if (next === name) return true;   // no-op
+    // assetFS.rename is async (IndexedDB + MEMFS + list re-key in lock-step) and validates +
+    // surfaces its own calm notice on collision / bad path / unreadable / storage-full, resolving
+    // false on those paths. RETURN the Promise so startInlineRename awaits it: on success the
+    // renderAssets() inside rename repaints the row (closing the input); on failure it keeps the
+    // input in edit + shows the inline hint (matching the sync file/folder rename contract).
+    return assetFS.rename(name, next);
+  });
+}
+function assetDelete(name) {
+  if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+  assetFS.remove(name);
+}
+// Build a CSS attribute-selector-safe value: escape backslash + double-quote (paths may carry
+// neither today, but renames are user-driven — keep the selector robust).
+function cssAttr(s) { return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
 // Explorer header actions
 document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
 document.getElementById("newFolderBtn").addEventListener("click", newFolderPrompt);
@@ -2894,7 +3179,7 @@ function onViewOpened(v) {
   if (v === "history") { historyOpen = true; historyPanelEl.hidden = false; renderHistory(); }
   else { historyOpen = false; }
   if (v === "examples") renderExamplesPanel();
-  if (v === "explorer") { assetPanelEl.hidden = false; renderAssetPanel(); renderTabs(); }
+  if (v === "explorer") { renderTabs(); updateStorageReadout(); }
 }
 function showView(v) {
   activeView = v;
@@ -3031,7 +3316,7 @@ document.getElementById("consoleFs").addEventListener("click", () => toggleFulls
 
 // Render the initial explorer + inert panels now that the wiring exists.
 renderExamplesPanel();
-renderAssetPanel();
+updateStorageReadout();   // seed the tree-footer browser-storage metric
 
 // ---------------------------------------------------------------- pyodide boot
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";

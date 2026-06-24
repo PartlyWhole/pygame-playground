@@ -1024,7 +1024,7 @@ def _stop():
 // class methods / module-level code can use their real return values. Every call
 // is still wrapped in await __maybe_await__ (non-coroutines pass straight through).
 const PROJECT_PY = String.raw`
-import sys, ast, importlib, importlib.abc, importlib.util, inspect, traceback, os
+import sys, ast, importlib, importlib.abc, importlib.util, importlib.machinery, inspect, traceback, os
 
 class _ProjectError(Exception):
     pass
@@ -1149,31 +1149,106 @@ def _transform_module(src, filename):
     ast.fix_missing_locations(tree)
     return compile(tree, filename, 'exec')
 
-_PROJECT_FILES = {}      # stem -> abs path in MEMFS
+_ROOT = os.getcwd()      # absolute project root anchor (MEMFS cwd, e.g. /home/pyodide)
 _PROJECT_PATHS = set()   # abs paths written last run (for unlink reconcile)
+_AUTO_INITS = set()      # abs paths of auto-created empty __init__.py markers
 _MOD_HELPERS = {'__maybe_await__': __maybe_await__, '__yield__': __yield__, '__sleep__': __sleep__}
 
-class _ProjectLoader(importlib.abc.Loader):
-    def __init__(self, modname, path):
-        self.modname, self.path = modname, path
+def _is_project_origin(origin):
+    # Only PROJECT source files under ROOT are cooperatively transformed; stdlib,
+    # pygame and site-packages live elsewhere and go through the unmodified loader.
+    return bool(origin) and origin.endswith('.py') and origin.startswith(_ROOT + '/')
+
+# Native importlib does NOT run _transform_module on imported modules, so an
+# imported module with a blocking 'while True' would freeze. To preserve the
+# cooperative loop on imported PROJECT modules (multifile checks 2/3, subdirs #4),
+# we install a MetaPathFinder that DELEGATES dotted/package resolution to the
+# stdlib PathFinder (packages, __init__.py, relative imports — all free) and only
+# wraps the returned spec's loader for project-origin .py files.
+class _CoopLoader(importlib.abc.Loader):
+    def __init__(self, inner, origin):
+        self.inner, self.origin = inner, origin
     def create_module(self, spec):
-        return None
+        return None                                   # default module creation
     def exec_module(self, module):
-        with open(self.path, 'r') as f:
+        with open(self.origin, 'r') as f:
             src = f.read()
-        code = _transform_module(src, self.path)
-        module.__dict__.update(_MOD_HELPERS)
+        code = _transform_module(src, self.origin)    # cooperative transform
+        module.__dict__.update(_MOD_HELPERS)          # __yield__/__sleep__/__maybe_await__
         exec(code, module.__dict__)
 
-class _ProjectFinder(importlib.abc.MetaPathFinder):
+class _CoopPathFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
-        if fullname in _PROJECT_FILES:
-            return importlib.util.spec_from_loader(fullname, _ProjectLoader(fullname, _PROJECT_FILES[fullname]))
-        return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is None or spec.origin is None:
+            return None
+        if not _is_project_origin(spec.origin):
+            return None                               # let the default finder claim it
+        spec.loader = _CoopLoader(spec.loader, spec.origin)
+        return spec
 
 def _install_finder():
-    if not any(isinstance(f, _ProjectFinder) for f in sys.meta_path):
-        sys.meta_path.insert(0, _ProjectFinder())
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)                     # absolute anchor for imports + open()
+    if not any(isinstance(f, _CoopPathFinder) for f in sys.meta_path):
+        sys.meta_path.insert(0, _CoopPathFinder())
+
+def writePath(relpath, text):
+    # One helper for every code write: mkdirTree(dirname) + write under ROOT.
+    # A bare name (no '/') is a depth-1 path: dirname is '' and no dir is made.
+    full = os.path.join(_ROOT, relpath)
+    d = os.path.dirname(full)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(full, 'w') as f:
+        f.write(text)
+    return full
+
+def _dotted_names_for(relpath):
+    # 'sprites/enemy.py' -> ['sprites.enemy', 'sprites'] (module + every ancestor
+    # package). Popping ancestors too is conservative: a package object caches its
+    # submodules, so re-running edited code needs the whole chain dropped.
+    stem = relpath[:-3] if relpath.endswith('.py') else relpath
+    parts = stem.split('/')
+    names = []
+    for i in range(len(parts), 0, -1):
+        seg = parts[:i]
+        if seg and seg[-1] == '__init__':
+            seg = seg[:-1]                            # 'pkg/__init__.py' -> package 'pkg'
+        if seg:
+            names.append('.'.join(seg))
+    return names
+
+def _ensure_init_py(new_paths):
+    # Auto-create an empty __init__.py in every directory that contains >=1 .py file
+    # (so 'import sprites.enemy' resolves). Tracked in _AUTO_INITS; written to MEMFS.
+    dirs = set()
+    for p in new_paths:
+        if p.endswith('.py'):
+            dirs.add(os.path.dirname(p))
+    for d in dirs:
+        if d == _ROOT or not d.startswith(_ROOT + '/'):
+            continue                                  # ROOT itself needs no package marker
+        init = os.path.join(d, '__init__.py')
+        if init not in new_paths and not os.path.exists(init):
+            os.makedirs(d, exist_ok=True)
+            with open(init, 'w') as f:
+                f.write('')
+            _AUTO_INITS.add(init)
+
+def _prune_empty_dirs():
+    # Remove directories under ROOT that hold no project file (walk bottom-up; never
+    # remove ROOT; skip __pycache__ defensively even though dont_write_bytecode is set).
+    for dirpath, dirnames, filenames in os.walk(_ROOT, topdown=False):
+        if dirpath == _ROOT:
+            continue
+        if os.path.basename(dirpath) == '__pycache__':
+            continue
+        try:
+            if not os.listdir(dirpath):               # truly empty -> safe to drop
+                os.rmdir(dirpath)
+        except Exception:
+            pass
 
 def _transform_entry(src):
     tree = ast.parse(src)
@@ -1186,27 +1261,28 @@ def _transform_entry(src):
     return compile(tree, '<entry>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
 async def _run_project(files, entry):
-    cwd = os.getcwd()
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)
     new_paths = set()
-    _PROJECT_FILES.clear()
-    for fname, msrc in files.items():
-        stem = fname[:-3] if fname.endswith('.py') else fname
-        path = os.path.join(cwd, fname)
-        with open(path, 'w') as f:
-            f.write(msrc)
-        _PROJECT_FILES[stem] = path
-        new_paths.add(path)
+    for relpath, msrc in files.items():
+        new_paths.add(writePath(relpath, msrc))       # mkdirTree + write under ROOT
+    _ensure_init_py(new_paths)                         # empty __init__.py per .py-bearing dir
+    new_paths |= {p for p in _AUTO_INITS if os.path.exists(p)}
+    # unlink files dropped since last run, then prune now-empty dirs
     for old in _PROJECT_PATHS - new_paths:
         try:
             if os.path.exists(old): os.unlink(old)
         except Exception:
             pass
+        _AUTO_INITS.discard(old)
     _PROJECT_PATHS.clear(); _PROJECT_PATHS.update(new_paths)
+    _prune_empty_dirs()
 
     _install_finder()
-    importlib.invalidate_caches()
-    for fname in files:
-        sys.modules.pop(fname[:-3] if fname.endswith('.py') else fname, None)
+    importlib.invalidate_caches()                      # MANDATORY after nested write/unlink
+    for relpath in files:                              # pop DOTTED module names (+ ancestors)
+        for dotted in _dotted_names_for(relpath):
+            sys.modules.pop(dotted, None)
     if '' not in sys.path:
         sys.path.insert(0, '')
 
@@ -1240,17 +1316,20 @@ def _start_project(files, entry):
 
 def _purge_project_files():
     # Reconcile MEMFS when leaving the project path (e.g. dropping back to a single
-    # file): unlink every module a prior project run wrote and forget its import, so
-    # a solo program can't import a stale sibling. Safe to call with nothing tracked.
+    # file): unlink every module a prior project run wrote (incl. nested + auto
+    # __init__.py), forget its DOTTED import, and prune the now-empty subdirs, so a
+    # solo program can't import a stale sibling. Safe to call with nothing tracked.
     for path in list(_PROJECT_PATHS):
         try:
             if os.path.exists(path): os.unlink(path)
         except Exception:
             pass
-    for stem in list(_PROJECT_FILES):
-        sys.modules.pop(stem, None)
+        rel = os.path.relpath(path, _ROOT).replace(os.sep, '/')
+        for dotted in _dotted_names_for(rel):
+            sys.modules.pop(dotted, None)
     _PROJECT_PATHS.clear()
-    _PROJECT_FILES.clear()
+    _AUTO_INITS.clear()
+    _prune_empty_dirs()
     importlib.invalidate_caches()
 `;
 
@@ -1318,16 +1397,48 @@ const storage = {
 // One source of truth for the set of .py files + which is the entry. Text lives
 // in per-file CodeMirror.Doc objects (per-file undo). Zero pyodide dependency.
 const PROJECT_KEY = "pygame-playground:project";
+// S2: a code path is a relative POSIX path of identifier segments ending in a
+// `.py` leaf (e.g. `main.py`, `sprites/enemy.py`). The regex forbids `..`, leading
+// `/`, empty segments and a non-identifier leading digit; the defensive split-check
+// rejects `..` segments belonging to odd encodings the regex might admit.
 const isModuleName = (name) =>
-  /^[A-Za-z_][A-Za-z0-9_]*\.py$/.test(name);     // identifier stem + .py
+  typeof name === "string" &&
+  /^([A-Za-z_]\w*\/)*[A-Za-z_]\w*\.py$/.test(name) &&
+  !name.split("/").includes("..");
+// A single folder segment: Python-identifier-safe so `import folder.x` works.
+const isFolderSegment = (seg) => /^[A-Za-z_]\w*$/.test(seg);
+// An asset path: same path shape as a module but the leaf needn't be an identifier
+// stem (`sounds/jump-1.wav` is fine); still relative, no `..`, no leading `/`, no
+// empty segment, non-empty leaf.
+const isAssetPath = (path) =>
+  typeof path === "string" &&
+  /^([^/]+\/)*[^/]+$/.test(path) &&
+  !path.startsWith("/") &&
+  !path.split("/").includes("..") &&
+  !path.split("/").includes("");
 const project = {
   files: {}, order: [], entry: "main.py", active: "main.py",
+  // Created-but-empty folders persist here until a file lands in them (POSIX paths).
+  emptyDirs: new Set(),
   text(name) { return this.files[name].getValue(); },     // live Doc read, never cached
   isMulti() { return this.order.length > 1; },
+  // Directories that actually contain a file (derived from path keys).
+  _fileDirs() {
+    const dirs = new Set();
+    for (const p of this.order) {
+      const parts = p.split("/"); parts.pop();
+      for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+    }
+    return dirs;
+  },
   serialize() {
     const files = {};
     for (const name of this.order) files[name] = this.files[name].getValue();
-    return { files, order: [...this.order], entry: this.entry };
+    // Only carry empty folders that no file now occupies (additive field, tolerated
+    // by old readers).
+    const occupied = this._fileDirs();
+    const emptyDirs = [...this.emptyDirs].filter(d => !occupied.has(d));
+    return { files, order: [...this.order], entry: this.entry, emptyDirs };
   },
   // Build docs from a plain record; the `active` doc becomes editor.getDoc() (adopt).
   load(rec) {
@@ -1335,6 +1446,7 @@ const project = {
     this.files = {};
     for (const name of order) this.files[name] = new CodeMirror.Doc(rec.files[name] ?? "", "python");
     this.order = order;
+    this.emptyDirs = new Set(Array.isArray(rec.emptyDirs) ? rec.emptyDirs : []);
     this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
     this.active = order.includes(rec.active) ? rec.active : this.entry;
     editor.swapDoc(this.files[this.active]);
@@ -1346,6 +1458,16 @@ const project = {
     this.order.push(name);
     return true;
   },
+  // Register a created-but-empty folder so it persists (via emptyDirs) until a file
+  // lands in it. Validates each segment as a Python-identifier-safe folder name.
+  addFolder(path) {
+    if (typeof path !== "string" || !path || path.startsWith("/")) return false;
+    const segs = path.split("/");
+    if (!segs.every(isFolderSegment)) return false;
+    if (this._fileDirs().has(path) || this.emptyDirs.has(path)) return false;
+    this.emptyDirs.add(path);
+    return true;
+  },
   rename(oldName, newName) {
     if (!isModuleName(newName) || this.files[newName] || !this.files[oldName]) return false;
     this.files[newName] = this.files[oldName]; delete this.files[oldName];
@@ -1353,6 +1475,46 @@ const project = {
     if (this.entry === oldName) this.entry = newName;
     if (this.active === oldName) this.active = newName;
     if (window.pyodide) try { if (pyodide.FS.analyzePath(oldName).exists) pyodide.FS.unlink(oldName); } catch {}
+    return true;
+  },
+  // Move a file or a whole folder into destFolder (or to ROOT when destFolder is
+  // falsy). A file becomes destFolder/basename; a folder re-keys EVERY descendant
+  // under the new prefix. Rejects an existing target, an invalid result, or moving a
+  // folder into itself / a descendant.
+  move(path, destFolder) {
+    destFolder = destFolder || "";
+    if (destFolder && !destFolder.split("/").every(isFolderSegment)) return false;
+    if (this.files[path]) {
+      // file move
+      const base = path.split("/").pop();
+      const next = destFolder ? destFolder + "/" + base : base;
+      if (next === path) return false;
+      return this.rename(path, next);
+    }
+    // folder move: re-key every descendant path under the new prefix.
+    const prefix = path + "/";
+    const kids = this.order.filter(p => p.startsWith(prefix));
+    if (!kids.length && !this.emptyDirs.has(path)) return false;   // nothing at this folder
+    const base = path.split("/").pop();
+    const newFolder = destFolder ? destFolder + "/" + base : base;
+    if (newFolder === path) return false;
+    // descendant-into-self guard (also covers identity).
+    if ((newFolder + "/").startsWith(prefix)) return false;
+    if (!newFolder.split("/").every(isFolderSegment)) return false;
+    // reject if any target path already exists.
+    for (const k of kids) {
+      const next = newFolder + k.slice(path.length);
+      if (this.files[next] || !isModuleName(next)) return false;
+    }
+    for (const k of kids) {
+      const next = newFolder + k.slice(path.length);
+      this.files[next] = this.files[k]; delete this.files[k];
+      this.order[this.order.indexOf(k)] = next;
+      if (this.entry === k) this.entry = next;
+      if (this.active === k) this.active = next;
+      if (window.pyodide) try { if (pyodide.FS.analyzePath(k).exists) pyodide.FS.unlink(k); } catch {}
+    }
+    if (this.emptyDirs.delete(path)) this.emptyDirs.add(newFolder);
     return true;
   },
   remove(name) {
@@ -1424,7 +1586,11 @@ function deserializeProject(obj) {
   const order = Array.isArray(obj.order)
     ? [...obj.order.filter(n => names.includes(n)), ...names.filter(n => !obj.order.includes(n))]
     : names;
-  return { files: obj.files, order, entry: obj.entry, active: obj.active };
+  // Carry empty folders (additive; tolerated absent). Keep only validly-shaped ones.
+  const emptyDirs = Array.isArray(obj.emptyDirs)
+    ? obj.emptyDirs.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
+    : [];
+  return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs };
 }
 function projectFromHash() {
   try {
@@ -1519,7 +1685,21 @@ async function captureSnapshot() {
 
 const assetFS = {
   list: [],   // [{name, size, type, warn}]
-  _memfs(name, bytes) { if (pyodide) try { pyodide.FS.writeFile(name, bytes); } catch (e) { console.warn('memfs write', name, e); } },
+  // writePath (JS twin of the Python helper): mkdirTree(dirname) then writeFile so a
+  // nested asset path lands at its real MEMFS location. FS.mkdirTree anchors RELATIVE
+  // paths at the FS root '/' while writeFile/open() resolve them against the cwd
+  // (/home/pyodide), so we resolve a relative asset path to its ABSOLUTE location
+  // under cwd first — code + assets then agree on directory creation. A bare name
+  // (no '/') has no dir to create.
+  _memfs(name, bytes) {
+    if (!pyodide) return;
+    try {
+      const abs = name.startsWith("/") ? name : pyodide.FS.cwd().replace(/\/$/, "") + "/" + name;
+      const slash = abs.lastIndexOf("/");
+      if (slash > 0) pyodide.FS.mkdirTree(abs.slice(0, slash));
+      pyodide.FS.writeFile(abs, bytes);
+    } catch (e) { console.warn('memfs write', name, e); }
+  },
   _unlink(name) { if (pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {} },
   async hydrateAll() {
     const recs = await assetStore.getAll();
@@ -1552,6 +1732,7 @@ const assetFS = {
   },
   async addFiles(files) { for (const f of files) await this.add(f); },
 };
+window.assetFS = assetFS;   // test seam (nested-asset-write mechanism; S2a)
 
 const assetChipEl = document.getElementById('assetChip');
 function assetMsg(text) { logLine(text, 'sys'); }
@@ -2024,9 +2205,17 @@ async function saveProject() {
   const files = project.serialize().files;
   for (const name of Object.keys(files)) zip.file(name, files[name]);
   for (const rec of await assetStore.getAll()) {
-    // Never let an asset clobber a code file of the same name (zip.file overwrites).
-    const name = files[rec.name] ? "asset_" + rec.name : rec.name;
-    if (name !== rec.name) logLine(`Asset "${rec.name}" clashes with a code file — zipped as "${name}".`, "sys");
+    // Never let an asset clobber a code file at the SAME path (zip.file overwrites).
+    // Path keys give folders for free; a clash prefixes the LEAF within its directory
+    // (`sprites/ship.py` -> `sprites/asset_ship.py`), keeping the asset in its folder.
+    let name = rec.name;
+    if (files[rec.name]) {
+      const slash = rec.name.lastIndexOf("/");
+      name = slash >= 0
+        ? rec.name.slice(0, slash + 1) + "asset_" + rec.name.slice(slash + 1)
+        : "asset_" + rec.name;
+      logLine(`Asset "${rec.name}" clashes with a code file — zipped as "${name}".`, "sys");
+    }
     zip.file(name, new Uint8Array(rec.bytes));
   }
   const blob = await zip.generateAsync({ type: "blob" });

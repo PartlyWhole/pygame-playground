@@ -1915,6 +1915,12 @@ async function routeUpload(file, destFolder = selectedFolder) {
       // importable without waiting for the next run. Reuses assetFS._memfs as a generic
       // bytes-to-path writer (not asset-specific).
       assetFS._memfs(final, new TextEncoder().encode(text));
+      // S6 — a code file added in a room must reach peers. Mirror the add to the shared doc
+      // exactly like newFilePrompt, but seed it with the uploaded TEXT (not ""); without this
+      // the file is local-only and S6a's edit-listener refuses to seed a missing key, so it
+      // stays permanently invisible to peers (the "half-relaxed gate"). Assets are NOT mirrored
+      // (they live outside the CRDT shape — by design).
+      roomOp(d => { d.files[encPath(final)] = text; if (!d.order.includes(encPath(final))) d.order.push(encPath(final)); });
       project.setActive(final);
       renderTabs();
     } else {
@@ -2858,6 +2864,7 @@ function openExample(key) {
   renderTabs();                                             // drop any stale .active in the tree
   renderExamplesPanel();                                     // mark this row .sel
 }
+window.openExample = openExample;   // test seam (mirrors window.newFilePrompt / window.uploadFiles)
 
 // Promote the current preview into the project on its first real edit. Returns the final filename.
 function promotePreview() {
@@ -2866,6 +2873,17 @@ function promotePreview() {
   const taken = finalName !== exampleFilename(key);
   project.adoptDoc(finalName, doc);                          // ADOPT the live Doc (keystroke + undo survive)
   project.setEntry(finalName);                              // a promoted single edit becomes the runnable entry
+  // S6 — a promoted example becomes a real code file (and the new entry); in a room it must reach
+  // peers. Mirror the adopt to the shared doc with the Doc's CURRENT text (same shape as
+  // newFilePrompt/upload), in ONE atomic roomOp that also moves the entry so the doc invariant
+  // (entry is a live key) holds. Without this the promoted file is local-only and S6a's edit-
+  // listener won't seed its missing key, leaving it permanently invisible to peers.
+  roomOp(d => {
+    const k = encPath(finalName);
+    d.files[k] = doc.getValue();
+    if (!d.order.includes(k)) d.order.push(k);
+    d.entry = k;
+  });
   exampleOf[finalName] = key;
   modifiedExamples.add(finalName);
   previewExample = null;                                     // it's a real file now, no longer floating

@@ -163,6 +163,29 @@ async function explorerDelete(page, path) {
   off();
 }
 
+// Upload a .py via the REAL upload flow (#assetInput change → uploadFiles → routeUpload). This
+// is the S5 code-upload lane (a .py with a python/no MIME routes to project.add, NOT an asset).
+// Drives the SAME wiring upload.mjs drives; the room mirror (S6 fix under test) hangs off the
+// successful project.add here.
+async function uploadPy(page, name, body) {
+  await page.setInputFiles('#assetInput',
+    { name, mimeType: 'text/x-python', buffer: Buffer.from(body) });
+  await page.waitForTimeout(150);
+}
+
+// Open an example + make its FIRST edit (the change that promotes the preview Doc into a real
+// project file via promotePreview/adoptDoc). Drives window.openExample (test seam) then types
+// into the ONE CodeMirror so the dedicated promote change-listener fires.
+async function promoteExample(page, key, appended) {
+  await page.evaluate((k) => window.openExample(k), key);
+  await page.waitForTimeout(100);
+  await page.evaluate((txt) => {
+    const cm = document.querySelector('.CodeMirror').CodeMirror;
+    cm.replaceRange(txt, { line: 0, ch: 0 });   // a real edit on the preview Doc → promotePreview()
+  }, appended);
+  await page.waitForTimeout(150);
+}
+
 try {
   // ---------------------------------------------------------------- relay reachability probe
   // Seed a multi-file room on peer A, then JOIN it from peer B. If B never adopts main.py
@@ -466,6 +489,70 @@ try {
       } else {
         fail('B6b restore-in-room did NOT propagate — B did not receive the restored project '
           + '(' + JSON.stringify(await tabNames(B)) + '); restore in a room only loads locally (flushSave is a no-op).');
+      }
+    }
+
+    // ============================================================ ASSERTION B7
+    // CODE-UPLOAD-IN-ROOM propagates (S6 consistency gap). A `.py` added via the upload lane
+    // (#assetInput → routeUpload → project.add) is a code-add path OTHER than the explorer
+    // new-file button. At S6b HEAD it is NOT mirrored to the shared doc, so peers never see it
+    // (the "half-relaxed gate"). Peer A uploads a `.py`; the LOCAL add MUST land on A (the
+    // precondition — so a RED here means "not mirrored", not "upload failed"); then peer B must
+    // see the new #tabs row WITH its content.
+    {
+      const UP = 'uploaded_helper.py', BODY = 'UPLOADED_IN_ROOM = 7\n';
+      await uploadPy(A, UP, BODY);
+      // PRECONDITION: the upload landed on A as a CODE file (project.files + a .py tab row).
+      const localOK = await waitConverge(A,
+        (p) => !!window.project.files[p] && window.project.order.includes(p)
+          && !window.assetFS.list.some(a => a.name === p), UP, 5000);
+      if (!localOK) {
+        fail('B7 PRECONDITION — .py upload did not create ' + UP + ' as a CODE file LOCALLY on A '
+          + '(test driver / routing issue, not the propagation under test)');
+      } else {
+        const onB = await waitConverge(B, (a) => {
+          const has = [...document.querySelectorAll('#tabs .tab[data-name]')]
+            .some(t => t.getAttribute('data-name') === a.p);
+          return has && window.project.files[a.p]?.getValue().includes(a.body.trim());
+        }, { p: UP, body: BODY }, 15000);
+        const bTabs = await tabNames(B);
+        if (onB && bTabs.includes(UP)) {
+          ok('B7 .py UPLOAD in a room propagates: B shows the uploaded file + content');
+        } else {
+          fail('B7 .py UPLOAD did NOT propagate — B tabs=' + JSON.stringify(bTabs)
+            + ' (want to include ' + UP + '); local upload-add on A succeeded, so routeUpload is NOT routed to the shared doc.');
+        }
+      }
+    }
+
+    // ============================================================ ASSERTION B8
+    // EXAMPLES-PROMOTE-IN-ROOM propagates (S6 consistency gap). Opening an example previews a
+    // floating Doc OUTSIDE project.files; the FIRST edit PROMOTES it into the project via
+    // adoptDoc — another code-add path that was unmirrored at S6b HEAD. Peer A opens an example
+    // + edits it (promotes); the LOCAL promote MUST land on A (precondition); then peer B must
+    // see the promoted file + its content.
+    {
+      const KEY = 'Snake', PROMOTED = 'snake.py', SENT = 'PROMOTED_IN_ROOM=8\n';
+      await promoteExample(A, KEY, SENT);
+      // PRECONDITION: the promote created snake.py as a real project file on A.
+      const localOK = await waitConverge(A,
+        (p) => !!window.project.files[p] && window.project.order.includes(p), PROMOTED, 5000);
+      if (!localOK) {
+        fail('B8 PRECONDITION — promoting example "' + KEY + '" did not create ' + PROMOTED
+          + ' LOCALLY on A (test driver / example-UI issue, not the propagation under test)');
+      } else {
+        const onB = await waitConverge(B, (a) => {
+          const has = [...document.querySelectorAll('#tabs .tab[data-name]')]
+            .some(t => t.getAttribute('data-name') === a.p);
+          return has && window.project.files[a.p]?.getValue().includes(a.sent.trim());
+        }, { p: PROMOTED, sent: SENT }, 15000);
+        const bTabs = await tabNames(B);
+        if (onB && bTabs.includes(PROMOTED)) {
+          ok('B8 example PROMOTE in a room propagates: B shows the promoted file + content');
+        } else {
+          fail('B8 example PROMOTE did NOT propagate — B tabs=' + JSON.stringify(bTabs)
+            + ' (want to include ' + PROMOTED + '); local promote on A succeeded, so promotePreview/adoptDoc is NOT routed to the shared doc.');
+        }
       }
     }
 

@@ -4,6 +4,14 @@
 **App:** pygame playground (single static `index.html` on GitHub Pages,
 https://partlywhole.github.io/pygame-playground/)
 
+> **SUPERSEDED (shared-doc shape only) by the MULTI-FILE successor:**
+> `docs/specs/2026-06-23-multifile-collab-design.md`. As of S6a the room is a
+> **path-keyed multi-file CRDT** — `{ files: {[encodeURIComponent(path)]: text}, order,
+> entry }` — not the single-file `{ code: string }` below. The transport/bundle/lazy-load
+> rationale in THIS doc is still correct and load-bearing; only the document SHAPE and the
+> single-file `bindEditor`/cursor specifics are revised. See the successor for the
+> encode/decode boundary, `bindEditor` multi-file reconciliation, and per-file presence.
+
 ## Goal
 
 Let two or more people edit the same pygame program together in real time —
@@ -23,7 +31,8 @@ Non-goal: streaming one person's running pygame canvas to others. We sync the
 - **Collaboration is opt-in:** a "Collaborate" button starts a room from the
   current code. The solo playground path is unchanged and loads no Automerge/WASM.
 - **Identity:** auto-assigned random name + color per session. No login.
-- **Run stays local.** Sync covers `{ code: string }` plus ephemeral cursors.
+- **Run stays local.** Sync covers the multi-file project `{files, order, entry}` (a
+  path-keyed CRDT, S6a) plus ephemeral **per-file** cursors. *(Was `{ code: string }`.)*
 
 ## Architecture
 
@@ -47,7 +56,15 @@ step that regenerates the bundle.
 Shared document shape:
 
 ```
-{ code: string }
+// S6a (multi-file): path-keyed CRDT. Keys are encodeURIComponent(humanPath) so a
+// nested file ("sprites/enemy.py") is a slash-free, updateText-addressable map key.
+{ files: { [encodeURIComponent(path)]: text },  // map: per-file char-level merge
+  order: string[],                              // Automerge list of ENCODED keys
+  entry: string }                               // LWW scalar, an ENCODED key
+
+// The encoded keys live ONLY in the shared doc; the local model, #project=, the zip and
+// localStorage stay HUMAN paths (the encode/decode boundary — see the successor doc §2).
+// (Was the single-file shape:  { code: string }  — kept here for history.)
 ```
 
 Repo setup (network only; the sync server holds the doc, so no storage adapter

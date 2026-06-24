@@ -2551,8 +2551,8 @@ loadInitialProject();
 renderTabs();
 if (roomFromHash) joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
 
-// Build the initial project. Precedence: #room (single-file, joined async above) >
-// #project > #code > saved project > legacy code > default example.
+// Build the initial project. Precedence: #room (multi-file project, joined+adopted async
+// above) > #project > #code > saved project > legacy code > default example.
 function loadInitialProject() {
   if (roomFromHash) { project.load({ files: { "main.py": "" } }); return; }   // blank until room arrives
   const fromProject = projectFromHash();
@@ -3139,7 +3139,10 @@ async function run() {
   canvasEl.focus();
   resumeAudio();
   let task;
-  const isSingle = collab.active || !project.isMulti();
+  // S6a (G6): drop the `collab.active` term so a MULTI-FILE project in a room runs the
+  // project path (_start_project), not the single-file path. A single-file project (depth-1,
+  // the collab.mjs case) is still !isMulti() → the single-file path, unchanged.
+  const isSingle = !project.isMulti();
   if (isSingle) {
     pyodide.runPython("_state['via_project'] = False; _purge_project_files()");
     const start = pyodide.globals.get("_start");
@@ -3221,30 +3224,133 @@ function setLive(state, peers) {
 }
 
 function applyingRemoteSet(fn) { collab.applyingRemote = true; try { fn(); } finally { collab.applyingRemote = false; } }
+
+// ---------------------------------------------------------------- S6a encode/decode boundary
+// THE ONLY place %2F-encoded keys exist is the shared Automerge doc. The local `project`
+// model, #project=, the zip, localStorage and the UI all stay HUMAN paths. enc/dec are
+// total inverses for valid module paths (proven by test/spike-collab-paths.mjs). Never
+// double-encode: nothing outside encodeProject/docToRecord + per-file updateText sees a key.
+const encPath = (p) => encodeURIComponent(p);   // human path -> CRDT key  ("a/b.py" -> "a%2Fb.py")
+const decKey  = (k) => decodeURIComponent(k);   // CRDT key -> human path
+// project.serialize() returns HUMAN {files,order,entry,emptyDirs}. encodeProject re-keys it
+// for the doc; emptyDirs is dropped (empty folders aren't in the v1 shared shape). `order`
+// drives the key set so a file missing from order can never seed an orphan key.
+function encodeProject(rec) {
+  const files = {};
+  for (const p of rec.order) files[encPath(p)] = rec.files[p];
+  return { files, order: rec.order.map(encPath), entry: encPath(rec.entry) };
+}
+// Materialize a doc into a HUMAN record project.load() consumes (decode the boundary).
+function docToRecord(doc) {
+  const files = {};
+  for (const k of Object.keys(doc.files)) files[decKey(k)] = String(doc.files[k]);
+  return { files, order: [...doc.order].map(decKey), entry: decKey(doc.entry) };
+}
+
+// Cursor-preserving prefix/suffix splice of `next` onto a CodeMirror.Doc `d`. When `d` is the
+// editor's active Doc this preserves the live caret/scroll (the old single-file algorithm,
+// verbatim, but on `d`'s coordinate space). Used for BOTH the active and non-active files —
+// the non-active Doc has no visible caret to disturb but keeps its own undo history this way
+// (a setValue would nuke that Doc's undo stack), and the active Doc keeps the user's caret.
+function spliceDoc(d, next) {
+  const cur = d.getValue();
+  if (cur === next) return;
+  let s = 0;
+  while (s < cur.length && s < next.length && cur[s] === next[s]) s++;
+  let e = 0;
+  while (e < cur.length - s && e < next.length - s &&
+         cur[cur.length - 1 - e] === next[next.length - 1 - e]) e++;
+  const from = d.posFromIndex(s);
+  const to = d.posFromIndex(cur.length - e);
+  d.replaceRange(next.slice(s, next.length - e), from, to, "+remote");
+}
+
+// Pick a surviving active file when the local active was removed remotely: remote entry if it
+// still exists, else the first remote-order path, else the first remaining local path.
+function pickSurvivingActive(doc) {
+  const remote = [...doc.order].map(decKey).filter(p => project.files[p]);
+  const entry = decKey(doc.entry);
+  if (project.files[entry]) return entry;
+  if (remote.length) return remote[0];
+  return project.order[0];
+}
+
+// Set project.order to the remote order, FILTERED to paths that have a Doc (defensive: a
+// transient doc state could list a key mid-add). Appends any local paths the remote order
+// omitted so no file with a Doc is ever dropped from the strip.
+function reconcileOrder(remoteOrder) {
+  const have = remoteOrder.filter(p => project.files[p]);
+  const seen = new Set(have);
+  for (const p of project.order) if (project.files[p] && !seen.has(p)) { have.push(p); seen.add(p); }
+  project.order = have;
+}
+
+// The full remote->local reconciliation. Diffs the WHOLE doc against the local project
+// (never assumes which file changed): adds remote-only keys (fresh Doc, no lost files),
+// removes local-only keys (no ghost tabs, with active-file repair so the editor never points
+// at a dead Doc), splices changed text per file (active = cursor-preserving live splice,
+// non-active = Doc splice), and reconciles order + entry. ONE renderTabs at the end.
+function reconcileFromDoc(doc) {
+  const remotePaths = Object.keys(doc.files).map(decKey);       // human paths
+  const remoteSet = new Set(remotePaths);
+  const localSet = new Set(project.order);
+
+  // (A) ADDED keys: present remotely, absent locally -> fresh Doc + tab (no lost files).
+  const added = [];
+  for (const p of remotePaths) {
+    if (!localSet.has(p)) { if (project.add(p, String(doc.files[encPath(p)]))) added.push(p); }
+  }
+
+  // (B) CHANGED text in files present in BOTH: active = cursor-preserving live splice on the
+  //     editor's Doc; non-active = splice the detached Doc (keeps its undo history + caret).
+  for (const p of remotePaths) {
+    if (added.includes(p)) continue;                            // just created from remote text — already current
+    const d = project.files[p];
+    if (!d) continue;
+    spliceDoc(d, String(doc.files[encPath(p)]));                // d === active Doc preserves the live caret
+  }
+
+  // (C) REMOVED keys: present locally, gone remotely. Repair the active file FIRST (so the
+  //     editor never sits on a Doc about to be deleted), then remove. project.remove refuses
+  //     to drop the last file, so a removal that would empty the project is skipped (kept).
+  const removed = [...localSet].filter(p => !remoteSet.has(p));
+  for (const p of removed) {
+    if (p === project.active) {
+      const survivor = pickSurvivingActive(doc);
+      if (survivor && survivor !== p && project.files[survivor]) project.setActive(survivor);
+    }
+    project.remove(p);
+  }
+
+  // (D) ORDER + ENTRY: adopt the remote order (decoded, filtered to live Docs) + entry.
+  reconcileOrder([...doc.order].map(decKey));
+  const remoteEntry = decKey(doc.entry);
+  if (project.files[remoteEntry]) project.entry = remoteEntry;
+
+  renderTabs();                                                 // ONE repaint from the reconciled order
+}
+
 function bindEditor() {
   const { updateText } = collab.lib;
-  // local edits -> shared doc
+  // local edits -> shared doc: push the ACTIVE file's text to its OWN encoded key (not a
+  // hardwired ['code']). The editor's Doc is whichever file setActive last swapped in, so a
+  // local edit always concerns project.active; switching files needs no rebinding. This
+  // listener is IN ADDITION to the autosave editor.on("change") (which returns in a room) —
+  // they are disjoint by the collab.active guard.
   editor.on("change", () => {
     if (!collab.active || collab.applyingRemote) return;
-    const value = editor.getValue();
-    if (value === collab.handle.doc().code) return;
-    collab.handle.change(d => updateText(d, ["code"], value));
+    const path = project.active;
+    const key = encPath(path);
+    const next = editor.getValue();                            // == project.files[path] live Doc
+    const doc = collab.handle.doc();
+    if (!doc.files || doc.files[key] == null) return;          // structural ops (S6b) create keys; S6a edits seeded files
+    if (String(doc.files[key]) === next) return;               // echo backstop
+    collab.handle.change(d => updateText(d, ["files", key], next));
   });
-  // shared doc -> local editor: replaceRange only the changed middle, preserving cursor/scroll
+  // shared doc -> local: full multi-file reconciliation under the remote guard.
   collab.handle.on("change", ({ doc }) => {
-    const next = doc.code ?? "";
-    const cur = editor.getValue();
-    if (next === cur) return;
-    applyingRemoteSet(() => {
-      let s = 0;
-      while (s < cur.length && s < next.length && cur[s] === next[s]) s++;
-      let e = 0;
-      while (e < cur.length - s && e < next.length - s &&
-             cur[cur.length - 1 - e] === next[next.length - 1 - e]) e++;
-      const from = editor.posFromIndex(s);
-      const to = editor.posFromIndex(cur.length - e);
-      editor.replaceRange(next.slice(s, next.length - e), from, to, "+remote");
-    });
+    if (!doc || !doc.files) return;
+    applyingRemoteSet(() => reconcileFromDoc(doc));
   });
 }
 const NAME_ADJ = ["Swift", "Brave", "Clever", "Sly", "Jolly", "Witty", "Cosmic", "Mellow",
@@ -3319,17 +3425,12 @@ async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {
 
 async function startRoom() {
   collab.lib = await loadAutomerge();
-  let seed = editor.getValue();
-  if (project.isMulti()) {
-    if (!confirm(`Live collaboration is single-file. Share only your entry file (${project.entry})? `
-               + `Your full project stays saved locally and returns when you reload.`)) {
-      setLive("offline", 1);   // user backed out; clear the "connecting" indicator
-      return;
-    }
-    seed = project.text(project.entry);
-  }
+  // S6a (G1/G2): seed the WHOLE multi-file project (encoded keys) — no more entry-only
+  // collapse/confirm. A single-file project is the depth-1 case (one encoded key) so
+  // collab.mjs keeps passing. `serialize()` returns human paths; encodeProject re-keys.
+  const seed = encodeProject(project.serialize());
   collab.repo = new collab.lib.Repo({ network: [new collab.lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
-  collab.handle = collab.repo.create({ code: seed });
+  collab.handle = collab.repo.create(seed);
   await collab.handle.whenReady();
   location.hash = "#room=" + collab.handle.url;
   await enterRoom();
@@ -3343,7 +3444,14 @@ async function joinRoom(url) {
     // findWithRetry creates fresh Repo instances per attempt and assigns collab.repo on success
     collab.handle = await findWithRetry(collab.lib, url);
     if (!collab.handle) { console.warn("Room not found or unavailable; staying solo."); setLive("offline", 1); return; }
-    applyingRemoteSet(() => editor.setValue(collab.handle.doc().code ?? ""));
+    // S6a (G3): adopt the WHOLE multi-file project — same code path as opening a saved
+    // multi-file project, sourced from the doc. project.load rebuilds every file's Doc +
+    // swapDoc's the active one, so the joiner shows ALL files (no ghost tabs / no lost files).
+    applyingRemoteSet(() => {
+      project.load(docToRecord(collab.handle.doc()));
+      renderTabs();
+      renderViewer(project.active);
+    });
     await enterRoom();
   } finally {
     collab.starting = false;
@@ -3355,7 +3463,7 @@ async function enterRoom() {
   setLive("", 1);
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
   if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
-  renderTabs();   // remove the multi-file tab strip in a room (gate: isMulti() && !collab.active)
+  renderTabs();   // explorer is always-on; repaint from the (now shared) project.order
 }
 
 function copyRoomLink() {

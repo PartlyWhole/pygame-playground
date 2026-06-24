@@ -2674,10 +2674,11 @@ function startInlineRename(rowSel, fullPath, commit) {
   input.value = base;
   input.setAttribute("aria-label", `Rename ${base}`);
   let done = false;
+  let pending = false;   // an async commit (asset rename) is in flight — block re-commit + blur-cancel
   const cleanup = () => { try { row.classList.remove("renaming"); } catch {} };
-  const cancel = () => { if (done) return; done = true; cleanup(); renderTabs(); };
+  const cancel = () => { if (done || pending) return; done = true; cleanup(); renderTabs(); };
   const tryCommit = () => {
-    if (done) return;
+    if (done || pending) return;
     const raw = input.value.trim();
     if (!raw || raw === base) { cancel(); return; }   // no-op / empty -> cancel cleanly
     // Reconstruct the full path: keep the row's directory, swap the basename.
@@ -2691,6 +2692,22 @@ function startInlineRename(rowSel, fullPath, commit) {
       input.focus();
     };
     const res = commit(next, raw, hint);
+    // Async commit (asset rename: IndexedDB + MEMFS re-key validates AFTER the call). Don't close
+    // the input until the real result is known — on rejection (collision / bad path / unreadable /
+    // storage-full) keep the row in edit with a calm inline hint, mirroring the sync file/folder path.
+    if (res && typeof res.then === "function") {
+      pending = true;            // block re-commit + the blur-cancel while the async re-key runs.
+      input.readOnly = true;     // visually freeze (readOnly, NOT disabled — disabling a focused
+                                 // input fires blur, which would race the pending guard).
+      res.then((ok) => {
+        pending = false;
+        if (done) return;        // a repaint (renderTabs) already replaced the input on success
+        input.readOnly = false;
+        if (ok) { done = true; cleanup(); }       // success but no repaint happened: close cleanly
+        else { hint("invalid or in use"); }       // failure: stay in edit, surface the hint
+      }, () => { pending = false; if (!done) { input.readOnly = false; hint("rename failed"); } });
+      return;
+    }
     if (res === false) return;   // stay in edit; hint already shown
     done = true; cleanup();      // success -> the handler re-rendered (renderTabs)
   };
@@ -2809,10 +2826,11 @@ function assetRenameInline(name) {
   startInlineRename(`#tabs .tab.asset[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
     if (next === name) return true;   // no-op
     // assetFS.rename is async (IndexedDB + MEMFS + list re-key in lock-step) and validates +
-    // surfaces its own calm notice on collision/storage-full. We optimistically close the input;
-    // the renderAssets() inside rename repaints the row.
-    assetFS.rename(name, next);
-    return true;
+    // surfaces its own calm notice on collision / bad path / unreadable / storage-full, resolving
+    // false on those paths. RETURN the Promise so startInlineRename awaits it: on success the
+    // renderAssets() inside rename repaints the row (closing the input); on failure it keeps the
+    // input in edit + shows the inline hint (matching the sync file/folder rename contract).
+    return assetFS.rename(name, next);
   });
 }
 function assetDelete(name) {

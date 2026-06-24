@@ -380,6 +380,66 @@ else fail('  renamed asset does not load by its new path: ' + px);
 await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
 
 // ================================================================================================
+// 6b. RENAME (ASSET) TO A NAME ALREADY IN USE STAYS IN EDIT WITH A CALM INLINE HINT (regression).
+//     assetFS.rename is ASYNC and validates AFTER the call, resolving false on a collision (without
+//     a renderTabs repaint). The inline-rename commit must AWAIT that result: on false it must keep
+//     the <input> live (still in the DOM, editable) and show a .rename-hint — NOT optimistically
+//     close + leave the row stuck with an inert editable input (the review's medium finding). Then
+//     Esc must still revert cleanly. (design §3: "invalid name -> stay in edit with a calm hint".)
+// ================================================================================================
+await page.evaluate(() => {
+  window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+  window.renderTabs();
+});
+// two assets: we'll try to rename keep.png ONTO taken.png (a collision via existsAnywhere).
+await page.evaluate((b64) => {
+  const mk = (n) => { const bin = atob(b64); const b = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return window.assetFS.add(new File([b], n, { type: 'image/png' })); };
+  return mk('keep.png').then(() => mk('taken.png'));
+}, PNG_B64).catch(() => {});
+await page.waitForTimeout(300);
+await ensureExplorerOpen();
+await page.evaluate(() => { window.__prompts = []; });
+await clickRowMenu('#tabs .tab.asset[data-name="keep.png"]');
+await page.waitForTimeout(150);
+const collideChosen = await activateMenuItem('Rename');
+await page.waitForTimeout(150);
+const collideInline = await inlineRename('#tabs .tab.asset[data-name="keep.png"]', 'taken.png', 'Enter');
+await page.waitForTimeout(400);   // assetFS.rename is async — wait for it to RESOLVE false
+const collideState = await page.evaluate(() => {
+  const row = document.querySelector('#tabs .tab.asset[data-name="keep.png"]');
+  const input = row ? row.querySelector('input[type="text"], input.rename-input') : null;
+  return {
+    rowStillKeep: !!row,                                   // keep.png was NOT re-keyed (no data loss)
+    keepInList: window.assetFS.list.some(a => a.name === 'keep.png'),
+    takenStillOne: window.assetFS.list.filter(a => a.name === 'taken.png').length === 1,
+    inputStillLive: !!input && input.isConnected,          // the edit field is STILL in the DOM
+    inputEnabled: !!input && !input.disabled,              // and editable again (not frozen/inert)
+    hintShown: !!(row && row.querySelector('.rename-hint')),
+    prompts: window.__prompts.slice(),
+  };
+});
+if (collideChosen && collideInline.inputFound && collideState.rowStillKeep && collideState.keepInList && collideState.takenStillOne)
+  ok('asset Rename onto an in-use name does NOT re-key (no data loss): keep.png + single taken.png survive');
+else fail('asset collide-rename mangled the model: ' + JSON.stringify(collideState));
+if (collideState.inputStillLive && collideState.inputEnabled && collideState.hintShown)
+  ok('  ...the row STAYS in edit: <input> still live + editable + a .rename-hint is shown (not stuck inert)');
+else fail('  collide-rename left the row stuck / no hint (review finding): ' + JSON.stringify(collideState));
+if (collideChosen && collideState.prompts.length === 0)
+  ok('  ...the rejected async rename fired NO window.prompt');
+else fail('  collide-rename fired a window.prompt: ' + JSON.stringify(collideState.prompts));
+// Esc from the still-live input must revert the row cleanly back to a normal label.
+await inlineRename('#tabs .tab.asset[data-name="keep.png"]', '', 'Escape');
+await page.waitForTimeout(150);
+const collideReverted = await page.evaluate(() => {
+  const row = document.querySelector('#tabs .tab.asset[data-name="keep.png"]');
+  return { row: !!row, noInput: !!row && !row.querySelector('input'), hasLabel: !!(row && row.querySelector('.tab-name')) };
+});
+if (collideReverted.row && collideReverted.noInput && collideReverted.hasLabel)
+  ok('  ...Esc reverts the still-live input back to a normal label (no leftover edit state)');
+else fail('  Esc did not revert the kept-open input cleanly: ' + JSON.stringify(collideReverted));
+
+// ================================================================================================
 // 7. DELETE (FILE) VIA MENU IS CONFIRM-GATED. Choose Delete from the file menu; with confirm()
 //    accepting, the file is removed. (design §1: "Delete keeps the existing confirm()".)
 // ================================================================================================

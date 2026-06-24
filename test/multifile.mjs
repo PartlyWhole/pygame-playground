@@ -280,7 +280,7 @@ await page.evaluate(() => {
   window.renderTabs();
 });
 const tabNames = await page.evaluate(() =>
-  Array.from(document.querySelectorAll('#tabs .tab')).map(t => t.dataset.name));
+  Array.from(document.querySelectorAll('#tabs .tab[data-name]')).map(t => t.dataset.name));
 if (JSON.stringify(tabNames) === '["main.py","enemy.py"]') ok('tabs render both files');
 else fail('tabs wrong: ' + JSON.stringify(tabNames));
 

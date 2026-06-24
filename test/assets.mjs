@@ -383,9 +383,104 @@ else fail('no warning badge on the MP3 .tab.asset row');
   else fail('  warn-on-move altered the student code (must never rewrite): ' + JSON.stringify(warn));
 }
 
-// Final: no unexpected JS errors throughout.
+// ================================================================================================
+// (g) REGRESSION — DURABLE-WRITE-FAILURE DATA-SAFETY. The load-path invariant says a rename must
+//     move IndexedDB + MEMFS + .list atomically. If the durable write (assetStore.put) FAILS
+//     mid-rename, the destructive half (remove(old) / unlink(old) / mutate .list) MUST NOT run —
+//     otherwise a storage-full move SILENTLY DESTROYS the only copy of the asset. Stub the store so
+//     put() fails, then rename; assert the OLD asset survives intact and the NEW key was NOT created.
+// ================================================================================================
+{
+  await page.setInputFiles('#assetInput',
+    { name: 'safe.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
+  await page.waitForTimeout(200);
+  await ensureExplorerOpen();
+  const r = await page.evaluate(async () => {
+    if (typeof window.assetFS.rename !== 'function' || !window.assetStore) return { noSeam: true };
+    const realPut = window.assetStore.put;
+    window.assetStore.put = async () => false;   // simulate a storage-full / unavailable durable write
+    let ret;
+    try { ret = await window.assetFS.rename('safe.png', 'moved.png'); }
+    finally { window.assetStore.put = realPut; }
+    return {
+      ret,
+      // OLD asset must survive every plane (the destructive half must not have run).
+      oldInList: window.assetFS.list.some(a => a.name === 'safe.png'),
+      oldInFs: pyodide.FS.analyzePath('safe.png').exists,
+      oldRow: !!document.querySelector('#tabs .tab.asset[data-name="safe.png"]'),
+      // NEW key must NOT exist anywhere (no half-written destination).
+      newInList: window.assetFS.list.some(a => a.name === 'moved.png'),
+      newInFs: pyodide.FS.analyzePath('moved.png').exists,
+      newRow: !!document.querySelector('#tabs .tab.asset[data-name="moved.png"]'),
+    };
+  });
+  if (!r.noSeam && r.ret === false && r.oldInList && r.oldInFs && r.oldRow && !r.newInList && !r.newInFs && !r.newRow)
+    ok('rename aborts (returns false) on durable-write failure — OLD asset survives, NO data loss');
+  else fail('rename on storage-full LOST or half-moved the asset: ' + JSON.stringify(r));
+}
+
+// ================================================================================================
+// (h) REGRESSION — QUOTE-AWARE WARN-ON-MOVE. The warn-on-move scan must only flag a line where the
+//     OLD path is a real load-path literal (quote-prefixed), not any bare substring. Renaming
+//     "s.png" must NOT warn about a line that loads "boss.png" (false positive); but a line that
+//     loads "s.png" MUST warn (true positive).
+// ================================================================================================
+{
+  // false-positive case: code references boss.png, we rename s.png — must NOT warn.
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': 'import pygame\nimg = pygame.image.load("boss.png")\n' },
+      order: ['main.py'], entry: 'main.py', active: 'main.py',
+    });
+    window.renderTabs();
+    window.__cb = Array.from(document.getElementById('console').children).length;
+    window.__alertText = '';
+    window.alert = (m) => { window.__alertText += String(m) + '\n'; };
+  });
+  await page.setInputFiles('#assetInput',
+    { name: 's.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
+  await page.waitForTimeout(200);
+  const fp = await page.evaluate(async () => {
+    if (typeof window.assetFS.rename !== 'function') return { noSeam: true };
+    await window.assetFS.rename('s.png', 'x.png');
+    const newConsole = Array.from(document.getElementById('console').children).map(c => c.textContent).slice(window.__cb).join('\n');
+    const haystack = [newConsole, window.__alertText].join('\n');
+    return { warned: /s\.png|x\.png|update|now at|references?/i.test(haystack) };
+  });
+  if (!fp.noSeam && !fp.warned)
+    ok('warn-on-move is quote-aware: renaming s.png does NOT false-warn on a boss.png load line');
+  else fail('warn-on-move FALSE-POSITIVED on a boss.png line when renaming s.png: ' + JSON.stringify(fp));
+
+  // true-positive case: code references s2.png as a real load literal — MUST warn. (Distinct names
+  // from the false-positive case above so the destination is free in the unified namespace.)
+  await page.evaluate(() => {
+    window.project.load({
+      files: { 'main.py': 'import pygame\nimg = pygame.image.load("s2.png")\n' },
+      order: ['main.py'], entry: 'main.py', active: 'main.py',
+    });
+    window.renderTabs();
+    window.__cb = Array.from(document.getElementById('console').children).length;
+    window.__alertText = '';
+    window.alert = (m) => { window.__alertText += String(m) + '\n'; };
+  });
+  await page.setInputFiles('#assetInput',
+    { name: 's2.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
+  await page.waitForTimeout(200);
+  const tp = await page.evaluate(async () => {
+    if (typeof window.assetFS.rename !== 'function') return { noSeam: true };
+    await window.assetFS.rename('s2.png', 'x2.png');
+    const newConsole = Array.from(document.getElementById('console').children).map(c => c.textContent).slice(window.__cb).join('\n');
+    const haystack = [newConsole, window.__alertText].join('\n');
+    return { warned: /s2\.png/.test(haystack) && /update|now at|references?/i.test(haystack) };
+  });
+  if (!tp.noSeam && tp.warned)
+    ok('warn-on-move still fires for a real load("s.png") reference (true positive intact)');
+  else fail('warn-on-move did NOT fire for a real s.png load reference: ' + JSON.stringify(tp));
+}
+
+// Final: no unexpected JS errors throughout. A console error fails the battery (restored gate).
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
-if (realErrors.length) console.log('info - JS console errors (informational during RED): ' + realErrors.join(' | '));
+if (realErrors.length) fail('JS console errors during run: ' + realErrors.join(' | '));
 
 await browser.close();
 console.log(process.exitCode ? 'ASSETS VERIFY FAILED' : 'ASSETS VERIFY OK');

@@ -344,7 +344,7 @@
       </div>
       <div class="side-body">
         <div class="tree" id="tabs"></div>
-        <div class="tree-foot" id="treeFoot"></div>
+        <div id="treeFoot"></div>
       </div>
       <input id="assetInput" type="file" multiple hidden>
     </section>
@@ -1714,6 +1714,7 @@ const assetStore = {
   async remove(name) { try { await this._tx('readwrite', s => s.delete(name)); } catch {} },
   async clear() { try { await this._tx('readwrite', s => s.clear()); } catch {} },
 };
+window.assetStore = assetStore;   // test seam (drive durable-write-failure data-safety, Slice A)
 
 // ---------------------------------------------------------------- history (version snapshots)
 // A snapshot of the whole project is saved on each Run, in a SEPARATE IndexedDB
@@ -1839,8 +1840,15 @@ const assetFS = {
     }
     if (!bytes) { assetMsg(`Couldn't read "${oldName}" to rename it.`); return false; }
     bytes = new Uint8Array(bytes);
-    // Re-key IndexedDB: put the new record, remove the old.
-    await assetStore.put({ name: newName, bytes: bytes.buffer, type: rec.type, size: bytes.length, addedAt: Date.now() });
+    // Re-key IndexedDB DURABLY FIRST: put the new record. If that fails (quota / unavailable) we
+    // MUST NOT run the destructive half (remove(old) / _unlink(old) / mutate .list) — otherwise a
+    // storage-full move would silently destroy the only copy. Mirror assetFS.add's `if (!saved)`
+    // guard: surface a calm notice and bail, leaving the asset exactly where it was.
+    const saved = await assetStore.put({ name: newName, bytes: bytes.buffer, type: rec.type, size: bytes.length, addedAt: Date.now() });
+    if (!saved) {
+      assetMsg(`Couldn't move "${oldName}" — browser storage is full; it was left where it was.`);
+      return false;
+    }
     await assetStore.remove(oldName);
     // Re-key MEMFS: unlink the old path, write the bytes at the new path.
     this._unlink(oldName);
@@ -1867,15 +1875,20 @@ window.assetFS = assetFS;   // test seam (nested-asset-write mechanism; S2a; ren
 // string. If referenced, surface a calm, dismissible notice naming the old path + an update hint
 // with file:line refs — and NEVER rewrite the student's code (the old load path stays verbatim).
 function warnAssetMoved(oldName, newName) {
+  // Quote-aware match: only flag a line where the old path is a real load-path LITERAL — i.e. it
+  // appears immediately preceded by a quote (`"path` or `'path`). A bare substring scan would
+  // false-positive on e.g. `load("boss.png")` when renaming `s.png`. Allocation-light: build the
+  // two quoted needles once and substring-scan per line (no per-line regex / no code rewrite).
+  const dq = '"' + oldName, sq = "'" + oldName;
   const hits = [];
   for (const file of project.order) {
     // project.files[name] is a live CodeMirror.Doc — read its TEXT via project.text(). We only
     // SCAN it; the student's code is never rewritten (the old load path stays verbatim).
     let text = "";
     try { text = project.text(file); } catch { continue; }
-    if (typeof text !== "string" || !text.includes(oldName)) continue;
+    if (typeof text !== "string" || (!text.includes(dq) && !text.includes(sq))) continue;
     const lines = text.split("\n");
-    for (let i = 0; i < lines.length; i++) if (lines[i].includes(oldName)) hits.push(`${file}:${i + 1}`);
+    for (let i = 0; i < lines.length; i++) if (lines[i].includes(dq) || lines[i].includes(sq)) hits.push(`${file}:${i + 1}`);
   }
   if (!hits.length) return;   // silent when nothing references the old path
   assetMsg(`Heads up: "${oldName}" is now at "${newName}". Your code still references the old path ` +

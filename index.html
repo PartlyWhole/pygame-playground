@@ -24,8 +24,8 @@
     /* ── tooltip ── */
     --color-tooltip-bg: var(--panel); --color-tooltip-text: var(--text);
     --color-tooltip-border: var(--edge); --shadow-tooltip: 0 6px 18px rgba(0,0,0,.4);
-    /* ── status paused placeholder (styled, NOT emitted in S1) ── */
-    --color-status-paused: var(--accent);
+    /* ── status paused (S3): distinct "held" amber, not running-green ── */
+    --color-status-paused: var(--warn);
     /* ── pane chrome ── */
     --color-pane-head-bg: var(--panel); --color-pane-head-text: var(--dim);
     --color-pane-name: var(--text); --color-chev-hover: #23262f;
@@ -35,10 +35,10 @@
     --mono: "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  /* `.btn`/`.chev-btn` set display, which would otherwise beat the `hidden` attribute. Force the
-     S3-reserved-but-inert controls to stay hidden. NOTE: #stopBtn is intentionally NOT in this list —
-     it must stay a clickable target (verify.mjs / spike-runstop click '#stopBtn' directly). */
-  #pauseBtn[hidden], #endBtn[hidden], #newFolderBtn[hidden] { display: none !important; }
+  /* `.btn`/`.chev-btn`/`.stage-hint` set display, which would otherwise beat the `hidden` attribute.
+     S3: Pause/End/run-badge are shown only while a task is live (toggled via the `hidden` attr in JS);
+     #stopBtn (End ✕) is the kept click target — present + clickable while live, hidden when idle. */
+  #pauseBtn[hidden], #stopBtn[hidden], #runFileBadge[hidden], #newFolderBtn[hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg); color: var(--text);
@@ -60,6 +60,11 @@
   .btn.primary:hover { background: var(--color-tint-run-bg-hover); }
   .btn.stop { color: var(--bad); font-weight: 600; }
   .btn.stop:hover { background: #3a2329; border-color: #6a2f38; }
+  /* Generic disabled-button look (no element uses it for the run model — Start RESTARTS while live). */
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  /* S3: running-file badge — warm, clickable. */
+  #runFileBadge { cursor: pointer; color: var(--warn); }
+  #runFileBadge:hover { text-decoration: underline; }
   .ghost { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 12px; padding: 4px; border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
   .ghost:hover { color: var(--text); background: var(--color-row-hover); }
   .ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -142,6 +147,10 @@
   #tabs .tab.py .ic { color: var(--color-py-icon); }
   #tabs .tab .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--mono); font-size: 12px; }
   #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
+  /* S3: the file whose program is live gets a warm left-bar + pulse dot, distinct from .active selection */
+  #tabs .tab.running { border-left-color: var(--warn); }
+  #tabs .tab.running .tab-name { color: var(--warn); }
+  #tabs .tab.running .tab-name::after { content: " ▶"; color: var(--warn); font-size: 10px; }
   #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
   #tabs .tab .tab-menu:hover { color: var(--text); background: #34384a; }
@@ -401,13 +410,14 @@
         <div class="pane-head">
           <span class="name">🎮 Game stage</span>
           <button id="stageHint" class="stage-hint" type="button">press start to run</button>
+          <!-- S3: running-file badge — shows the live program's entry; click jumps to it. -->
+          <button id="runFileBadge" class="stage-hint" type="button" hidden></button>
           <span class="spacer"></span>
-          <!-- S3 reserves pause/end here (hidden/inert in S1) -->
+          <!-- S3: split run model. Pause ⇄ Resume + End shown only while a task is live. -->
           <button id="pauseBtn" class="btn" aria-label="Pause program" hidden>⏸ Pause</button>
-          <button id="endBtn" class="chev-btn" aria-label="End program" hidden>✕</button>
-          <!-- #stopBtn kept as a visible click target on the stage header (verify.mjs / spike-runstop
-               click it). Its _stop() listener is unchanged. -->
-          <button id="stopBtn" class="btn stop">■ Stop</button>
+          <!-- #stopBtn is the kept End click target (verify.mjs / spike-runstop click it WHILE running).
+               Restyled to ✕; its _stop() listener is unchanged; shown only while a task is live. -->
+          <button id="stopBtn" class="btn stop" aria-label="End program" hidden>✕</button>
           <button class="chev-btn" id="fsBtn" aria-label="Fullscreen game stage" data-tip="Fullscreen game stage">⛶</button>
         </div>
         <div class="stagewrap" id="stage">
@@ -819,6 +829,14 @@ import pygame
 
 _state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0, "via_project": False}
 
+# +PAUSE (S3): a gate the cooperative loop awaits at the top of every frame.
+# set() == running, clear() == paused. Created already-set so the un-paused path
+# is a cheap no-op. Shared by single-file (_run) AND project (_run_project) loops
+# because both bind the SAME __yield__ — one gate covers both engines.
+_pause_gate = asyncio.Event()
+_pause_gate.set()
+_state["paused"] = False
+
 def _flag_flip(fn):
     def wrapper(*a, **k):
         _state["flipped"] = True
@@ -871,6 +889,7 @@ async def __sleep__(secs):
     await asyncio.sleep(secs)
 
 async def __yield__():
+    await _pause_gate.wait()              # +PAUSE (S3): blocks here only while paused; else returns instantly
     d, ticked, flipped = _state["delay"], _state["ticked"], _state["flipped"]
     _state.update(delay=0.0, ticked=False, flipped=False)
     if d > 0:
@@ -1012,7 +1031,8 @@ async def _run(src):
 
 def _start(src):
     _stop()
-    _state.update(delay=0.0, flipped=False, ticked=False, n=0)
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, paused=False)
+    _pause_gate.set()                     # +PAUSE (S3): clear any leftover pause from a prior run
     _state["task"] = asyncio.ensure_future(_run(src))
     return _state["task"]
 
@@ -1020,6 +1040,23 @@ def _stop():
     t = _state["task"]
     if t and not t.done():
         t.cancel()
+        _pause_gate.set()                 # +PAUSE (S3): release the gate so a task parked there gets CancelledError
+        _state["paused"] = False
+        return True
+    return False
+
+# +PAUSE (S3): additive controls. They do NOT touch _state['task'] — pause != stop.
+def _pause():
+    if _state["task"] and not _state["task"].done():
+        _pause_gate.clear()
+        _state["paused"] = True
+        return True
+    return False
+
+def _resume():
+    if _state["paused"]:
+        _pause_gate.set()
+        _state["paused"] = False
         return True
     return False
 `;
@@ -1328,7 +1365,8 @@ async def _run_project(files, entry):
 
 def _start_project(files, entry):
     _stop()
-    _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True)
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True, paused=False)
+    _pause_gate.set()                     # +PAUSE (S3): clear any leftover pause from a prior run
     _state['task'] = asyncio.ensure_future(_run_project(dict(files), str(entry)))
     return _state['task']
 
@@ -1467,6 +1505,7 @@ const project = {
     this.emptyDirs = new Set(Array.isArray(rec.emptyDirs) ? rec.emptyDirs : []);
     this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
     this.active = order.includes(rec.active) ? rec.active : this.entry;
+    if (typeof closedFolders !== "undefined") closedFolders.clear();   // S3 fold-in: don't leak collapsed-folder state across a load
     editor.swapDoc(this.files[this.active]);
   },
   setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); editor.performLint?.(); } },
@@ -1950,6 +1989,11 @@ const viewerBodyEl = document.getElementById("viewerBody");
 const vNameEl = document.getElementById("vName");
 const vMetaEl = document.getElementById("vMeta");
 const runBtnEl = document.getElementById("runBtn");
+// S3 split run model — the file whose program is LIVE (the running entry). null when idle.
+// Declared here (before renderTabs, which reads it for the .running highlight). Set at Start,
+// cleared on finish/stop/error/End. Pause/Resume do NOT change it.
+let runFile = null;
+window.runFile = () => runFile;   // test seam (mirrors window.project / window.renderTabs)
 // A hidden, off-screen holder for the ONE CodeMirror element while a non-.py file is shown.
 // Moving the wrapper element (never destroying it) keeps the single instance alive (identity
 // invariant) AND removes .CodeMirror from #viewerBody so the empty-state assertion holds.
@@ -2112,7 +2156,7 @@ function renderTabs() {
           (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
           `</div>`);
       } else {
-        out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+        out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           `<button class="tab-menu" title="File actions" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
@@ -2656,6 +2700,46 @@ const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
 let pyodide = null;
 let runTask = null;
 
+// Stage run controls (Pause/End/badge). #runBtn is the Start target in the editor head.
+const pauseBtnEl = document.getElementById("pauseBtn");
+const stopBtnEl = document.getElementById("stopBtn");
+const runFileBadgeEl = document.getElementById("runFileBadge");
+const stageHintEl = document.getElementById("stageHint");
+
+function isPaused() {
+  if (!pyodide) return false;
+  try { return !!pyodide.runPython("bool(_state.get('paused'))"); }
+  catch { return false; }
+}
+
+// Single writer for the run-control chrome: Pause/End/badge visibility, the Start
+// disabled-while-live affordance, and the explorer highlight. Call after every
+// run-state transition (Start, pause, resume, settle, End).
+function syncRunControls() {
+  const live = !!runFile;            // runFile is the single source of truth for "a program is live"
+  const paused = live && isPaused();
+  // Pause ⇄ Resume — shown only while live; label/icon toggles with paused.
+  pauseBtnEl.hidden = !live;
+  pauseBtnEl.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  pauseBtnEl.setAttribute("aria-label", paused ? "Resume program" : "Pause program");
+  // End (✕) — kept #stopBtn; shown only while live.
+  stopBtnEl.hidden = !live;
+  // Running-file badge — shown only while live; ▶ running / ⏸ paused + basename.
+  if (live) {
+    const base = basename(runFile);
+    runFileBadgeEl.hidden = false;
+    runFileBadgeEl.textContent = (paused ? "⏸ paused: " : "▶ running: ") + base;
+  } else {
+    runFileBadgeEl.hidden = true;
+    runFileBadgeEl.textContent = "";
+  }
+  // The "press start to run" hint is the idle affordance — hide it while a program is live.
+  if (stageHintEl) stageHintEl.hidden = live;
+  // USER DECISION (design §0.1 Q0): Start RESTARTS while a program is live, so #runBtn stays ENABLED
+  // (never disabled, never display:none). No disabled-Start affordance here — run() cleanly cancels
+  // the old task and starts a fresh run on click.
+}
+
 async function boot() {
   // Capture SDL's Web Audio context(s) so the Run click (a user gesture) can resume
   // them — headed browsers start an AudioContext suspended until a gesture. Inert
@@ -2698,32 +2782,58 @@ const booted = boot().catch((e) => {
 // ---------------------------------------------------------------- run / stop
 async function run() {
   try { await booted; } catch { return; }
+  // USER DECISION (design §0.1 Q0): Start RESTARTS while a program is live — clicking ▶ Start while a
+  // program is running OR paused STOPS the current run and immediately runs the open file fresh
+  // (exactly ONE live task at a time). The clean cancel happens inside _start/_start_project, which
+  // each call _stop() (cancel old task + release the pause gate) BEFORE scheduling the new task, so
+  // there are never two concurrent loops and a restart-from-paused clears the pause. NO disabled-Start
+  // guard here — #runBtn stays enabled while live.
   clearConsole();
   captureSnapshot();   // fire-and-forget: save this version to history
   canvasEl.focus();
   resumeAudio();
   let task;
-  if (collab.active || !project.isMulti()) {
+  const isSingle = collab.active || !project.isMulti();
+  if (isSingle) {
     pyodide.runPython("_state['via_project'] = False; _purge_project_files()");
     const start = pyodide.globals.get("_start");
-    task = start(editor.getValue());          // existing single-file path, verbatim
+    task = start(editor.getValue());          // existing single-file path, verbatim — snapshots the text NOW
     start.destroy();
   } else {
     const startP = pyodide.globals.get("_start_project");
-    const filesPy = pyodide.toPy(project.serialize().files);
+    const filesPy = pyodide.toPy(project.serialize().files);   // snapshots EVERY file's Doc text NOW
     task = startP(filesPy, project.entry);
     startP.destroy(); filesPy.destroy();
   }
   runTask = task;
+  // The running file is the ENTRY (single-file: the open file is the entry; multi-file: project.entry).
+  runFile = isSingle ? project.active : project.entry;
   setStatus("running", "running");
+  syncRunControls();
+  renderTabs();             // light up the running file's explorer row
   task.then((kind) => {
     if (runTask !== task) return;
+    runFile = null; syncRunControls(); renderTabs();
     if (kind === "error") return setStatus("error", "error — see console");
     setStatus("ready", kind === "stopped" ? "stopped" : "finished");
     logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {
-    if (runTask === task) setStatus("ready", "stopped");
+    if (runTask !== task) return;
+    runFile = null; syncRunControls(); renderTabs();
+    setStatus("ready", "stopped");
   });
+}
+
+// Pause ⇄ Resume (stage). Toggles the engine gate; pause keeps the task alive.
+function togglePause() {
+  if (!pyodide || !runFile) return;
+  if (isPaused()) {
+    if (pyodide.runPython("_resume()")) { setStatus("running", "running"); }
+  } else {
+    if (pyodide.runPython("_pause()")) { setStatus("paused", "paused"); }
+  }
+  syncRunControls();
+  renderTabs();             // badge/highlight text tracks paused vs running
 }
 
 // Resume any SDL-created Web Audio context on a user gesture (autoplay policy).
@@ -2736,7 +2846,13 @@ canvasEl.addEventListener("click", resumeAudio);
 
 document.getElementById("runBtn").addEventListener("click", run);
 document.getElementById("stopBtn").addEventListener("click", () => {
-  if (pyodide) pyodide.runPython("_stop()");
+  if (pyodide) pyodide.runPython("_stop()");   // End — task settle clears runFile + syncs controls
+});
+pauseBtnEl.addEventListener("click", togglePause);
+// Badge click jumps the editor/viewer to the running file (NEVER editor.setValue —
+// renderViewer → setActive → swapDoc). Independence: this does not affect the live run.
+runFileBadgeEl.addEventListener("click", () => {
+  if (runFile) { project.setActive(runFile); renderViewer(runFile); }
 });
 
 // ---------------------------------------------------------------- collaboration (lazy)

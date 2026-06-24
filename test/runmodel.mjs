@@ -12,10 +12,15 @@
 // frame/pixel diffing over a REAL time window (like spike-pause / spike-runstop / verify), so the
 // checks are robust to frame timing.
 //
-// EXPECTED (RED, against current index.html, HEAD 66b7757): the Start-runs/animation/End-keeps-frame
-// pieces pass (already wired), but pause/resume, the disabled-Start-while-live guard, the
-// only-while-live visibility of Pause/End, the badge, and the explorer highlight FAIL — they are not
-// implemented yet. Those failures ARE the contract for the implementer.
+// USER DECISION (design §0.1 Q0): Start RESTARTS while a program is running — clicking ▶ Start while
+// a program is live STOPS the current run and immediately runs the currently-open file fresh (exactly
+// ONE live task at a time). #runBtn stays ENABLED while running (never disabled, never display:none).
+// §6 below asserts this restart contract (a NEW task id + console cleared+reprinted), NOT a disabled
+// no-op.
+//
+// EXPECTED (RED, against the prior disabled-Start index.html): §6 FAILS because that impl keeps
+// #runBtn disabled while live and makes a click a no-op (task id unchanged). Once index.html drops
+// the disabled-Start mechanism and Start performs a clean restart, §6 (and the rest) go GREEN.
 import { launch } from './_harness.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
@@ -172,33 +177,72 @@ console.log('\n=== 3. Resume continues ===');
 }
 
 // =====================================================================
-// 6. (interleaved while live) Start disabled (not gone) while RUNNING and while PAUSED.
-//    #runBtn must stay in the DOM + VISIBLE (shell.mjs probes it for .py) but DISABLED so a
-//    click is a no-op (no second task starts). §0.1 Q4: visible disabled, never display:none.
+// 6. (interleaved while live) Start RESTARTS while a program is live (running + paused).
+//    USER DECISION (design §0.1 Q0): clicking ▶ Start while a program is live STOPS the current
+//    run and immediately runs the currently-open file fresh — exactly ONE live task at a time.
+//    #runBtn stays ENABLED while running (never disabled, never display:none). A restart is proven
+//    by: status returns to 'running', the console was CLEARED then re-populated by the fresh run,
+//    and id(_state['task']) CHANGED (a new task replaced the old).
 // =====================================================================
-console.log('\n=== 6. Start visible-but-disabled while live (running + paused) ===');
+console.log('\n=== 6. Start RESTARTS while live (running + paused) ===');
 {
-  // While RUNNING (we are running after Resume).
+  // --- While RUNNING (we are running after Resume) ---
+  // #runBtn must be present, visible, and ENABLED — not disabled, not display:none.
   const vRun = await visible('#runBtn');
   const dRun = await runBtnDisabled();
-  if (vRun && dRun) ok('while RUNNING: #runBtn present+visible but disabled (no-op)');
-  else fail(`while running, #runBtn wrong (visible=${vRun} disabled=${dRun})`);
-  // A click while running must NOT start a second task: capture task identity, click, re-check.
-  const taskId0 = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
-  await click('#runBtn');
-  await page.waitForTimeout(200);
-  const taskId1 = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
-  if (taskId0 === taskId1) ok('clicking disabled Start while running does NOT start a second task');
-  else fail(`Start while running spawned a new task (${taskId0} -> ${taskId1})`);
+  if (vRun && !dRun) ok('while RUNNING: #runBtn present+visible and ENABLED (restart-on-click)');
+  else fail(`while running, #runBtn wrong (visible=${vRun} disabled=${dRun}; want visible=true disabled=false)`);
 
-  // While PAUSED: pause, re-check disabled + visible, then resume to leave a clean state.
+  // Capture the live task identity BEFORE the restart click.
+  const idBeforeRun = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
+  await page.waitForTimeout(250);           // let the running program reprint its marker so we can see it cleared
+  const hadMarkerRun = /RUNMODEL_MARKER/.test(await consoleText());
+  await page.click('#runBtn');              // RESTART while running
+  await waitStatus(['running'], 8000).catch(() => fail('restart-while-running: status never returned to "running"'));
+  const sRun = await status();
+  const idAfterRun = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
+  // The fresh Start clears the console then the new run reprints the marker — prove a genuine new run.
+  await page.waitForTimeout(300);
+  const reprintedRun = /RUNMODEL_MARKER/.test(await consoleText());
+  if (sRun === 'running') ok('restart-while-running: status is "running" after Start');
+  else fail(`restart-while-running: status wrong (${sRun})`);
+  if (idAfterRun !== idBeforeRun)
+    ok(`restart-while-running: a NEW task replaced the old one (id ${idBeforeRun} -> ${idAfterRun}) — exactly one live task`);
+  else fail(`restart-while-running: task identity unchanged (${idBeforeRun}) — Start did not restart`);
+  if (hadMarkerRun && reprintedRun)
+    ok('restart-while-running: console was cleared then re-populated by the fresh run (clearConsole on Start)');
+  else fail(`restart-while-running: console not refreshed by the fresh Start (hadMarker=${hadMarkerRun} reprinted=${reprintedRun})`);
+  // Exactly ONE live task: the new task is alive, the old one is gone.
+  const liveAfterRun = await taskLive();
+  if (liveAfterRun) ok('restart-while-running: the new task is live (exactly one live task)');
+  else fail('restart-while-running: no live task after restart');
+
+  // --- While PAUSED ---
+  // Pause the (restarted) run, confirm #runBtn is still ENABLED+visible, then restart from paused.
   await click('#pauseBtn');
-  await waitStatus(['paused'], 5000).catch(() => {});
+  await waitStatus(['paused'], 5000).catch(() => fail('restart-while-paused setup: never reached "paused"'));
   const vPause = await visible('#runBtn');
   const dPause = await runBtnDisabled();
-  if (vPause && dPause) ok('while PAUSED: #runBtn present+visible but disabled (a paused task is still live)');
-  else fail(`while paused, #runBtn wrong (visible=${vPause} disabled=${dPause})`);
-  await click('#pauseBtn');   // resume
+  if (vPause && !dPause) ok('while PAUSED: #runBtn present+visible and ENABLED (restart clears the pause)');
+  else fail(`while paused, #runBtn wrong (visible=${vPause} disabled=${dPause}; want visible=true disabled=false)`);
+
+  const idBeforePause = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
+  await page.click('#runBtn');              // RESTART while paused → fresh 'running' run
+  await waitStatus(['running'], 8000).catch(() => fail('restart-while-paused: status never became "running"'));
+  const sPause = await status();
+  const flagPause = await pausedFlag();
+  const idAfterPause = await page.evaluate(() => pyodide.runPython('id(_state["task"])'));
+  await page.waitForTimeout(300);
+  const reprintedPause = /RUNMODEL_MARKER/.test(await consoleText());
+  if (sPause === 'running' && !flagPause)
+    ok('restart-while-paused: paused cleared → a fresh "running" run (_state["paused"] is False)');
+  else fail(`restart-while-paused: status/flag wrong (status=${sPause} paused=${flagPause}; want running / false)`);
+  if (idAfterPause !== idBeforePause)
+    ok(`restart-while-paused: a NEW task replaced the old paused one (id ${idBeforePause} -> ${idAfterPause})`);
+  else fail(`restart-while-paused: task identity unchanged (${idBeforePause}) — Start did not restart from paused`);
+  if (reprintedPause) ok('restart-while-paused: the fresh run re-populated the console');
+  else fail('restart-while-paused: fresh run did not reprint the marker');
+  // Leave a clean running state for the following checks.
   await waitStatus(['running'], 5000).catch(() => {});
 }
 

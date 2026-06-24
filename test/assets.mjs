@@ -254,7 +254,8 @@ else fail('no warning badge on the MP3 .tab.asset row');
     null, { timeout: 20_000 }).catch(() => {});
   const loadConsole = await page.evaluate(() =>
     Array.from(document.getElementById('console').children).map(c => c.textContent).join('\n'));
-  if (/LOAD_OK/.test(loadConsole) && !/error/i.test(document.getElementById?.('status')?.textContent || ''))
+  const loadStatus = await page.evaluate(() => document.getElementById('status')?.textContent || '');
+  if (/LOAD_OK/.test(loadConsole) && !/error/i.test(loadStatus))
     ok('  ...pygame.image.load("player.png") works after rename (load-path invariant holds)');
   else fail('  load at the new path failed after rename: ' + loadConsole.slice(-200));
 }
@@ -369,8 +370,9 @@ else fail('no warning badge on the MP3 .tab.asset row');
     return {
       noticeNamesOld: /coin\.png/.test(haystack),
       noticeIsUpdateHint: /update|now at|references?|load path|not updated/i.test(haystack),
-      codeUnchanged: window.project.files['main.py'] === document.querySelector('.CodeMirror').CodeMirror.getValue(),
-      codeStillReferencesOld: /pygame\.image\.load\("coin\.png"\)/.test(window.project.files['main.py'] || ''),
+      // project.files[name] is a live CodeMirror.Doc; the student's text is read via project.text().
+      codeUnchanged: window.project.text('main.py') === document.querySelector('.CodeMirror').CodeMirror.getValue(),
+      codeStillReferencesOld: /pygame\.image\.load\("coin\.png"\)/.test(window.project.text('main.py') || ''),
     };
   });
   if (!warn.noSeam && warn.noticeNamesOld && warn.noticeIsUpdateHint)

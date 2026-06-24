@@ -482,6 +482,92 @@ await page.goto(URL, { waitUntil: 'load' }); await booted();
 }
 
 // =====================================================================================
+// 12d. INCREMENTAL RECONCILE: a DROPPED path is forgotten by sys.modules (cross-run
+//      contamination, design §2.6). Run flat main.py+helper.py (so sys.modules['helper']
+//      is cached), move helper.py into pkg/ (re-keying it to pkg/helper.py), point the
+//      entry at the OLD top-level name `import helper`, and re-run. The stale top-level
+//      `helper` must be GONE: its file was unlinked AND its dotted name popped, so
+//      `import helper` raises ModuleNotFoundError. Pre-fix _run_project only pops dotted
+//      names for the CURRENT files (never for _PROJECT_PATHS - new_paths), so the cached
+//      `helper` lingers and the import wrongly succeeds → RED.
+// =====================================================================================
+await page.goto(URL, { waitUntil: 'load' }); await booted();
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+await runProject({
+  'main.py': 'import helper\nprint("FLAT-A", helper.value())\n',
+  'helper.py': 'def value():\n    return 41\n',
+}, 'main.py');
+await waitConsole(/FLAT-A 41/)
+  .then(() => ok('  (setup) flat helper.py imports + runs (sys.modules[\'helper\'] now cached)'))
+  .catch(async () => fail('setup run for dropped-path test failed: ' + (await consoleText()).slice(0, 300)));
+await stop();
+// Move helper.py into pkg/ (re-keys to pkg/helper.py), then aim the entry at the OLD name.
+const movedHelper = await page.evaluate(() => {
+  const ret = window.project.move('helper.py', 'pkg');
+  window.project.files['main.py'].setValue('import helper\nprint("STALE-HELPER-IMPORTED")\n');
+  return { ret: !!ret, hasNew: !!window.project.files['pkg/helper.py'],
+    oldGone: !window.project.files['helper.py'] };
+});
+if (!(movedHelper.ret && movedHelper.hasNew && movedHelper.oldGone))
+  fail('move(helper.py, pkg) did not re-key as expected: ' + JSON.stringify(movedHelper));
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+await page.click('#runBtn');
+await page.waitForFunction(() => /finished|error|ready|stopped/.test(document.getElementById('status').textContent),
+  null, { timeout: 15_000 }).catch(() => {});
+{
+  const c = await consoleText();
+  const stillImported = /STALE-HELPER-IMPORTED/.test(c);
+  const moduleGone = /No module named|ModuleNotFoundError|Traceback/.test(c);
+  if (!stillImported && moduleGone)
+    ok('dropped path is forgotten: after move, `import helper` (old top-level name) raises ModuleNotFoundError');
+  else fail('STALE sys.modules for DROPPED path: `import helper` still resolved after move: ' + c.slice(0, 300));
+}
+await stop();
+
+// =====================================================================================
+// 12e. INCREMENTAL RECONCILE: an emptied package directory becomes UN-importable
+//      (orphaned auto-__init__.py is dropped, design §2.6). Run main.py + sprites/enemy.py
+//      (auto-creates sprites/__init__.py), then move sprites/enemy.py OUT to root, point the
+//      entry at `import sprites`, and re-run. The now-empty sprites/ package must be GONE:
+//      its auto-__init__.py is no longer wanted (the dir holds no .py this run), so it is
+//      unlinked and the dir prunes → `import sprites` raises ModuleNotFoundError. Pre-fix
+//      _run_project unconditionally re-adds EVERY still-existing auto-init, so the emptied
+//      package + its __init__.py linger and `import sprites` wrongly succeeds → RED.
+// =====================================================================================
+await page.goto(URL, { waitUntil: 'load' }); await booted();
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+await runProject({
+  'main.py': 'from sprites import enemy\nprint("PKG-A", enemy.tag())\n',
+  'sprites/enemy.py': 'def tag():\n    return "E"\n',
+}, 'main.py');
+await waitConsole(/PKG-A E/)
+  .then(() => ok('  (setup) sprites/enemy.py imports + runs (auto sprites/__init__.py created)'))
+  .catch(async () => fail('setup run for emptied-package test failed: ' + (await consoleText()).slice(0, 300)));
+await stop();
+// Move enemy.py OUT of sprites/ to root, then aim the entry at the now-empty package.
+const movedEnemy = await page.evaluate(() => {
+  const ret = window.project.move('sprites/enemy.py', '');
+  window.project.files['main.py'].setValue('import sprites\nprint("STALE-PKG-IMPORTED", sprites)\n');
+  return { ret: !!ret, hasRoot: !!window.project.files['enemy.py'],
+    oldGone: !window.project.files['sprites/enemy.py'] };
+});
+if (!(movedEnemy.ret && movedEnemy.hasRoot && movedEnemy.oldGone))
+  fail('move(sprites/enemy.py, "") did not re-key as expected: ' + JSON.stringify(movedEnemy));
+await page.evaluate(() => { document.getElementById('console').textContent = ''; });
+await page.click('#runBtn');
+await page.waitForFunction(() => /finished|error|ready|stopped/.test(document.getElementById('status').textContent),
+  null, { timeout: 15_000 }).catch(() => {});
+{
+  const c = await consoleText();
+  const stillImported = /STALE-PKG-IMPORTED/.test(c);
+  const pkgGone = /No module named|ModuleNotFoundError|Traceback/.test(c);
+  if (!stillImported && pkgGone)
+    ok('emptied package is gone: after moving its only .py out, `import sprites` raises ModuleNotFoundError');
+  else fail('ORPHANED auto-__init__.py lingered: `import sprites` still resolved after emptying it: ' + c.slice(0, 300));
+}
+await stop();
+
+// =====================================================================================
 // 13. First-paint laziness regression (additive) (design §7.1 #16). After boot (no run),
 //     window.JSZip === undefined, window.__amLoaded falsy, CM getOption('lint') falsy.
 //     This is GREEN today and must STAY green — proves nothing in S2 eagerly loads a lazy

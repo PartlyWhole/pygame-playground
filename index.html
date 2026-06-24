@@ -1216,7 +1216,9 @@ def _dotted_names_for(relpath):
         if seg and seg[-1] == '__init__':
             seg = seg[:-1]                            # 'pkg/__init__.py' -> package 'pkg'
         if seg:
-            names.append('.'.join(seg))
+            name = '.'.join(seg)
+            if name not in names:                     # dedupe: 'pkg/__init__.py' yields 'pkg' twice
+                names.append(name)
     return names
 
 def _ensure_init_py(new_paths):
@@ -1267,13 +1269,21 @@ async def _run_project(files, entry):
     for relpath, msrc in files.items():
         new_paths.add(writePath(relpath, msrc))       # mkdirTree + write under ROOT
     _ensure_init_py(new_paths)                         # empty __init__.py per .py-bearing dir
-    new_paths |= {p for p in _AUTO_INITS if os.path.exists(p)}
-    # unlink files dropped since last run, then prune now-empty dirs
+    # Keep only auto-__init__.py whose directory still holds a .py THIS run. An auto-init
+    # for an emptied package dir is NOT wanted: leaving it in new_paths would keep an empty
+    # package importable across runs. Dropping it lets it fall into _PROJECT_PATHS-new_paths,
+    # so it is unlinked and the dir prunes → an emptied package becomes un-importable (§2.6).
+    cur_py_dirs = {os.path.dirname(p) for p in new_paths if p.endswith('.py')}
+    new_paths |= {p for p in _AUTO_INITS
+                  if os.path.exists(p) and os.path.dirname(p) in cur_py_dirs}
+    # unlink files dropped since last run (incl. now-orphaned auto-inits), then prune dirs
     for old in _PROJECT_PATHS - new_paths:
         try:
             if os.path.exists(old): os.unlink(old)
         except Exception:
             pass
+        for dotted in _dotted_names_for(os.path.relpath(old, _ROOT).replace(os.sep, '/')):
+            sys.modules.pop(dotted, None)              # forget DROPPED module names too (§2.6)
         _AUTO_INITS.discard(old)
     _PROJECT_PATHS.clear(); _PROJECT_PATHS.update(new_paths)
     _prune_empty_dirs()
@@ -1474,7 +1484,7 @@ const project = {
     this.order[this.order.indexOf(oldName)] = newName;
     if (this.entry === oldName) this.entry = newName;
     if (this.active === oldName) this.active = newName;
-    if (window.pyodide) try { if (pyodide.FS.analyzePath(oldName).exists) pyodide.FS.unlink(oldName); } catch {}
+    if (pyodide) try { if (pyodide.FS.analyzePath(oldName).exists) pyodide.FS.unlink(oldName); } catch {}
     return true;
   },
   // Move a file or a whole folder into destFolder (or to ROOT when destFolder is
@@ -1512,7 +1522,7 @@ const project = {
       this.order[this.order.indexOf(k)] = next;
       if (this.entry === k) this.entry = next;
       if (this.active === k) this.active = next;
-      if (window.pyodide) try { if (pyodide.FS.analyzePath(k).exists) pyodide.FS.unlink(k); } catch {}
+      if (pyodide) try { if (pyodide.FS.analyzePath(k).exists) pyodide.FS.unlink(k); } catch {}
     }
     if (this.emptyDirs.delete(path)) this.emptyDirs.add(newFolder);
     return true;
@@ -1523,7 +1533,7 @@ const project = {
     this.order = this.order.filter(n => n !== name);
     if (this.entry === name) this.entry = this.order.includes("main.py") ? "main.py" : this.order[0];
     if (this.active === name) this.setActive(this.entry);
-    if (window.pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {}
+    if (pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {}
     return true;
   },
   setEntry(name) { if (this.files[name]) this.entry = name; },

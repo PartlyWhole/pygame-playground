@@ -19,6 +19,10 @@ Legend: **★ = my recommendation.** Effort S/M/L is implementation size, not in
   **Pause/Resume is kept**, and **de-risked with a spike (gate `__yield__` on a paused `asyncio.Event`)
   BEFORE it is built.** Supersedes the old "unified Start/Stop, must Stop before re-run" PM invariant
   and resolves #4. Engine seam mapping → #11.
+  - **Refinement (2026-06-23, S3): Start RESTARTS while a program is running** (stops the current run +
+    runs the open file fresh; exactly one live task; `▶ Start` stays enabled while running; `✕ End` stops
+    without restarting). Chosen over "disable Start while live" because the boot auto-run is always live
+    and the iteration log says Start "runs/**restarts**" — one-click re-run, no "must End first" friction.
 
 - **Folder model (organizational vs true subdirectories).** ✅ **TRUE SUBDIRECTORIES** (deliberate
   non-default). Folders become **real MEMFS paths** (e.g. `sprites/ship.png`), not just UI grouping —

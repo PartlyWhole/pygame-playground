@@ -11,6 +11,16 @@
 
 ## 0.1 Orchestrator resolutions (settles the open questions — binding for implementation)
 
+- **Q0 — Start while a program is RUNNING → RESTART (user decision, 2026-06-23).** Clicking ▶ Start while
+  a program is live STOPS the current run and immediately runs the currently-open file fresh — exactly ONE
+  live task at a time (the old task is cancelled). `#runBtn` stays ENABLED while running (NOT disabled, NOT
+  `display:none`). `✕ End` stops without restarting; `⏸ Pause` suspends. This refines decision #4's "gate
+  Start only on a live task" for the SPLIT model (the iteration log's "runs/**restarts**" wins) and drops
+  the old "must stop before re-running" friction — important because the boot auto-run leaves a program
+  permanently live. CONSEQUENCE: the 5 guardrails that click Start over the boot auto-run (`verify`,
+  `assets`, `subdirs`, `history`, `spike-runstop`) stay valid UNCHANGED; only `runmodel.mjs` §6 flips from
+  a disabled-Start assertion to a RESTART assertion (Start while live → new task / console cleared+rerun,
+  `#runBtn` stays enabled).
 - **Q1 — Multi-file Start → Start runs the PROJECT (its current `entry`); for a single-file project or
   an example the open file IS the entry, so Start runs it.** This keeps today's `run()` dispatch
   UNCHANGED (`collab.active || !isMulti()` → `_start(editor.getValue())`; else

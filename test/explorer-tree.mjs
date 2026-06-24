@@ -225,20 +225,16 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
       order: ['main.py', 'sprites/enemy.py', 'sprites/util.py'], entry: 'main.py', active: 'main.py',
     });
     window.renderTabs();
-    // Capture warn-don't-rewrite note via the app's alert (the house warn surface, mirrors
-    // tabMenu's rename alert at index.html:2084). Also accept an inline DOM note if the impl
-    // surfaces one instead.
+    // Capture warn-don't-rewrite note. Slice B retired the typed prompt: folder rename is now a
+    // popup [role=menu] (Rename · Delete) + an inline <input>, and the import warning is surfaced
+    // as a calm console line (the house warn-on-move surface) rather than an alert(). We accept the
+    // alert surface (legacy), an inline DOM note, OR the #console line.
     window.__warnText = '';
     window.alert = (m) => { window.__warnText += String(m) + '\n'; };
-    // Drive the rename through the folder row's action menu. The impl wires a per-folder menu
-    // (⋯ / .tab-menu on a folder row) or an inline rename; we stub prompt to choose rename + new
-    // name so whichever prompt-based flow the impl uses re-keys to `actors`.
-    window.__promptSeq = ['rename', 'actors'];
-    window.prompt = () => window.__promptSeq.shift();
   });
   await ensureExplorerOpen();
-  // Click the folder row's menu button if present; else click the folder row itself (some impls
-  // open the menu on the row). Both go through the short-timeout resilient click.
+  // Slice B flow: open the folder row's ⋯ popup, activate "Rename", fill the inline <input> with
+  // `actors`, press Enter. (Mirrors explorer-actions.mjs's menu+inline-rename driver.)
   const menuClicked = await page.evaluate(() => {
     const folder = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
     if (!folder) return false;
@@ -246,14 +242,34 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     (menu || folder).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     return true;
   });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const ren = items.find(el => /rename/i.test(el.textContent || ''));
+    if (ren) ren.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const row = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
+    const input = row && row.querySelector('input[type="text"], input:not([type])');
+    if (!input) return;
+    input.focus(); input.value = 'actors';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const opts = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
+    input.dispatchEvent(new KeyboardEvent('keydown', opts));
+    input.dispatchEvent(new KeyboardEvent('keyup', opts));
+  });
   await page.waitForTimeout(200);
   const renamed = await page.evaluate(() => ({
     menuClicked: true,
     hasNew: !!window.project.files['actors/enemy.py'] && !!window.project.files['actors/util.py'],
     oldGone: !window.project.files['sprites/enemy.py'] && !window.project.files['sprites/util.py'],
     warn: /import|not updated|manually|rewrit/i.test(window.__warnText || '') ||
-          // or an inline DOM warning note somewhere in the explorer.
-          /import|not updated|manually|rewrit/i.test(document.getElementById('side')?.textContent || ''),
+          /import|not updated|manually|rewrit/i.test(document.getElementById('side')?.textContent || '') ||
+          /import|not updated|manually|rewrit/i.test(document.getElementById('console')?.textContent || ''),
   }));
   if (renamed.hasNew && renamed.oldGone)
     ok('folder rename via UI re-keys descendants: sprites/* → actors/* (old keys gone)');
@@ -275,16 +291,24 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     });
     window.renderTabs();
     window.confirm = () => true;                 // accept the shared confirm
-    window.__promptSeq = ['delete'];             // prompt-based folder menu chooses delete
-    window.prompt = () => window.__promptSeq.shift();
     window.alert = () => {};
   });
   await ensureExplorerOpen();
+  // Slice B flow: open the folder row's ⋯ popup, then activate "Delete" (confirm-gated).
   await page.evaluate(() => {
     const folder = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
     if (!folder) return;
     const menu = folder.querySelector('.tab-menu');
     (menu || folder).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const del = items.find(el => /delete/i.test(el.textContent || ''));
+    if (del) del.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
   await page.waitForTimeout(200);
   const deleted = await page.evaluate(() => ({

@@ -147,19 +147,51 @@ async function explorerNewFile(page, name) {
   off();
 }
 
-// Rename a file via the REAL explorer flow (tabMenu → "rename" → new name).
+// Rename a file via the REAL explorer flow (Slice B: tabMenu opens the ⋯ popup [role=menu];
+// activate "Rename" → an inline <input> appears in the row; type the new basename + Enter).
+// The inline input edits the BASENAME within the row's existing directory, so we type the part
+// of newPath beyond the old directory prefix (a root file CAN type a full `dir/name` to relocate).
 async function explorerRename(page, oldPath, newPath) {
-  const off = withDialogs(page, ['rename', newPath, true]);   // action, new name, then accept the import-note alert
   await page.evaluate((p) => window.tabMenu(p), oldPath);
+  await page.waitForTimeout(120);
+  // activate the "Rename" menuitem in the open popup.
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    const item = menu && [...menu.querySelectorAll('[role="menuitem"]')].find(el => /rename/i.test(el.textContent || ''));
+    if (item) item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(120);
+  // fill the inline <input> + press Enter. raw = newPath minus the old dir prefix.
+  await page.evaluate(({ oldPath, newPath }) => {
+    const slash = oldPath.lastIndexOf('/');
+    const oldDir = slash < 0 ? '' : oldPath.slice(0, slash);
+    const raw = oldDir && newPath.startsWith(oldDir + '/') ? newPath.slice(oldDir.length + 1) : newPath;
+    const row = document.querySelector(`#tabs .tab[data-name="${oldPath.replace(/"/g, '\\"')}"]`);
+    const input = row && row.querySelector('input[type="text"], input:not([type])');
+    if (!input) return;
+    input.focus(); input.value = raw;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const opts = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
+    input.dispatchEvent(new KeyboardEvent('keydown', opts));
+    input.dispatchEvent(new KeyboardEvent('keyup', opts));
+  }, { oldPath, newPath });
   await page.waitForTimeout(150);
-  off();
 }
 
-// Delete a file via the REAL explorer flow (tabMenu → "delete" → confirm).
+// Delete a file via the REAL explorer flow (Slice B: tabMenu opens the ⋯ popup; activate "Delete";
+// the confirm() gate is auto-accepted by a one-shot dialog handler).
 async function explorerDelete(page, path) {
-  const off = withDialogs(page, ['delete', true]);            // action, then confirm the delete
+  const off = withDialogs(page, [true]);                      // accept the delete confirm
   await page.evaluate((p) => window.tabMenu(p), path);
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(120);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    const item = menu && [...menu.querySelectorAll('[role="menuitem"]')].find(el => /delete/i.test(el.textContent || ''));
+    if (item) item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(200);
   off();
 }
 

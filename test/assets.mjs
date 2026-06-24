@@ -269,11 +269,9 @@ else fail('no warning badge on the MP3 .tab.asset row');
     { name: 'trash.png', mimeType: 'image/png', buffer: buf(PNG_B64) });
   await page.waitForTimeout(200);
   await ensureExplorerOpen();
-  // Drive Delete through the asset row's ⋯ menu (prompt-based for now; Slice B polishes it).
-  // The menu's typed action is "delete"; a confirm gate may guard it.
+  // Drive Delete through the asset row's ⋯ popup menu (Slice B: open the [role=menu], activate the
+  // "Delete" menuitem; the confirm() gate guards it).
   await page.evaluate(() => {
-    window.__promptSeq = ['delete'];
-    window.prompt = () => window.__promptSeq.shift();
     window.confirm = () => true;
     window.alert = () => {};
     const row = document.querySelector('#tabs .tab.asset[data-name="trash.png"]');
@@ -281,7 +279,16 @@ else fail('no warning badge on the MP3 .tab.asset row');
     const menu = row.querySelector('.tab-menu');
     (menu || row).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+    const menu = menus[menus.length - 1];
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const del = items.find(el => /delete/i.test(el.textContent || ''));
+    if (del) del.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(300);
   const deleted = await page.evaluate(() => ({
     goneFs: !pyodide.FS.analyzePath('trash.png').exists,
     goneList: !window.assetFS.list.some(a => a.name === 'trash.png'),

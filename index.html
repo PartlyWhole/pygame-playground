@@ -146,11 +146,19 @@
   #tabs .tab .ic { width: 16px; flex: 0 0 16px; text-align: center; font-size: 13px; }
   #tabs .tab.py .ic { color: var(--color-py-icon); }
   #tabs .tab .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--mono); font-size: 12px; }
-  #tabs .tab.entry .tab-name::before { content: "▸ "; color: var(--accent); }
-  /* S3: the file whose program is live gets a warm left-bar + pulse dot, distinct from .active selection */
+  /* Slice C: calm, NON-play entry cue — accent-colored name + a small unobtrusive "start" tag,
+     never a play triangle. The .tab.entry semantic class is preserved (tests + run model rely on it). */
+  #tabs .tab.entry .tab-name { color: var(--accent); }
+  #tabs .tab .start-tag {
+    flex: 0 0 auto; font-size: 9px; line-height: 1; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px;
+    opacity: 0.85; font-family: var(--mono);
+  }
+  /* S3: the file whose program is live gets a warm left-bar + warm name (the at-a-glance running cue),
+     distinct from .active selection. Slice C dropped the redundant in-row ▶ — the stage #runFileBadge
+     stays the authoritative "what's running"; running shows here via border + warm name only. */
   #tabs .tab.running { border-left-color: var(--warn); }
   #tabs .tab.running .tab-name { color: var(--warn); }
-  #tabs .tab.running .tab-name::after { content: " ▶"; color: var(--warn); font-size: 10px; }
   #tabs .tab .moddot { color: var(--accent); font-size: 10px; flex: 0 0 auto; margin-right: 2px; }
   #tabs .tab .asset-warn { color: var(--warn); flex: 0 0 auto; font-size: 12px; cursor: help; }
   #tabs .tab .tab-menu { color: var(--dim); border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 3px; }
@@ -2379,6 +2387,7 @@ function renderTabs() {
         out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
+          (f.entry ? `<span class="start-tag" data-entry="true" title="Start runs this file" aria-label="Start file">start</span>` : "") +
           (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
           dlBtn(basename(f.path), false) +
           `<button class="tab-menu" title="File actions" aria-haspopup="menu" aria-expanded="false" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
@@ -2429,7 +2438,9 @@ tabsEl.addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
   if (!tab) return;
   const name = tab.dataset.name;
-  if (menuBtn) { tabMenu(name); return; }
+  // Slice C follow-up A: route the ⋯ menu by the CLICKED ROW'S TYPE, not a project.files[name] path
+  // lookup — so a code file and an asset sharing the same data-name each open their own menu.
+  if (menuBtn) { if (tab.classList.contains("asset")) assetMenu(name); else tabMenu(name); return; }
   selectedFolder = dirname(name);
   renderViewer(name);   // .py -> CM swapDoc via setActive; asset -> media surface
   renderTabs();
@@ -2633,7 +2644,9 @@ popMenuEl.addEventListener("keydown", (e) => {
   else if (e.key === "End") { e.preventDefault(); its[its.length - 1].focus(); }
   else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (document.activeElement.click ? document.activeElement : its[0]).click(); }
   else if (e.key === "Escape") { e.preventDefault(); closePopMenu(); }
-  else if (e.key === "Tab") { closePopMenu(); }
+  // Focus-trap: suppress the browser's native Tab so it can't leak focus to the next page control;
+  // close the menu and return focus to the ⋯ anchor (a11y — Slice C follow-up B).
+  else if (e.key === "Tab") { e.preventDefault(); closePopMenu(true); }
 });
 // Global Esc closes (test dispatches Escape on document/activeElement). Capture so it wins
 // even when focus is outside the menu.
@@ -2776,9 +2789,11 @@ function folderDelete(path) {
   renderTabs(); flushSave();
 }
 function tabMenu(name) {
-  // Asset rows live in assetFS, not project.files — route them to the asset menu.
+  // Asset rows live in assetFS, not project.files — route them to the asset menu. (The click delegate
+  // routes by clicked-row TYPE; this stays as a defensive fallback for callers without a row context.)
   if (!project.files[name]) { if (assetFS.list.some(a => a.name === name)) assetMenu(name); return; }
-  const anchor = rowMenuBtn(`#tabs .tab[data-name="${cssAttr(name)}"]`);
+  // Anchor to the .py row specifically (Slice C: a same-path asset row may share this data-name).
+  const anchor = rowMenuBtn(`#tabs .tab.py[data-name="${cssAttr(name)}"]`);
   if (!anchor) return;
   openPopMenu(anchor, [
     { label: "Rename", icon: "✎", run: () => fileRenameInline(name) },

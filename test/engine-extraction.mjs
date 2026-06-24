@@ -54,6 +54,26 @@ if (sentinel.engineLoaded && sentinel.bareWorks)
   ok('window.__engineLoaded sentinel set; bare-name pyodide is the live seam');
 else fail(`sentinel/seam wrong: ${JSON.stringify(sentinel)}`);
 
+// C4 (P2): the host run path delegates to the engine and still produces exactly ONE live
+// _state['task']; engine.stop() clears it. Driven through the real #runBtn so the host
+// wrapper (clearConsole/snapshot/syncRunControls/renderTabs) is exercised.
+await page.waitForSelector('#runBtn', { timeout: 5000 });
+await page.click('#runBtn');
+await page.waitForFunction(() => {
+  try { return pyodide.runPython("_state.get('task') is not None"); } catch { return false; }
+}, null, { timeout: 30000 }).catch(() => {});
+const live = await page.evaluate(() =>
+  pyodide.runPython("1 if (_state.get('task') is not None and not _state['task'].done()) else 0"));
+await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+await page.waitForFunction(() => {
+  try { return pyodide.runPython("_state.get('task') is None or _state['task'].done()"); }
+  catch { return false; }
+}, null, { timeout: 10000 }).catch(() => {});
+const stopped = await page.evaluate(() =>
+  pyodide.runPython("1 if (_state.get('task') is None or _state['task'].done()) else 0"));
+if (live === 1 && stopped === 1) ok('host run() → engine.start drives exactly one task; engine.stop clears it');
+else fail(`P2 task lifecycle wrong: live=${live} stopped=${stopped}`);
+
 await browser.close();
 console.log(`\nengine-extraction: ${pass} passed, ${failn} failed`);
 process.exit(failn ? 1 : 0);

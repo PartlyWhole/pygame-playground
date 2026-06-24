@@ -2758,6 +2758,7 @@ updateStorageReadout();   // seed the tree-footer browser-storage metric
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
 let pyodide = null;
 let runTask = null;
+let engine = null;   // cooperative-engine wrapper (vendor/engine.mjs createEngine); set during boot()
 
 // Engine module (cooperative pygame engine) — lazily imported on a cached promise, the
 // SAME pattern as loadAutomerge(): relative + document.baseURI so it resolves under the
@@ -2779,9 +2780,7 @@ const runFileBadgeEl = document.getElementById("runFileBadge");
 const stageHintEl = document.getElementById("stageHint");
 
 function isPaused() {
-  if (!pyodide) return false;
-  try { return !!pyodide.runPython("bool(_state.get('paused'))"); }
-  catch { return false; }
+  return engine ? engine.isPaused() : false;
 }
 
 // Single writer for the run-control chrome: Pause/End/badge visibility, the Start
@@ -2825,7 +2824,8 @@ async function boot() {
     window[key] = Wrapped;
   }
   setStatus("boot", "loading Python…");
-  const ENG = await loadEngine();   // cooperative-engine Python source (vendor/engine.mjs)
+  const ENG = await loadEngine();   // cooperative-engine Python source + createEngine (vendor/engine.mjs)
+  engine = engine || ENG.createEngine({ getPyodide: () => pyodide });
   const mod = await import(PYODIDE_BASE + "pyodide.mjs");
   pyodide = await mod.loadPyodide({ indexURL: PYODIDE_BASE });
   pyodide.setStdout({ batched: (s) => logLine(s, "out") });
@@ -2871,15 +2871,10 @@ async function run() {
   // the collab.mjs case) is still !isMulti() → the single-file path, unchanged.
   const isSingle = !project.isMulti();
   if (isSingle) {
-    pyodide.runPython("_state['via_project'] = False; _purge_project_files()");
-    const start = pyodide.globals.get("_start");
-    task = start(editor.getValue());          // existing single-file path, verbatim — snapshots the text NOW
-    start.destroy();
+    engine.purgeProjectFiles();
+    task = engine.start(editor.getValue());                     // single-file path — snapshots the text NOW
   } else {
-    const startP = pyodide.globals.get("_start_project");
-    const filesPy = pyodide.toPy(project.serialize().files);   // snapshots EVERY file's Doc text NOW
-    task = startP(filesPy, project.entry);
-    startP.destroy(); filesPy.destroy();
+    task = engine.startProject(project.serialize().files, project.entry);  // snapshots EVERY file's Doc text NOW
   }
   runTask = task;
   // The running file is the ENTRY (single-file: the open file is the entry; multi-file: project.entry).
@@ -2902,11 +2897,11 @@ async function run() {
 
 // Pause ⇄ Resume (stage). Toggles the engine gate; pause keeps the task alive.
 function togglePause() {
-  if (!pyodide || !runFile) return;
+  if (!engine || !runFile) return;
   if (isPaused()) {
-    if (pyodide.runPython("_resume()")) { setStatus("running", "running"); }
+    if (engine.resume()) { setStatus("running", "running"); }
   } else {
-    if (pyodide.runPython("_pause()")) { setStatus("paused", "paused"); }
+    if (engine.pause()) { setStatus("paused", "paused"); }
   }
   syncRunControls();
   renderTabs();             // badge/highlight text tracks paused vs running
@@ -2922,7 +2917,7 @@ canvasEl.addEventListener("click", resumeAudio);
 
 document.getElementById("runBtn").addEventListener("click", run);
 document.getElementById("stopBtn").addEventListener("click", () => {
-  if (pyodide) pyodide.runPython("_stop()");   // End — task settle clears runFile + syncs controls
+  if (engine) engine.stop();   // End — task settle clears runFile + syncs controls
 });
 pauseBtnEl.addEventListener("click", togglePause);
 // Badge click jumps the editor/viewer to the running file (NEVER editor.setValue —

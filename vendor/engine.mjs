@@ -578,3 +578,37 @@ def _purge_project_files():
     _prune_empty_dirs()
     importlib.invalidate_caches()
 `;
+
+// createEngine(deps) — thin JS wrapper over the SAME Pyodide globals. deps.getPyodide()
+// returns the live (bare-name) pyodide instance the host owns. No DOM/project imports.
+// The Python namespace is byte-identical to today; this only relocates the JS dispatch.
+export function createEngine(deps) {
+  const py = () => deps.getPyodide();
+  return {
+    // Single-file path: snapshot `src` NOW and schedule the cooperative task.
+    start(src) {
+      const f = py().globals.get("_start");
+      const task = f(src);
+      f.destroy();
+      return task;
+    },
+    // Multi-file path: toPy the {path: text} snapshot, schedule, then free the proxies.
+    startProject(filesObj, entry) {
+      const startP = py().globals.get("_start_project");
+      const filesPy = py().toPy(filesObj);
+      const task = startP(filesPy, entry);
+      startP.destroy(); filesPy.destroy();
+      return task;
+    },
+    // Reset the single-file path's project-import state (mirrors the old inline runPython).
+    purgeProjectFiles() {
+      py().runPython("_state['via_project'] = False; _purge_project_files()");
+    },
+    stop() { py().runPython("_stop()"); },
+    pause() { return py().runPython("_pause()"); },
+    resume() { return py().runPython("_resume()"); },
+    isPaused() {
+      try { return !!py().runPython("bool(_state.get('paused'))"); } catch { return false; }
+    },
+  };
+}

@@ -193,6 +193,9 @@
   #historyPanel .hp-restore { margin: 8px 4px; background: var(--color-tint-run-bg); border-color: var(--color-tint-run-border-strong); color: var(--color-text-on-tint); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
 
   /* ---------- collaboration rail panel ---------- */
+  /* Off-screen-but-clickable engine seam (e.g. #collabBtn). Must stay in the layout and
+     remain pointer-actionable for tests/delegates — do NOT use display:none/visibility:hidden. */
+  .sr-seam { position: fixed; left: 2px; bottom: 2px; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; opacity: .01; pointer-events: auto; z-index: 1; }
   #collabPanel { padding: 10px 12px; color: var(--dim); font-size: 13px; line-height: 1.5; }
   #liveDot { font-size: 12.5px; color: var(--accent); padding: 4px 8px; display: inline-block; margin-top: 8px; }
   #liveDot.connecting { color: var(--warn); }
@@ -295,7 +298,7 @@
        opening the Collab rail panel, so it must stay actionable while that panel is hidden — it can't
        live inside the hidden panelview's display:none subtree. Kept here, on-screen but minimal; the
        Collaboration panel shows a full-width "👥 Collaborate" button (#collabStartBtn) that triggers it. -->
-  <button id="collabBtn" aria-label="Start a live collaboration room" style="position:fixed;left:2px;bottom:2px;width:1px;height:1px;padding:0;border:0;overflow:hidden;opacity:.01;z-index:1">👥</button>
+  <button id="collabBtn" class="sr-seam" aria-label="Start a live collaboration room" tabindex="-1" aria-hidden="true">👥</button>
 </header>
 
 <!-- ===================== MAIN: rail + side + right stack ===================== -->
@@ -317,9 +320,9 @@
       <div class="side-head">
         <span>Explorer</span>
         <div class="acts">
-          <!-- #shareBtn: kept as an engine seam (test/multifile.mjs check 7 clicks it + asserts
-               #project=). Q3 wanted it gone, but that locked test requires a clickable #shareBtn —
-               re-homed here as a small Explorer action (out of the minimal toolbar) instead. -->
+          <!-- #shareBtn: re-homed as a VISIBLE Explorer ghost action that must stay actionable
+               (test/multifile.mjs check 7 clicks it + asserts #project=). Q3 wanted it gone, but that
+               locked test requires a clickable #shareBtn — full removal is deferred to S7. -->
           <button class="ghost" id="shareBtn" aria-label="Copy a share link" data-tip="Copy share link"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.1 10.9 14.9 7.2"/><path d="M8.1 13.1 14.9 16.8"/></svg></button>
           <button class="ghost" id="uploadBtn" aria-label="Upload files" data-tip="Upload files"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M8 9l4-4 4 4"/><path d="M5 19h14"/></svg></button>
           <button class="ghost" id="saveBtn" aria-label="Download project (.py or .zip)" data-tip="Download project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>
@@ -354,6 +357,7 @@
     <!-- COLLABORATION -->
     <section class="panelview" id="panel-collab" data-panel="collab" role="tabpanel" aria-labelledby="tab-collab" hidden>
       <div class="side-head"><span>Collaboration</span></div>
+      <!-- Static intro is in the markup below; the engine seam #collabBtn keeps its own click listener. -->
       <div class="side-body"><div id="collabPanel">
         <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
@@ -1802,7 +1806,6 @@ function renderViewer(name) {
   let surface = document.createElement("div");
   if (kind === "image") {
     vMetaEl.textContent = "· " + ext;
-    let dims = "";
     try {
       const url = assetObjectURL(name);
       surface.className = "imgview";
@@ -1822,7 +1825,14 @@ function renderViewer(name) {
       html += `<div class="warnbanner"><span>⚠</span><span>Plays here, but pygame's audio can't load ${ext} — convert to WAV or OGG.</span></div>`;
     }
     surface.innerHTML = html;
-    try { surface.querySelector("audio").src = assetObjectURL(name); } catch (e) {}
+    try {
+      const url = assetObjectURL(name);
+      const audio = surface.querySelector("audio");
+      const revoke = () => URL.revokeObjectURL(url);
+      audio.addEventListener("loadeddata", revoke, { once: true });
+      audio.addEventListener("error", revoke, { once: true });
+      audio.src = url;
+    } catch (e) {}
   } else {
     vMetaEl.textContent = "· text";
     surface.className = "empty";
@@ -1958,9 +1968,9 @@ addEventListener("hashchange", () => {
 
 // NOTE (Q3 contradiction): design §0 Q3 asks to remove #shareBtn, but the LOCKED battery
 // test/multifile.mjs (check 7, commit 28c2eb9) clicks '#shareBtn' and asserts it emits #project=.
-// Removing it would break that contract (which I may not weaken). Resolution: keep #shareBtn + its
-// listener, but as a HIDDEN element out of the minimal toolbar — the toolbar stays visually minimal
-// and the test still passes. The legacy #code=/#project= LOAD readers stay (removed in S7).
+// Removing it would break that contract (which I may not weaken). Resolution: #shareBtn + its
+// listener are re-homed as a VISIBLE Explorer ghost action that must stay actionable (multifile.mjs
+// check 7 clicks it); full removal is deferred to S7. The legacy #code=/#project= LOAD readers stay (removed in S7).
 document.getElementById("shareBtn").addEventListener("click", async (e) => {
   let url;
   if (project.isMulti()) {
@@ -2050,9 +2060,6 @@ function renderExamplesPanel() {
   panel.innerHTML = Object.keys(EXAMPLES).map(name => `
     <div class="exrow"><span class="ic" aria-hidden="true">🐍</span><span class="nm">${escTab(name)}</span></div>`).join("");
 }
-
-// ---------------------------------------------------------------- collaboration rail panel intro
-function renderCollabPanel() { /* static intro is in the markup; #collabBtn keeps its engine listener */ }
 
 // ---------------------------------------------------------------- activity rail (§3) + roving tabindex (§8.1)
 const railEl = document.querySelector("nav.rail");

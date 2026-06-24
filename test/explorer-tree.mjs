@@ -395,10 +395,12 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
 }
 
 // ================================================================================================
-// 7. ASSETS RENDER NESTED IN THE TREE (design §0.1 Q2). Seed a nested asset via the assetFS test
-//    seam (nested write mechanism is S2a-green); assert it shows as
-//    .tab.asset[data-name="sounds/jump.wav"] INSIDE its folder node, AND #assetPanel /
-//    .asset-row[data-name] still exist (compat container preserved).
+// 7. ASSETS RENDER NESTED IN THE TREE — AS .tab.asset ONLY (Slice A: #assetPanel retired). Seed a
+//    nested asset via the assetFS test seam (nested write mechanism is S2a-green); assert it shows
+//    as .tab.asset[data-name="sounds/jump.wav"] INSIDE its folder node, indented past root, with NO
+//    #assetPanel compat container in the DOM. Then DRAG-MOVE a root asset into a folder via the
+//    synthetic HTML5 DnD protocol and assert the assetFS + MEMFS path is re-keyed.
+//    (design: docs/specs/2026-06-24-explorer-unify-assets-design.md §4, §5, §7)
 // ================================================================================================
 {
   await page.evaluate(() => {
@@ -421,20 +423,55 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     const root = t.querySelector('.tab[data-name="main.py"]');
     const pad = (el) => el ? parseFloat(getComputedStyle(el).paddingLeft || '0') : 0;
     const nestedIndented = !!assetRow && !!root && pad(assetRow) > pad(root);
-    // compat container still present + keyed by path.
-    const panel = document.getElementById('assetPanel');
-    const compatRow = panel && panel.querySelector('.asset-row[data-name="sounds/jump.wav"]');
-    return {
-      assetRow: !!assetRow, folderRow: !!folderRow, nestedIndented,
-      panelExists: !!panel, compatRow: !!compatRow,
-    };
+    // Slice A: the legacy panel is GONE from the DOM (assets live only as tree rows).
+    const panelGone = document.getElementById('assetPanel') === null;
+    return { assetRow: !!assetRow, folderRow: !!folderRow, nestedIndented, panelGone };
   });
   if (nested.assetRow && nested.folderRow && nested.nestedIndented)
     ok('assets render nested in the tree: .tab.asset[data-name="sounds/jump.wav"] inside the sounds/ folder node');
   else fail('nested asset not in the tree: ' + JSON.stringify(nested));
-  if (nested.panelExists && nested.compatRow)
-    ok('  ...#assetPanel compat container kept, .asset-row[data-name] keyed by path');
-  else fail('  asset compat container/row missing or not path-keyed: ' + JSON.stringify(nested));
+  if (nested.panelGone)
+    ok('  ...#assetPanel is gone from the DOM (assets are tree-only in Slice A)');
+  else fail('  #assetPanel still exists (Slice A retires it): ' + JSON.stringify(nested));
+
+  // 7b. DRAG-MOVE an asset row into a folder re-keys assetFS + MEMFS. Seed a root asset and an
+  //     empty target folder, then fire the synthetic dragstart/dragover/drop protocol.
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.project.addFolder('audio');
+    window.renderTabs();
+  });
+  await page.evaluate((b64) => {
+    const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return window.assetFS.add(new File([bytes], 'beep.wav', { type: 'audio/wav' }));
+  }, WAV_B64).catch(() => {});
+  await page.waitForTimeout(250);
+  await ensureExplorerOpen();
+  const dndAsset = await page.evaluate(() => {
+    const src = document.querySelector('#tabs .tab.asset[data-name="beep.wav"]');
+    const dst = document.querySelector('#tabs .tab.folder[data-path="audio"]');
+    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
+    const dt = new DataTransfer();
+    dt.setData('text/plain', src.getAttribute('data-name'));
+    const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
+    src.dispatchEvent(mk('dragstart', src)[0]);
+    dst.dispatchEvent(mk('dragover', dst)[0]);
+    dst.dispatchEvent(mk('drop', dst)[0]);
+    src.dispatchEvent(mk('dragend', src)[0]);
+    return { srcFound: true, dstFound: true };
+  });
+  await page.waitForTimeout(300);
+  const movedAsset = await page.evaluate(() => ({
+    newInList: window.assetFS.list.some(a => a.name === 'audio/beep.wav'),
+    oldInList: window.assetFS.list.some(a => a.name === 'beep.wav'),
+    newInFs: pyodide.FS.analyzePath('audio/beep.wav').exists,
+    oldInFs: pyodide.FS.analyzePath('beep.wav').exists,
+    nestedRow: !!document.querySelector('#tabs .tab.asset[data-name="audio/beep.wav"]'),
+  }));
+  if (dndAsset.srcFound && dndAsset.dstFound && movedAsset.newInList && !movedAsset.oldInList && movedAsset.newInFs && !movedAsset.oldInFs)
+    ok('drag-move asset into folder re-keys assetFS + MEMFS: beep.wav -> audio/beep.wav (old gone)');
+  else fail('asset drag-into-folder did not update the path: ' + JSON.stringify({ dndAsset, movedAsset }));
 }
 
 // ================================================================================================

@@ -1554,7 +1554,7 @@ const project = {
     if (typeof previewExample !== "undefined") previewExample = null;
     editor.swapDoc(this.files[this.active]);
   },
-  setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); editor.performLint?.(); } },
+  setActive(name) { if (this.files[name]) { this.active = name; editor.swapDoc(this.files[name]); editor.refresh(); editor.focus(); editor.performLint?.(); if (collab.active) collab.renderPeers?.(); } },
   add(name, text = "") {
     if (!isModuleName(name) || this.files[name]) return false;
     this.files[name] = new CodeMirror.Doc(text, "python");
@@ -2098,13 +2098,31 @@ async function showDiff(id) {
 async function restoreSnapshot(id) {
   const rec = _histSnaps.find(s => String(s.id) === String(id));
   if (!rec) return;
-  if (!confirm("Replace your current code with this version?")) return;
+  // S6b (§0.1 Q4): restoring in a room overwrites the project for EVERYONE — warn accordingly.
+  const msg = collab.active
+    ? "Restore this version for EVERYONE in the room? This overwrites the project for all peers and can't be undone."
+    : "Replace your current code with this version?";
+  if (!confirm(msg)) return;
   await captureSnapshot();            // save the current state first, so a restore is itself recoverable
   _histSelectedId = null;
   project.load(rec.project);
   viewerSel = project.active;
   renderViewer(project.active);
   renderTabs();
+  // S6b: in a room, overwrite the WHOLE shared doc so peers converge to the restored project.
+  if (collab.active && collab.handle) {
+    const { updateText } = collab.lib;
+    const enc = encodeProject(project.serialize());
+    roomOp(d => {
+      for (const k of Object.keys(d.files)) if (!(k in enc.files)) delete d.files[k];   // drop keys not in the restore
+      for (const k of Object.keys(enc.files)) {
+        if (d.files[k] == null) d.files[k] = enc.files[k];        // new key: plain assignment
+        else updateText(d, ["files", k], enc.files[k]);           // existing: char-merge to restored text
+      }
+      d.order = enc.order;
+      d.entry = enc.entry;
+    });
+  }
   flushSave();
   renderHistory();                    // panel is in-flow; re-render rather than dismiss
 }
@@ -2433,7 +2451,16 @@ tabsEl.addEventListener("drop", (e) => {
     const dest = folder.dataset.path;
     const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
     if (draggedIsFolder && isDescendantDrop(dragged, dest)) { dragPath = null; return; }   // descendant guard
-    if (project.move(dragged, dest)) { closedFolders.delete(dest); renderTabs(); flushSave(); }
+    // Capture the pre-move path set so a file/folder move can mirror each re-keyed child.
+    const beforeMove = [...project.order];
+    if (project.move(dragged, dest)) {
+      closedFolders.delete(dest);
+      // S6b: a move re-keys 1 (file) or N (folder) paths. Mirror every key that disappeared
+      // from order as a copy-and-delete into its new key (positional pairing: project.move
+      // re-keys in place, so order index i maps old->new). One change = atomic for peers.
+      mirrorMove(beforeMove, project.order);
+      renderTabs(); flushSave();
+    }
   } else if (fileRow) {
     // reorder within project.order (files only; folders aren't in order).
     const target = fileRow.dataset.name;
@@ -2444,6 +2471,8 @@ tabsEl.addEventListener("drop", (e) => {
       ord.splice(ord.indexOf(dragged), 1);
       let idx = ord.indexOf(target) + (after ? 1 : 0);
       ord.splice(idx, 0, dragged);
+      // S6b: rewrite the doc order from the reconciled local order (files only changed position).
+      roomOp(d => { d.order = project.order.map(encPath); });
       renderTabs(); flushSave();
     }
   }
@@ -2461,6 +2490,8 @@ function newFilePrompt() {
   if (dirname(name)) closedFolders.delete(dirname(name));
   project.setActive(name);
   renderViewer(name);
+  // S6b: mirror the new file to the shared doc — plain assignment (updateText can't create a key).
+  roomOp(d => { d.files[encPath(name)] = ""; d.order.push(encPath(name)); });
   renderTabs(); flushSave();
 }
 // S2: create an empty folder. Validated as a Python-identifier-safe segment. Created
@@ -2494,10 +2525,13 @@ function folderMenu(path) {
     const prefix = path + "/";
     const kids = project.order.filter(p => p.startsWith(prefix));
     if (project.files[newPath] || project.order.some(p => p.startsWith(newPath + "/"))) { alert("That folder already exists."); return; }
+    const beforeFolderRename = [...project.order];
     for (const k of kids) {
       const child = newPath + k.slice(path.length);
       project.rename(k, child);
     }
+    // S6b: mirror the per-descendant re-key to the shared doc as one atomic change.
+    mirrorMove(beforeFolderRename, project.order);
     // carry the empty-folder marker.
     if (project.emptyDirs.delete(path)) project.emptyDirs.add(newPath);
     // carry collapsed state across the re-key (folders are open-by-default).
@@ -2513,7 +2547,10 @@ function folderMenu(path) {
     const kids = project.order.filter(p => p.startsWith(prefix));
     if (kids.length && project.order.length - kids.length < 1) { alert("Can't delete every file — keep at least one."); return; }
     if (!confirm(`Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+    const beforeFolderDel = [...project.order];
     for (const k of kids) project.remove(k);
+    // S6b: mirror the removed children (those project.remove actually dropped) to the shared doc.
+    mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));
     project.emptyDirs.delete(path);
     for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
     if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
@@ -2525,18 +2562,23 @@ function tabMenu(name) {
   if (!project.files[name]) return;   // asset rows have no file-menu actions in S1
   const action = prompt(`File "${name}" — type: entry / rename / delete`, "");
   if (!action) return;
-  if (action === "entry") { project.setEntry(name); }
+  if (action === "entry") {
+    project.setEntry(name);
+    roomOp(d => { d.entry = encPath(name); });   // S6b: mirror the entry change
+  }
   else if (action === "rename") {
     let next = prompt(`Rename "${name}" to:`, name);
     if (next == null) return;
     if (!next.endsWith(".py")) next += ".py";
     if (!project.rename(name, next)) { alert("Invalid or duplicate name."); return; }
     if (viewerSel === name) viewerSel = next;
+    // S6b: mirror the rename as a copy-and-delete (a one-path move).
+    mirrorMove([name], [next]);
     alert(`Renamed. Note: 'import ${name.slice(0, -3)}' references in other files are NOT updated — fix them manually.`);
   } else if (action === "delete") {
     if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
     if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
-    project.remove(name);
+    if (project.remove(name)) mirrorDeletes([name]);   // S6b: mirror only a successful delete
     if (viewerSel === name) renderViewer(project.active);
   }
   renderTabs(); flushSave();
@@ -3225,6 +3267,53 @@ function setLive(state, peers) {
 
 function applyingRemoteSet(fn) { collab.applyingRemote = true; try { fn(); } finally { collab.applyingRemote = false; } }
 
+// S6b — route a structural file-op to the shared doc. Runs ONLY in a room, under the remote
+// guard so the on("change") it triggers in bindEditor doesn't echo back as a local edit. The
+// caller runs the LOCAL project.<op>() FIRST (it validates + may refuse, e.g. last-file delete
+// or a duplicate name); roomOp mirrors that successful change to the doc. Keeps Automerge lazy:
+// no-op (zero doc access) when solo.
+function roomOp(mutator) {
+  if (!collab.active || !collab.handle) return;
+  applyingRemoteSet(() => collab.handle.change(mutator));
+}
+
+// S6b — mirror a file/folder MOVE (rename = move with one re-keyed path) to the shared doc as a
+// single copy-and-delete transaction. project.move/rename re-key in place (order positions are
+// preserved), so a positional diff of the order before vs after pairs each old key -> new key.
+// Copy current text to the new encoded key, delete the old, rewrite order, and fix entry.
+function mirrorMove(beforeOrder, afterOrder) {
+  if (!collab.active || !collab.handle) return;
+  const pairs = [];
+  for (let i = 0; i < afterOrder.length && i < beforeOrder.length; i++) {
+    if (beforeOrder[i] !== afterOrder[i]) pairs.push([beforeOrder[i], afterOrder[i]]);
+  }
+  if (!pairs.length) return;
+  roomOp(d => {
+    for (const [oldPath, newPath] of pairs) {
+      const ok = encPath(oldPath), nk = encPath(newPath);
+      if (d.files[ok] == null) continue;                       // defensive: nothing to move
+      d.files[nk] = String(d.files[ok]);                       // copy value (plain assignment)
+      delete d.files[ok];                                       // delete old key
+      d.order = d.order.map(k => k === ok ? nk : k);            // rewrite order in place
+      if (d.entry === ok) d.entry = nk;                         // keep entry consistent
+    }
+  });
+}
+
+// S6b — mirror one or more file DELETES (a single file or a folder's children) to the shared
+// doc: delete each encoded key, filter it out of order, and fix entry from the (already
+// locally-repaired) project.entry so the doc invariant `order key-set === files key-set` and
+// `entry is a live key` holds. `paths` are the HUMAN paths that were actually removed locally.
+function mirrorDeletes(paths) {
+  if (!collab.active || !collab.handle || !paths.length) return;
+  const gone = new Set(paths.map(encPath));
+  roomOp(d => {
+    for (const k of gone) delete d.files[k];
+    d.order = d.order.filter(k => !gone.has(k));
+    if (gone.has(d.entry)) d.entry = encPath(project.entry);    // local entry was already repaired
+  });
+}
+
 // ---------------------------------------------------------------- S6a encode/decode boundary
 // THE ONLY place %2F-encoded keys exist is the shared Automerge doc. The local `project`
 // model, #project=, the zip, localStorage and the UI all stay HUMAN paths. enc/dec are
@@ -3298,7 +3387,10 @@ function reconcileFromDoc(doc) {
   // (A) ADDED keys: present remotely, absent locally -> fresh Doc + tab (no lost files).
   const added = [];
   for (const p of remotePaths) {
-    if (!localSet.has(p)) { if (project.add(p, String(doc.files[encPath(p)]))) added.push(p); }
+    if (!localSet.has(p)) {
+      if (project.add(p, String(doc.files[encPath(p)]))) added.push(p);
+      else console.warn("collab: skipped remote-only key with invalid module name:", p);   // S6a-review Minor: don't silently drop
+    }
   }
 
   // (B) CHANGED text in files present in BOTH: active = cursor-preserving live splice on the
@@ -3328,6 +3420,7 @@ function reconcileFromDoc(doc) {
   if (project.files[remoteEntry]) project.entry = remoteEntry;
 
   renderTabs();                                                 // ONE repaint from the reconciled order
+  if (collab.active) collab.renderPeers?.();                    // S6b: repaint remote cursors for the (possibly new) active file
 }
 
 function bindEditor() {
@@ -3370,6 +3463,7 @@ function startPresence() {
     const head = editor.getCursor("head"), anchor = editor.getCursor("anchor");
     collab.presence.broadcast("cursor", {
       line: head.line, ch: head.ch, anchor: { line: anchor.line, ch: anchor.ch },
+      file: encPath(project.active),               // S6b: which file this cursor is in (per-file presence)
     });
   });
   collab.markers = [];
@@ -3377,11 +3471,12 @@ function startPresence() {
   // { [peerId]: { peerId, value: { cursor, user, ... } } } — no .peers() method.
   const renderPeers = () => {
     const peers = Object.values(collab.presence.getPeerStates().value);
-    setLive("", peers.length + 1);
+    setLive("", peers.length + 1);                 // roster counts EVERYONE regardless of file
     collab.markers.forEach(m => m.clear());
+    const here = encPath(project.active);          // S6b: only peers on MY active file get a caret
     collab.markers = peers.flatMap(p => {
       const cur = p.value?.cursor;
-      if (!cur) return [];
+      if (!cur || cur.file !== here) return [];    // STRICT (§0.1 Q1): no `file` field => no cursor
       const color = p.value.user?.color || "#fff";
       const marks = [];
       // shared highlight: render the peer's selection as a translucent band in their color
@@ -3405,6 +3500,7 @@ function startPresence() {
   };
   collab.presence.on("update", renderPeers);
   collab.presence.on("snapshot", renderPeers);
+  collab.renderPeers = renderPeers;   // S6b: expose so reconcileFromDoc + file-switch can repaint
 }
 
 async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {

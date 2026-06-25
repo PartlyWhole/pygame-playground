@@ -183,6 +183,48 @@
   .popmenu .mi:hover, .popmenu .mi:focus, .popmenu .mi.active { background: var(--color-row-hover); outline: none; }
   .popmenu .mi.danger { color: var(--bad); }
   .popmenu .mi.danger:hover, .popmenu .mi.danger:focus, .popmenu .mi.danger.active { background: #3a2329; }
+  /* #13: aesthetic modal (user CHOICES) + calm toast (non-choice notices) — replaces native confirm()/alert() */
+  #modalBackdrop {
+    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 11, 15, .55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    #modalBackdrop { animation: modal-fade .12s ease-out; }
+    #modalBackdrop .modal { animation: modal-pop .14s cubic-bezier(.2,.8,.3,1); }
+  }
+  @keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes modal-pop { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
+  .modal {
+    width: min(380px, calc(100vw - 32px)); background: var(--panel); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 18px 50px rgba(0,0,0,.5);
+    padding: 18px 18px 14px; box-sizing: border-box;
+  }
+  .modal .modal-title { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  .modal .modal-msg { font-size: 13px; line-height: 1.5; color: var(--dim); margin: 0 0 16px; white-space: pre-wrap; }
+  .modal .modal-acts { display: flex; justify-content: flex-end; gap: 8px; }
+  .modal .modal-btn {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--edge); background: var(--color-surface-control); color: var(--text);
+  }
+  .modal .modal-btn:hover, .modal .modal-btn:focus { border-color: var(--color-border-hover); outline: none; }
+  .modal .modal-btn.confirm { background: var(--accent); border-color: var(--accent); color: #0e1411; font-weight: 600; }
+  .modal .modal-btn.confirm:hover, .modal .modal-btn.confirm:focus { filter: brightness(1.08); }
+  .modal .modal-btn.confirm.danger { background: var(--bad); border-color: var(--bad); color: #2a0d11; }
+  #toastHost {
+    position: fixed; left: 0; right: 0; bottom: 18px; z-index: 1100; display: flex; flex-direction: column;
+    align-items: center; gap: 8px; pointer-events: none;
+  }
+  .toast {
+    max-width: min(440px, calc(100vw - 32px)); background: var(--panel); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 8px; box-shadow: var(--shadow-tooltip);
+    padding: 9px 14px; font-size: 13px; line-height: 1.4; pointer-events: auto;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .toast { animation: toast-in .16s ease-out; }
+    .toast.leaving { animation: toast-out .2s ease-in forwards; }
+  }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
   /* S2: folder rows + caret + DnD drop affordances (retargeted from proto/sandbox.html) */
   #tabs .tab .caret { width: 12px; flex: 0 0 12px; text-align: center; color: var(--dim); font-size: 9px; transition: transform .12s; }
   #tabs .tab .caret.spacer { visibility: hidden; }
@@ -2192,6 +2234,77 @@ function closePopMenu(restoreFocus = true) {
   if (restoreFocus && anchor && anchor.isConnected) anchor.focus();
 }
 window.__closePopMenu = closePopMenu;   // test/debug seam
+
+// #13: aesthetic modal (user CHOICES) + calm toast (non-choice notices) — replaces native browser
+// confirm()/alert() (no ugly OS dialogs). The modal is ASYNC (Promise<boolean>) because it can't block
+// the JS thread the way confirm() did, so callers `await` it. Single instance, focus-trapped, with
+// Escape / backdrop-click = cancel and focus returned to the opener. `danger` styles confirm delete-red.
+let _modalState = null;   // { backdrop, resolve, lastFocus } while a modal is open
+function confirmModal({ title = "", message = "", confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false } = {}) {
+  closeModal(false);   // single instance: a new modal supersedes the old (resolving it as cancel)
+  return new Promise((resolve) => {
+    const lastFocus = document.activeElement;
+    const backdrop = document.createElement("div");
+    backdrop.id = "modalBackdrop";
+    const card = document.createElement("div");
+    card.className = "modal";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-modal", "true");
+    card.innerHTML =
+      (title ? `<div class="modal-title"></div>` : "") +
+      `<div class="modal-msg"></div>` +
+      `<div class="modal-acts">` +
+        `<button type="button" class="modal-btn" data-act="cancel"></button>` +
+        `<button type="button" class="modal-btn confirm${danger ? " danger" : ""}" data-act="confirm"></button>` +
+      `</div>`;
+    if (title) card.querySelector(".modal-title").textContent = title;   // textContent: never inject markup
+    card.querySelector(".modal-msg").textContent = message;
+    card.querySelector('[data-act="cancel"]').textContent = cancelLabel;
+    card.querySelector('[data-act="confirm"]').textContent = confirmLabel;
+    backdrop.appendChild(card);
+    document.body.appendChild(backdrop);
+    _modalState = { backdrop, resolve, lastFocus };
+    card.querySelector('[data-act="confirm"]').addEventListener("click", () => closeModal(true));
+    card.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal(false));
+    backdrop.addEventListener("mousedown", (e) => { if (e.target === backdrop) closeModal(false); });   // click OUTSIDE the card
+    // Default focus = Cancel, so a stray Enter never confirms a destructive action.
+    card.querySelector('[data-act="cancel"]').focus();
+  });
+}
+function closeModal(result) {
+  const st = _modalState; _modalState = null;
+  if (!st) return;
+  st.backdrop.remove();
+  if (st.lastFocus && st.lastFocus.isConnected) try { st.lastFocus.focus(); } catch {}
+  st.resolve(!!result);
+}
+// Modal key handling (capture): Escape cancels; Tab is trapped within the dialog.
+document.addEventListener("keydown", (e) => {
+  if (!_modalState) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeModal(false); return; }
+  if (e.key === "Tab") {
+    const f = [..._modalState.backdrop.querySelectorAll("button, [tabindex]:not([tabindex='-1'])")].filter(el => el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1], a = document.activeElement;
+    if (e.shiftKey && (a === first || !_modalState.backdrop.contains(a))) { e.preventDefault(); e.stopPropagation(); last.focus(); }
+    else if (!e.shiftKey && (a === last || !_modalState.backdrop.contains(a))) { e.preventDefault(); e.stopPropagation(); first.focus(); }
+  }
+}, true);
+window.confirmModal = confirmModal;   // test seam
+
+// Calm, non-blocking toast for NON-choice notices (e.g. "Can't delete the only file"). No backdrop;
+// fades in at the bottom, auto-dismisses, and stacks.
+let _toastHost = null;
+function toast(message, { ms = 3200 } = {}) {
+  if (!_toastHost) { _toastHost = document.createElement("div"); _toastHost.id = "toastHost"; document.body.appendChild(_toastHost); }
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.setAttribute("role", "status");
+  el.textContent = message;
+  _toastHost.appendChild(el);
+  setTimeout(() => { el.classList.add("leaving"); setTimeout(() => el.remove(), 220); }, Math.max(300, ms));
+}
+window.toast = toast;   // test seam
 
 // Open the popup for `anchorBtn` with a list of {label, icon, danger, run} items.
 function openPopMenu(anchorBtn, items) {

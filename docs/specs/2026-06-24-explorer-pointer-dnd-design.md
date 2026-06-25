@@ -33,6 +33,22 @@ Keep `project.order` (the **files** order) UNTOUCHED to avoid disturbing its man
   render alphabetical (today's behavior). **collab**: add `dirOrder` to the shared doc shape (LWW array, like
   `order`); encode/decode re-key folder paths the same way `order` file paths are encoded.
 
+### Implementation notes (R1, as built — two deliberate deviations from the prose above)
+1. **`dirOrder` is LOCAL-only, NOT collab-mirrored** — modeled exactly on `emptyDirs` (which the v1 shared doc
+   already drops). The collab doc shape stays `{files, order, entry}`, so there is **zero collab-schema change**
+   and every collab/round-trip battery is unaffected. `serialize`/`load`/`deserializeProject` carry `dirOrder`
+   (default `[]`); `encodeProject`/`docToRecord` do not. (A collab reconcile resets local folder order to
+   alphabetical — identical to how empty folders are not mirrored. Acceptable for v1.) This supersedes the
+   "add `dirOrder` to the shared doc shape" clause above.
+2. **`addFolder` does NOT seed `dirOrder`** (it does not "append"). With the alphabetical-fallback comparator
+   (`dirOrder` index else `+Infinity`, then name), seeding on create would make a brand-new folder sort to the
+   *top* (index 0, ahead of unlisted alphabetical siblings) — a position jump, and a behavior change for
+   un-reordered projects that contradicts the "preserves today's behavior" guarantee. `dirOrder` is populated
+   only by an explicit reorder (R2). `move`/`rename` re-key its entries (+ descendants) and `remove`/delete drop
+   them, so a reordered folder keeps its position through those ops. `serialize` also prunes `dirOrder` to
+   folders that still exist (hygiene). No existing battery asserts created-folder order; this is the
+   behavior-preserving reading the spec's own guarantee requires.
+
 ## 3. The pointer-events drag controller (replaces the native-DnD block)
 Replace the entire `dragstart`/`dragover`/`dragleave`/`drop`/`dragend` block + `draggable="true"` on rows.
 - **Start:** `pointerdown` on a `.tab` row (NOT on `.tab-menu`, `.dl`-less now, or an `input`) records the path +

@@ -934,6 +934,12 @@ const project = {
   files: {}, order: [], entry: "main.py", active: "main.py",
   // Created-but-empty folders persist here until a file lands in them (POSIX paths).
   emptyDirs: new Set(),
+  // #11: explicit folder render order (folder paths). ADDITIVE + LOCAL-only — modeled on emptyDirs:
+  // serialized/loaded/decoded but NOT collab-mirrored (the shared doc shape {files,order,entry} is
+  // unchanged). buildTree renders child dirs by their index here; dirs absent from it fall back to
+  // alphabetical (so un-reordered / old projects are unaffected). Populated only by an explicit
+  // reorder — addFolder does NOT seed it (a new folder must not jump position).
+  dirOrder: [],
   text(name) { return this.files[name].getValue(); },     // live Doc read, never cached
   isMulti() { return this.order.length > 1; },
   // Directories that actually contain a file (derived from path keys).
@@ -968,10 +974,14 @@ const project = {
     // by old readers).
     const occupied = this._fileDirs();
     const emptyDirs = [...this.emptyDirs].filter(d => !occupied.has(d));
+    // #11: persist folder order (additive, local-only). Keep only entries for folders that still
+    // exist (file-bearing OR empty) so stale paths don't accumulate across renames/deletes.
+    const allDirs = new Set([...occupied, ...this.emptyDirs]);
+    const dirOrder = this.dirOrder.filter(d => allDirs.has(d));
     // #9: persist the OPEN file as `entry` (kept in the schema for rollback / cross-version / older
     // readers that still run `entry`) so a saved/shared/reconciled project runs what was open. Falls
     // back to the stored entry if active is somehow not a live file.
-    return { files, order: [...this.order], entry: this.files[this.active] ? this.active : this.entry, emptyDirs };
+    return { files, order: [...this.order], entry: this.files[this.active] ? this.active : this.entry, emptyDirs, dirOrder };
   },
   // Build docs from a plain record; the `active` doc becomes editor.getDoc() (adopt).
   load(rec) {
@@ -980,6 +990,8 @@ const project = {
     for (const name of order) this.files[name] = new CodeMirror.Doc(rec.files[name] ?? "", "python");
     this.order = order;
     this.emptyDirs = new Set(Array.isArray(rec.emptyDirs) ? rec.emptyDirs : []);
+    // #11: restore folder order (additive; absent in old/collab records → [] = alphabetical).
+    this.dirOrder = Array.isArray(rec.dirOrder) ? [...rec.dirOrder] : [];
     this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
     this.active = order.includes(rec.active) ? rec.active : this.entry;
     if (typeof closedFolders !== "undefined") closedFolders.clear();   // S3 fold-in: don't leak collapsed-folder state across a load
@@ -1064,7 +1076,20 @@ const project = {
       if (pyodide) try { if (pyodide.FS.analyzePath(k).exists) pyodide.FS.unlink(k); } catch {}
     }
     if (this.emptyDirs.delete(path)) this.emptyDirs.add(newFolder);
+    this._rekeyDirOrder(path, newFolder);   // #11: keep the moved folder's render position
     return true;
+  },
+  // #11: re-key dirOrder when a folder path changes (move/rename) — the folder itself AND every
+  // descendant folder under its prefix. Keeps a reordered folder's position through a move/rename.
+  _rekeyDirOrder(oldPath, newPath) {
+    const prefix = oldPath + "/";
+    this.dirOrder = this.dirOrder.map(d =>
+      d === oldPath ? newPath : (d.startsWith(prefix) ? newPath + d.slice(oldPath.length) : d));
+  },
+  // #11: drop a folder (+ descendants) from dirOrder when it's deleted.
+  _dropDirOrder(path) {
+    const prefix = path + "/";
+    this.dirOrder = this.dirOrder.filter(d => d !== path && !d.startsWith(prefix));
   },
   remove(name) {
     if (this.order.length <= 1 || !this.files[name]) return false;
@@ -1138,7 +1163,11 @@ function deserializeProject(obj) {
   const emptyDirs = Array.isArray(obj.emptyDirs)
     ? obj.emptyDirs.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
     : [];
-  return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs };
+  // #11: carry folder order (additive; tolerated absent). Same validity shape as emptyDirs.
+  const dirOrder = Array.isArray(obj.dirOrder)
+    ? obj.dirOrder.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
+    : [];
+  return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs, dirOrder };
 }
 function savedProject() {
   try { const raw = localStorage.getItem(PROJECT_KEY); return raw ? deserializeProject(JSON.parse(raw)) : null; }
@@ -1783,10 +1812,16 @@ function renderTabs() {
   const tree = buildTree();
   const out = [];
   const emit = (node, depth) => {
-    // Folders first (alphabetical), then files in project order within this dir.
-    const dirNames = [...node.dirs.keys()].sort();
-    for (const seg of dirNames) {
-      const d = node.dirs.get(seg);
+    // Folders first, then files in project order within this dir. #11: child dirs render by their
+    // index in project.dirOrder (an explicit reorder); dirs absent from it fall back to alphabetical
+    // AFTER the listed ones — so un-reordered / old projects stay alphabetical (today's behavior).
+    const dirNodes = [...node.dirs.values()].sort((a, b) => {
+      const ia = project.dirOrder.indexOf(a.path), ib = project.dirOrder.indexOf(b.path);
+      const ka = ia < 0 ? Infinity : ia, kb = ib < 0 ? Infinity : ib;
+      if (ka !== kb) return ka - kb;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+    for (const d of dirNodes) {
       const open = isFolderOpen(d.path);
       const pad = 6 + depth * 14;
       out.push(`<div class="tab folder${open ? " open" : ""}" data-path="${escTab(d.path)}" draggable="true" style="padding-left:${pad}px">` +
@@ -2228,6 +2263,7 @@ function folderRenameInline(path) {
     for (const k of kids) project.rename(k, target + k.slice(path.length));
     mirrorMove(beforeFolderRename, project.order);   // S6b: mirror the per-descendant re-key
     if (project.emptyDirs.delete(path)) project.emptyDirs.add(target);
+    project._rekeyDirOrder(path, target);   // #11: keep the renamed folder's render position
     for (const p of [...closedFolders]) {
       if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(target + p.slice(path.length)); }
     }
@@ -2249,6 +2285,7 @@ function folderDelete(path) {
   for (const k of kids) project.remove(k);
   mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));   // S6b: mirror dropped children
   project.emptyDirs.delete(path);
+  project._dropDirOrder(path);   // #11: drop the deleted folder (+ descendants) from dirOrder
   for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
   if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
   selectedFolder = "";

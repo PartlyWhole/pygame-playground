@@ -222,7 +222,7 @@ const px = await page.evaluate(() => {
 });
 console.log('\n  canvas pixel at sprite center (48,48):', px);
 
-await page.screenshot({ path: '/Users/alan/Desktop/pygame-playground/test/spike-assets.png' });
+await page.screenshot({ path: './test/spike-assets.png' });
 
 // Surface any SDL/emscripten audio chatter.
 const audioLogs = logs.filter(l => /audio|mixer|sdl|webaudio|gesture|autoplay/i.test(l));

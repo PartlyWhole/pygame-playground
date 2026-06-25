@@ -3,7 +3,7 @@
 **Date:** 2026-06-23
 **Status:** De-risk complete (spike green). Decision pending.
 **Scope:** Should live collaboration rooms expand from single-file to multi-file? This report covers what the room is today, the proposed CRDT shape, the full rework cost, what the spike proved vs. what stays as risk, and a recommendation framed for a team go/no-go.
-**Spike:** `/Users/alan/Desktop/pygame-playground/test/spike-collab-multifile.mjs` — `node test/spike-collab-multifile.mjs` (live relay 12/12, exit 0; `SPIKE_NO_NET=1` offline fallback 13/13, exit 0).
+**Spike:** `$HOME/Desktop/pygame-playground/test/spike-collab-multifile.mjs` — `node test/spike-collab-multifile.mjs` (live relay 12/12, exit 0; `SPIKE_NO_NET=1` offline fallback 13/13, exit 0).
 **Constraint:** No `index.html` changes were made; this is analysis only.
 
 ---

@@ -1,15 +1,16 @@
 // Screenshot the IA prototypes (served at :8923) for review. Throwaway tooling.
-import { chromium } from '/Users/alan/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs';
 import { readdirSync, mkdirSync } from 'node:fs';
+const { chromium } = await import(process.env.PLAYWRIGHT_CORE
+  || (process.env.HOME + '/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs'));
 
 const cacheDir = `${process.env.HOME}/Library/Caches/ms-playwright`;
 const headless = readdirSync(cacheDir).filter(d => d.startsWith('chromium_headless_shell-')).sort().pop();
 const exe = `${cacheDir}/${headless}/chrome-headless-shell-mac-arm64/chrome-headless-shell`;
-mkdirSync('/Users/alan/Desktop/pygame-playground/proto/shots', { recursive: true });
+mkdirSync('./proto/shots', { recursive: true });
 
 const browser = await chromium.launch({ executablePath: exe, headless: true });
 const base = 'http://localhost:8923/proto/';
-const out = '/Users/alan/Desktop/pygame-playground/proto/shots/';
+const out = './proto/shots/';
 const pages = ['index.html', 'ia-a.html', 'ia-b.html', 'ia-c.html'];
 let errs = 0;
 

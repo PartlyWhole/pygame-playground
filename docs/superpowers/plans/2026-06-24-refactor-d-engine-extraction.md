@@ -39,9 +39,9 @@
 ## How to run the suite (used by every "run tests" step)
 
 ```bash
-# from /Users/alan/Desktop/pygame-playground
+# from $HOME/Desktop/pygame-playground
 pkill -f "http.server 8923" 2>/dev/null; sleep 1
-python3 -m http.server 8923 --directory /Users/alan/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
+python3 -m http.server 8923 --directory $HOME/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
 sleep 1
 # Run SEQUENTIALLY — concurrent Pyodide/CDN loads flake. URL is argv[2].
 for b in verify.mjs \
@@ -136,7 +136,7 @@ process.exit(failn ? 1 : 0);
 
 ```bash
 pkill -f "http.server 8923" 2>/dev/null; sleep 1
-python3 -m http.server 8923 --directory /Users/alan/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
+python3 -m http.server 8923 --directory $HOME/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
 sleep 1
 node test/engine-extraction.mjs http://localhost:8923/
 pkill -f "http.server 8923" 2>/dev/null
@@ -148,7 +148,7 @@ Expected: **FAIL** — C1 errors (`vendor/engine.mjs` 404 / no such module), so 
 Build the module from the *current* `index.html` so the Python bytes are guaranteed identical. The const decl/close lines are: `BOOT_PY` decl at `867`, close `` `; `` at `1104` (body `868–1103`); the `multi-file run model` comment at `1106–1112`; `PROJECT_PY` decl at `1113`, close at `1432` (body `1114–1431`). **Re-confirm these four line numbers with `grep -n "BOOT_PY = String.raw\|PROJECT_PY = String.raw\|^\`;" index.html` before slicing — they shift if index.html was edited.**
 
 ```bash
-cd /Users/alan/Desktop/pygame-playground
+cd $HOME/Desktop/pygame-playground
 {
   cat <<'HDR'
 // vendor/engine.mjs — cooperative pygame engine (hand-authored, no build step).
@@ -180,7 +180,7 @@ HDR
 - [ ] **Step 4: Prove the moved Python is byte-identical (P1 acceptance gate)**
 
 ```bash
-cd /Users/alan/Desktop/pygame-playground
+cd $HOME/Desktop/pygame-playground
 # Extract the body BETWEEN the two backtick markers in the new module and diff against the
 # pre-edit index.html bodies (index.html is still unedited at this point).
 node -e '
@@ -241,7 +241,7 @@ Everything else in `boot()` is unchanged. The eager kick `const booted = boot()`
 
 ```bash
 pkill -f "http.server 8923" 2>/dev/null; sleep 1
-python3 -m http.server 8923 --directory /Users/alan/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
+python3 -m http.server 8923 --directory $HOME/Desktop/pygame-playground >/tmp/pp-http.log 2>&1 &
 sleep 1
 node test/engine-extraction.mjs http://localhost:8923/
 pkill -f "http.server 8923" 2>/dev/null

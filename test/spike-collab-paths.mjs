@@ -52,7 +52,7 @@
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 
-const BUNDLE = '/Users/alan/Desktop/pygame-playground/vendor/automerge-collab.mjs';
+const BUNDLE = './vendor/automerge-collab.mjs';
 const AM = await import(pathToFileURL(BUNDLE).href);
 const { Repo, WebSocketClientAdapter, updateText } = AM;
 

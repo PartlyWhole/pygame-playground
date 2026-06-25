@@ -16,7 +16,7 @@ prior orchestrator session already did the de-risk groundwork (results below) �
 blindly redo it.
 
 ## The project
-- Repo: `/Users/alan/Desktop/pygame-playground` — a SINGLE static `index.html` deployed on GitHub
+- Repo: `$HOME/Desktop/pygame-playground` — a SINGLE static `index.html` deployed on GitHub
   Pages (public repo `PartlyWhole/pygame-playground`, live at
   https://partlywhole.github.io/pygame-playground/). Pushing `main` publishes the live site.
 - Stack: Pyodide 0.27.2 + pygame-ce, CodeMirror 5, no backend, no build step for the app, no API
@@ -204,7 +204,7 @@ Rework the toolbar/shell "starting first from what we want the user to be able t
   per-change authorization — prior approval never carries to the next push. After any deploy,
   re-run verify.mjs + the feature batteries against the live URL and confirm green.
 - Persistent memory dir:
-  `/Users/alan/.claude/projects/-Users-alan-Desktop-pygame-playground/memory/` — recalled facts
+  `~/.claude/projects/<project>/memory/` — recalled facts
   are background context; verify any named file/flag still exists before relying on it. The user
   delegates big builds end-to-end, reviews the finished local `main` after, wants forks surfaced,
   and enforces no-deploy-without-explicit-auth.

@@ -12,11 +12,11 @@
 
 ## Conventions for every task
 
-- **Server:** keep a static server running: `cd /Users/alan/Desktop/pygame-playground && python3 -m http.server 8923`. If it died, restart it (backgrounded).
+- **Server:** keep a static server running: `cd $HOME/Desktop/pygame-playground && python3 -m http.server 8923`. If it died, restart it (backgrounded).
 - **Headless harness:** all browser checks use Trellis's playwright-core. The boilerplate launcher (reused verbatim across tasks) is:
 
 ```js
-import { chromium } from '/Users/alan/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs';
+import { chromium } from '$HOME/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs';
 import { readdirSync } from 'node:fs';
 const cacheDir = process.env.HOME + '/Library/Caches/ms-playwright';
 const shell = readdirSync(cacheDir).filter(d => d.startsWith('chromium_headless_shell-')).sort().pop();
@@ -24,7 +24,7 @@ const exe = cacheDir + '/' + shell + '/chrome-headless-shell-mac-arm64/chrome-he
 export const launch = () => chromium.launch({ executablePath: exe });
 ```
 
-Save that once as `/Users/alan/Desktop/pygame-playground/test/_harness.mjs` in Task 0 and import it everywhere.
+Save that once as `$HOME/Desktop/pygame-playground/test/_harness.mjs` in Task 0 and import it everywhere.
 - **Commit cadence:** commit after each task's tests pass. Do **not** push until Task 8 (final gate) and the user authorizes the deploy.
 - **Regression invariant:** `node verify.mjs` (16 checks) must stay green after every task — collaboration is off by default, so the solo path must never regress.
 
@@ -44,7 +44,7 @@ Create `test/_harness.mjs` with exactly the launcher boilerplate from "Conventio
 
 Run:
 ```bash
-cd /Users/alan/Desktop/pygame-playground && node --input-type=module -e "
+cd $HOME/Desktop/pygame-playground && node --input-type=module -e "
 import { launch } from './test/_harness.mjs';
 const b = await launch(); const p = await b.newPage();
 await p.goto('http://localhost:8923/'); console.log('harness OK:', await p.title()); await b.close();"
@@ -122,7 +122,7 @@ If the `.wasm=file` loader path does not initialize at runtime, fall back to bun
 
 Run:
 ```bash
-cd /Users/alan/Desktop/pygame-playground/build && npm install && npm run build
+cd $HOME/Desktop/pygame-playground/build && npm install && npm run build
 ```
 Expected: `built vendor/automerge-collab.mjs`, and `ls ../vendor` shows the bundle (+ `automerge.wasm` if external).
 
@@ -173,7 +173,7 @@ try {
 
 - [ ] **Step 5: Run it**
 
-Run: `cd /Users/alan/Desktop/pygame-playground && node test/spike-bundle.mjs`
+Run: `cd $HOME/Desktop/pygame-playground && node test/spike-bundle.mjs`
 Expected: `B sees code: "hello"`, `A observed B edit: true`, `BUNDLE SPIKE OK`.
 
 - [ ] **Step 6: If it fails, iterate on the bundler (Step 2 fallback), not the app**

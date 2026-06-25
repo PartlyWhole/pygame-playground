@@ -16,7 +16,7 @@ take the redesign through design → plan → implement in cohesive, tested slic
 Fresh context; everything you need is below or in the repo.
 
 ## The project
-- Repo: /Users/alan/Desktop/pygame-playground — a SINGLE static index.html on GitHub Pages (public repo
+- Repo: $HOME/Desktop/pygame-playground — a SINGLE static index.html on GitHub Pages (public repo
   PartlyWhole/pygame-playground, live at https://partlywhole.github.io/pygame-playground/). Pushing main
   publishes the live site.
 - Stack: Pyodide 0.27.2 + pygame-ce, CodeMirror 5, no backend, no build step for the app, no API keys.
@@ -151,7 +151,7 @@ START; restart if a design:* command is missing.
 ## The user (delegate-and-review)
 Delegates big builds end to end and reviews the finished local main after; wants genuine forks surfaced
 ONE AT A TIME; enforces no-deploy-without-explicit-auth; values de-risk first. Persistent memory dir:
-/Users/alan/.claude/projects/-Users-alan-Desktop-pygame-playground/memory/ — recalled facts are background
+~/.claude/projects/<project>/memory/ — recalled facts are background
 context; verify any named file/flag still exists before relying on it. Environment: macOS, zsh; use gh for
 GitHub; git user is configured.
 

@@ -1,6 +1,9 @@
 // Headless verification of the pygame playground (borrows Trellis's playwright-core read-only).
-import { chromium } from '/Users/alan/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs';
 import { readdirSync } from 'node:fs';
+// playwright-core borrowed read-only from a sibling checkout; override via PLAYWRIGHT_CORE env,
+// else default under $HOME (no hardcoded username in the repo).
+const { chromium } = await import(process.env.PLAYWRIGHT_CORE
+  || (process.env.HOME + '/Desktop/Trellis/verification/node_modules/playwright-core/index.mjs'));
 
 const cacheDir = `${process.env.HOME}/Library/Caches/ms-playwright`;
 const headless = readdirSync(cacheDir).filter(d => d.startsWith('chromium_headless_shell-')).sort().pop();
@@ -192,7 +195,7 @@ const q2 = await frame();
 console.log('run after pygame.quit() animates:', q1 !== q2 ? 'YES' : 'NO');
 if (q1 === q2) fail('canvas dead after a prior pygame.quit()');
 
-await page.screenshot({ path: '/Users/alan/Desktop/pygame-playground/verify-screenshot.png' });
+await page.screenshot({ path: './verify-screenshot.png' });
 
 const realErrors = errors.filter(e => !/favicon/.test(e));
 console.log('console errors:', realErrors.length ? realErrors : 'none');

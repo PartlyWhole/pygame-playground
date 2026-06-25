@@ -300,10 +300,28 @@ else fail('no warning badge on the MP3 .tab.asset row');
 }
 
 // ================================================================================================
-// (e) DRAG-MOVE AN ASSET ROW INTO A FOLDER updates assetFS path + MEMFS path. Synthetic HTML5
-//     dragstart/dragover/drop with a real DataTransfer (the explorer-tree.mjs protocol). The #tabs
-//     drop handler must branch: an asset drag delegates to assetFS.move(dragged, dest). (design §5, §7e)
+// (e) DRAG-MOVE AN ASSET ROW INTO A FOLDER updates assetFS path + MEMFS path — via a REAL pointer
+//     gesture. #11 replaced native HTML5 DnD (which fired ZERO events from a headless mouse) with a
+//     pointer-events controller that branches an asset drag to assetFS.move(dragged, dest). (design §5, §7e)
 // ================================================================================================
+// #11 pointer-gesture helper: press the src row's center, cross the ~5px threshold, settle on the
+// folder's middle band (= move-into), release — firing the real pointerdown/move/up the controller handles.
+const rectOf = (sel) => page.evaluate((s) => {
+  const el = document.querySelector(s); if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, cy: r.top + r.height / 2, top: r.top, height: r.height };
+}, sel);
+async function pointerDrag(srcSel, dstSel, yFrac = 0.5) {
+  const s = await rectOf(srcSel), d = await rectOf(dstSel);
+  if (!s || !d) return { srcFound: !!s, dstFound: !!d };
+  const ty = d.top + d.height * yFrac;
+  await page.mouse.move(s.x, s.cy); await page.mouse.down();
+  await page.mouse.move(s.x, s.cy + 8, { steps: 2 });
+  await page.mouse.move(d.x, ty, { steps: 5 });
+  await page.mouse.move(d.x, ty, { steps: 2 });
+  await page.mouse.up();
+  return { srcFound: true, dstFound: true };
+}
 {
   await page.evaluate(() => {
     window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
@@ -314,19 +332,7 @@ else fail('no warning badge on the MP3 .tab.asset row');
     { name: 'jump.wav', mimeType: 'audio/wav', buffer: buf(WAV_B64) });
   await page.waitForTimeout(200);
   await ensureExplorerOpen();
-  const dnd = await page.evaluate(() => {
-    const src = document.querySelector('#tabs .tab.asset[data-name="jump.wav"]');
-    const dst = document.querySelector('#tabs .tab.folder[data-path="sounds"]');
-    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
-    const dt = new DataTransfer();
-    dt.setData('text/plain', src.getAttribute('data-name'));
-    const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
-    src.dispatchEvent(mk('dragstart', src)[0]);
-    dst.dispatchEvent(mk('dragover', dst)[0]);
-    dst.dispatchEvent(mk('drop', dst)[0]);
-    src.dispatchEvent(mk('dragend', src)[0]);
-    return { srcFound: true, dstFound: true };
-  });
+  const dnd = await pointerDrag('#tabs .tab.asset[data-name="jump.wav"]', '#tabs .tab.folder[data-path="sounds"]', 0.5);
   await page.waitForTimeout(300);
   const moved = await page.evaluate(() => ({
     newInList: window.assetFS.list.some(a => a.name === 'sounds/jump.wav'),

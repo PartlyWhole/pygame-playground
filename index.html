@@ -934,6 +934,12 @@ const project = {
   files: {}, order: [], entry: "main.py", active: "main.py",
   // Created-but-empty folders persist here until a file lands in them (POSIX paths).
   emptyDirs: new Set(),
+  // #11: explicit folder render order (folder paths). ADDITIVE + LOCAL-only — modeled on emptyDirs:
+  // serialized/loaded/decoded but NOT collab-mirrored (the shared doc shape {files,order,entry} is
+  // unchanged). buildTree renders child dirs by their index here; dirs absent from it fall back to
+  // alphabetical (so un-reordered / old projects are unaffected). Populated only by an explicit
+  // reorder — addFolder does NOT seed it (a new folder must not jump position).
+  dirOrder: [],
   text(name) { return this.files[name].getValue(); },     // live Doc read, never cached
   isMulti() { return this.order.length > 1; },
   // Directories that actually contain a file (derived from path keys).
@@ -968,10 +974,14 @@ const project = {
     // by old readers).
     const occupied = this._fileDirs();
     const emptyDirs = [...this.emptyDirs].filter(d => !occupied.has(d));
+    // #11: persist folder order (additive, local-only). Keep only entries for folders that still
+    // exist (file-bearing OR empty) so stale paths don't accumulate across renames/deletes.
+    const allDirs = new Set([...occupied, ...this.emptyDirs]);
+    const dirOrder = this.dirOrder.filter(d => allDirs.has(d));
     // #9: persist the OPEN file as `entry` (kept in the schema for rollback / cross-version / older
     // readers that still run `entry`) so a saved/shared/reconciled project runs what was open. Falls
     // back to the stored entry if active is somehow not a live file.
-    return { files, order: [...this.order], entry: this.files[this.active] ? this.active : this.entry, emptyDirs };
+    return { files, order: [...this.order], entry: this.files[this.active] ? this.active : this.entry, emptyDirs, dirOrder };
   },
   // Build docs from a plain record; the `active` doc becomes editor.getDoc() (adopt).
   load(rec) {
@@ -980,6 +990,8 @@ const project = {
     for (const name of order) this.files[name] = new CodeMirror.Doc(rec.files[name] ?? "", "python");
     this.order = order;
     this.emptyDirs = new Set(Array.isArray(rec.emptyDirs) ? rec.emptyDirs : []);
+    // #11: restore folder order (additive; absent in old/collab records → [] = alphabetical).
+    this.dirOrder = Array.isArray(rec.dirOrder) ? [...rec.dirOrder] : [];
     this.entry = order.includes(rec.entry) ? rec.entry : (order.includes("main.py") ? "main.py" : order[0]);
     this.active = order.includes(rec.active) ? rec.active : this.entry;
     if (typeof closedFolders !== "undefined") closedFolders.clear();   // S3 fold-in: don't leak collapsed-folder state across a load
@@ -1064,7 +1076,20 @@ const project = {
       if (pyodide) try { if (pyodide.FS.analyzePath(k).exists) pyodide.FS.unlink(k); } catch {}
     }
     if (this.emptyDirs.delete(path)) this.emptyDirs.add(newFolder);
+    this._rekeyDirOrder(path, newFolder);   // #11: keep the moved folder's render position
     return true;
+  },
+  // #11: re-key dirOrder when a folder path changes (move/rename) — the folder itself AND every
+  // descendant folder under its prefix. Keeps a reordered folder's position through a move/rename.
+  _rekeyDirOrder(oldPath, newPath) {
+    const prefix = oldPath + "/";
+    this.dirOrder = this.dirOrder.map(d =>
+      d === oldPath ? newPath : (d.startsWith(prefix) ? newPath + d.slice(oldPath.length) : d));
+  },
+  // #11: drop a folder (+ descendants) from dirOrder when it's deleted.
+  _dropDirOrder(path) {
+    const prefix = path + "/";
+    this.dirOrder = this.dirOrder.filter(d => d !== path && !d.startsWith(prefix));
   },
   remove(name) {
     if (this.order.length <= 1 || !this.files[name]) return false;
@@ -1138,7 +1163,11 @@ function deserializeProject(obj) {
   const emptyDirs = Array.isArray(obj.emptyDirs)
     ? obj.emptyDirs.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
     : [];
-  return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs };
+  // #11: carry folder order (additive; tolerated absent). Same validity shape as emptyDirs.
+  const dirOrder = Array.isArray(obj.dirOrder)
+    ? obj.dirOrder.filter(d => typeof d === "string" && !d.startsWith("/") && d.split("/").every(isFolderSegment))
+    : [];
+  return { files: obj.files, order, entry: obj.entry, active: obj.active, emptyDirs, dirOrder };
 }
 function savedProject() {
   try { const raw = localStorage.getItem(PROJECT_KEY); return raw ? deserializeProject(JSON.parse(raw)) : null; }
@@ -1783,13 +1812,19 @@ function renderTabs() {
   const tree = buildTree();
   const out = [];
   const emit = (node, depth) => {
-    // Folders first (alphabetical), then files in project order within this dir.
-    const dirNames = [...node.dirs.keys()].sort();
-    for (const seg of dirNames) {
-      const d = node.dirs.get(seg);
+    // Folders first, then files in project order within this dir. #11: child dirs render by their
+    // index in project.dirOrder (an explicit reorder); dirs absent from it fall back to alphabetical
+    // AFTER the listed ones — so un-reordered / old projects stay alphabetical (today's behavior).
+    const dirNodes = [...node.dirs.values()].sort((a, b) => {
+      const ia = project.dirOrder.indexOf(a.path), ib = project.dirOrder.indexOf(b.path);
+      const ka = ia < 0 ? Infinity : ia, kb = ib < 0 ? Infinity : ib;
+      if (ka !== kb) return ka - kb;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+    for (const d of dirNodes) {
       const open = isFolderOpen(d.path);
       const pad = 6 + depth * 14;
-      out.push(`<div class="tab folder${open ? " open" : ""}" data-path="${escTab(d.path)}" draggable="true" style="padding-left:${pad}px">` +
+      out.push(`<div class="tab folder${open ? " open" : ""}" data-path="${escTab(d.path)}" style="padding-left:${pad}px">` +
         `<span class="caret" aria-hidden="true">▸</span>` +
         `<span class="ic" aria-hidden="true">📁</span>` +
         `<span class="tab-name">${escTab(d.name)}</span>` +
@@ -1800,14 +1835,14 @@ function renderTabs() {
     for (const f of node.files) {
       const pad = 6 + depth * 14 + 12;   // +12 to align past where a caret would sit
       if (f.asset) {
-        out.push(`<div class="tab asset${f.active ? " active" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+        out.push(`<div class="tab asset${f.active ? " active" : ""}" data-name="${escTab(f.path)}" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">${f.kind === "image" ? "🖼️" : f.kind === "audio" ? "🔊" : "📄"}</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
           `<button class="tab-menu" title="Asset actions" aria-haspopup="menu" aria-expanded="false" aria-label="Asset actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       } else {
-        out.push(`<div class="tab py${f.active ? " active" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+        out.push(`<div class="tab py${f.active ? " active" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
@@ -1826,6 +1861,9 @@ const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.sli
 // #7: per-row download moved into the ⋯ menu (file → downloadItem, folder → downloadFolder zip,
 // asset → downloadItem). The standalone .dl button + its click branch are retired.
 tabsEl.addEventListener("click", (e) => {
+  // #11: a pointer-drag ends by firing a click — swallow it so a completed drag doesn't ALSO
+  // open/toggle the row it landed on. Reset by the next pointerdown (covers capture-suppressed clicks).
+  if (suppressClick) { suppressClick = false; return; }
   const folder = e.target.closest(".tab.folder");
   if (folder) {
     const path = folder.dataset.path;
@@ -1849,118 +1887,201 @@ tabsEl.addEventListener("click", (e) => {
   renderTabs();
 });
 
-// ----- drag & drop (move-into-folder + reorder + descendant guard), from the proto.
-// The dragged path rides BOTH a closure var and the DataTransfer text/plain (the test
-// drives either). A move/reorder mutates the model + render — never editor.setValue.
-let dragPath = null;
-let dropLineEl = null;
-function clearDropMarks() {
-  tabsEl.querySelectorAll(".drop-into").forEach(r => r.classList.remove("drop-into"));
-  if (dropLineEl) { dropLineEl.remove(); dropLineEl = null; }
-}
-// dest folder is a descendant of (or equal to) the dragged folder path → block.
+// ----- pointer-events drag controller (#11) — replaces native HTML5 DnD, which is UNTESTABLE in
+// headless (a real mouse gesture fires ZERO native-drag events) and fragile (the drop-line was
+// rebuilt + re-inserted every dragover, so hovering it removed it and DOM mutation shifted rows under
+// the cursor). This drives off pointerdown/move/up (dispatchable + reliable cross-browser), resolves
+// the drop target by CURSOR-Y over the rendered rows (NOT e.target), reuses ONE drop indicator, and
+// tells a drag from a click via a small movement threshold. It reorders files (project.order) and
+// folders (project.dirOrder, siblings only) and moves files/folders/assets into a folder. Never
+// editor.setValue. Escape / pointercancel abort cleanly.
+const DRAG_THRESHOLD = 5;   // px of movement before a press becomes a drag (below this stays a click)
+let drag = null;            // active gesture state (see pointerdown), or null when idle
+let suppressClick = false;  // swallow the click a completed drag would otherwise fire (open/toggle)
+
+// dest folder is the dragged folder itself or a descendant of it → block (can't move a folder in there).
 function isDescendantDrop(draggedFolder, destFolder) {
   if (!draggedFolder) return false;
   return destFolder === draggedFolder || (destFolder + "/").startsWith(draggedFolder + "/");
 }
-tabsEl.addEventListener("dragstart", (e) => {
+
+const _rowRects = (sel) => [...tabsEl.querySelectorAll(sel)].map(el => ({ el, rect: el.getBoundingClientRect() }));
+const _within = (items, y) => { for (const it of items) if (y >= it.rect.top && y <= it.rect.bottom) return it.el; return null; };
+function _nearest(items, y) {
+  let best = null, bd = Infinity;
+  for (const it of items) {
+    const d = y < it.rect.top ? it.rect.top - y : (y > it.rect.bottom ? y - it.rect.bottom : 0);
+    if (d < bd) { bd = d; best = it.el; }
+  }
+  return best;
+}
+
+// Resolve the drop INTENT from the cursor Y over the rendered rows. Returns one of:
+//   { type:"into", folder }                 move the dragged item into this folder
+//   { type:"reorder-file", ref, after }     reposition the dragged file before/after this file (project.order)
+//   { type:"reorder-folder", ref, after }   reposition the dragged folder before/after this SIBLING (dirOrder)
+// or null (no valid target under the cursor).
+function computeDrop(y) {
+  const draggedDir = dirname(drag.path);
+  if (drag.isFolder) {
+    // folder drag → targets are folder rows that are not the dragged folder or a descendant of it.
+    const folders = _rowRects(".tab.folder").filter(it => it.el.dataset.path && !isDescendantDrop(drag.path, it.el.dataset.path));
+    const inside = _within(folders, y);
+    if (inside) {
+      const r = inside.getBoundingClientRect();
+      const frac = (y - r.top) / r.height;
+      const sibling = dirname(inside.dataset.path) === draggedDir;
+      if (frac >= 0.25 && frac <= 0.75) return { type: "into", folder: inside.dataset.path };   // middle band
+      if (sibling) return { type: "reorder-folder", ref: inside.dataset.path, after: frac > 0.5 };
+      return { type: "into", folder: inside.dataset.path };   // non-sibling edge → move-into
+    }
+    // not over any folder → reorder to the nearest SIBLING folder's edge (dragged past the ends).
+    const near = _nearest(folders.filter(it => dirname(it.el.dataset.path) === draggedDir), y);
+    if (!near) return null;
+    const r = near.getBoundingClientRect();
+    return { type: "reorder-folder", ref: near.dataset.path, after: y > r.top + r.height / 2 };
+  }
+  // file / asset drag → a folder under the cursor means move-into it (unless the item is already there).
+  const fhit = _within(_rowRects(".tab.folder"), y);
+  if (fhit && fhit.dataset.path !== draggedDir) return { type: "into", folder: fhit.dataset.path };
+  if (drag.isAsset) return null;   // assets have no order (v1) — only move-into a folder
+  // otherwise reorder among files (project.order), relative to the nearest file row.
+  const near = _nearest(_rowRects(".tab.py").filter(it => it.el.dataset.name !== drag.path), y);
+  if (!near) return null;
+  const r = near.getBoundingClientRect();
+  return { type: "reorder-file", ref: near.dataset.name, after: (y - r.top) > r.height / 2 };
+}
+
+// Paint the resolved intent: the ONE reused indicator line for a reorder, a .drop-into highlight for a
+// move-into. The caller (pointermove) clears the previous marks BEFORE measuring, so the 2px indicator
+// never perturbs the rects computeDrop reads (the residual of the native drop-line thrash this kills).
+function paintDrop() {
+  const d = drag.drop;
+  if (!d) return;
+  if (d.type === "into") {
+    const el = tabsEl.querySelector(`.tab.folder[data-path="${cssAttr(d.folder)}"]`);
+    if (el) { el.classList.add("drop-into"); drag.intoEl = el; }
+  } else {
+    const sel = d.type === "reorder-folder" ? `.tab.folder[data-path="${cssAttr(d.ref)}"]` : `.tab.py[data-name="${cssAttr(d.ref)}"]`;
+    const el = tabsEl.querySelector(sel);
+    if (el) { if (d.after) el.after(drag.indicator); else el.before(drag.indicator); }
+  }
+}
+
+// Best-effort edge auto-scroll while dragging near the panel's top/bottom.
+function autoScroll(y) {
+  const sc = drag.scroller;
+  if (!sc) return;
+  const r = sc.getBoundingClientRect(), M = 24;
+  if (y < r.top + M) sc.scrollTop -= Math.ceil((r.top + M - y) / 4);
+  else if (y > r.bottom - M) sc.scrollTop += Math.ceil((y - (r.bottom - M)) / 4);
+}
+
+// Apply the resolved drop to the MODEL (+ render + persist + collab mirror). Never editor.setValue.
+function applyDrop() {
+  const d = drag.drop, path = drag.path;
+  if (!d) return;
+  if (d.type === "into") {
+    const dest = d.folder;
+    if (drag.isAsset) {
+      // an ASSET re-keys via assetFS.move (atomic IndexedDB + MEMFS + list + warn-on-move; async,
+      // re-renders itself). Assets can't be folders, so no descendant guard is needed.
+      if (dest === dirname(path)) return;
+      assetFS.move(path, dest).then(() => { closedFolders.delete(dest); flushSave(); });
+      return;
+    }
+    if (drag.isFolder && isDescendantDrop(path, dest)) return;   // can't move a folder into itself/descendant
+    if (!drag.isFolder && dest === dirname(path)) return;        // already there
+    const beforeMove = [...project.order];
+    if (project.move(path, dest)) {
+      closedFolders.delete(dest);
+      mirrorMove(beforeMove, project.order);   // S6b: mirror each re-keyed child to peers (positional)
+      renderTabs(); flushSave();
+    }
+  } else if (d.type === "reorder-file") {
+    if (!project.files[path] || !project.files[d.ref] || path === d.ref) return;
+    const ord = project.order;
+    ord.splice(ord.indexOf(path), 1);
+    const idx = ord.indexOf(d.ref) + (d.after ? 1 : 0);
+    ord.splice(idx, 0, path);
+    roomOp(dd => { dd.order = project.order.map(encPath); });   // S6b: files only changed position
+    renderTabs(); flushSave();
+  } else if (d.type === "reorder-folder") {
+    if (path === d.ref || dirname(path) !== dirname(d.ref)) return;   // siblings only
+    const parent = dirname(path);
+    // the current sibling render order (DOM order), with `path` repositioned relative to `ref`.
+    const seq = [...tabsEl.querySelectorAll(".tab.folder")].map(r => r.dataset.path)
+      .filter(p => dirname(p) === parent && p !== path);
+    const refIdx = seq.indexOf(d.ref);
+    if (refIdx < 0) return;   // ref row vanished mid-gesture (e.g. a concurrent remote re-render) — bail
+    seq.splice(refIdx + (d.after ? 1 : 0), 0, path);
+    // Write the sibling block to dirOrder in the new order. buildTree's emit() only ever compares
+    // dirs with the SAME parent, so re-appending this block (other dirs kept in place) sets the order.
+    project.dirOrder = [...project.dirOrder.filter(p => !seq.includes(p)), ...seq];
+    renderTabs(); flushSave();
+  }
+}
+
+function dragCleanup() {
+  if (!drag) return;
+  if (drag.row) { drag.row.classList.remove("drag-ghost"); try { drag.row.releasePointerCapture(drag.pointerId); } catch {} }
+  if (drag.indicator && drag.indicator.parentNode) drag.indicator.remove();
+  if (drag.intoEl) drag.intoEl.classList.remove("drop-into");
+  drag = null;
+}
+
+function scrollParentOf(el) {
+  let n = el && el.parentElement;
+  while (n && n !== document.body) {
+    const s = getComputedStyle(n);
+    if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight) return n;
+    n = n.parentElement;
+  }
+  return null;
+}
+
+tabsEl.addEventListener("pointerdown", (e) => {
+  if (drag) return;                                      // a gesture is already active (e.g. a 2nd pointer)
+  suppressClick = false;                                 // start of a fresh gesture
+  if (e.button !== 0) return;                            // primary button only
   const row = e.target.closest(".tab");
   if (!row) return;
-  dragPath = row.dataset.name || row.dataset.path || null;
-  if (!dragPath) return;
-  row.classList.add("drag-ghost");
-  try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragPath); } catch {}
+  if (e.target.closest(".tab-menu") || e.target.closest("input")) return;   // ⋯ menu + inline inputs never drag
+  const path = row.dataset.name || row.dataset.path;
+  if (!path) return;
+  drag = {
+    path, isFolder: row.classList.contains("folder"), isAsset: row.classList.contains("asset"),
+    startX: e.clientX, startY: e.clientY, dragging: false, row, indicator: null, intoEl: null,
+    drop: null, pointerId: e.pointerId, scroller: scrollParentOf(tabsEl),
+  };
 });
-tabsEl.addEventListener("dragend", (e) => {
-  const row = e.target.closest(".tab");
-  if (row) row.classList.remove("drag-ghost");
-  dragPath = null; clearDropMarks();
-});
-tabsEl.addEventListener("dragover", (e) => {
-  const dragged = dragPath || (e.dataTransfer && e.dataTransfer.getData && (() => { try { return e.dataTransfer.getData("text/plain"); } catch { return null; } })());
-  if (!dragged) return;
-  const folder = e.target.closest(".tab.folder");
-  const fileRow = e.target.closest(".tab[data-name]");
+
+window.addEventListener("pointermove", (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;   // only the gesture's own pointer
+  if (!drag.dragging) {
+    if (Math.abs(e.clientX - drag.startX) < DRAG_THRESHOLD && Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD) return;
+    drag.dragging = true;                                // crossed the threshold → begin dragging
+    drag.row.classList.add("drag-ghost");
+    drag.indicator = document.createElement("div");
+    drag.indicator.className = "drop-line";
+    try { drag.row.setPointerCapture(drag.pointerId); } catch {}
+  }
   e.preventDefault();
-  clearDropMarks();
-  if (folder) {
-    const dest = folder.dataset.path;
-    // a folder being dragged into itself / a descendant is blocked.
-    const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
-    if (draggedIsFolder && isDescendantDrop(dragged, dest)) return;
-    if (dest === dirname(dragged) && !draggedIsFolder) return;   // already there
-    folder.classList.add("drop-into");
-  } else if (fileRow) {
-    const r = fileRow.getBoundingClientRect();
-    const after = (e.clientY - r.top) > r.height / 2;
-    dropLineEl = document.createElement("div");
-    dropLineEl.className = "drop-line";
-    if (after) fileRow.after(dropLineEl); else fileRow.before(dropLineEl);
-  }
+  // Clear last frame's marks BEFORE measuring, so the 2px indicator never perturbs the rects.
+  if (drag.indicator.parentNode) drag.indicator.remove();
+  if (drag.intoEl) { drag.intoEl.classList.remove("drop-into"); drag.intoEl = null; }
+  drag.drop = computeDrop(e.clientY);
+  paintDrop();
+  autoScroll(e.clientY);
 });
-tabsEl.addEventListener("dragleave", (e) => {
-  const row = e.target.closest(".tab");
-  if (row) row.classList.remove("drop-into");
+
+window.addEventListener("pointerup", (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;   // ignore a different pointer's release
+  if (drag.dragging) { applyDrop(); suppressClick = true; }   // a real drag → apply + swallow the click
+  dragCleanup();
 });
-tabsEl.addEventListener("drop", (e) => {
-  e.preventDefault();
-  let dragged = dragPath;
-  try { if (!dragged && e.dataTransfer) dragged = e.dataTransfer.getData("text/plain"); } catch {}
-  // #6: a drop can land on the thin .drop-line indicator (a bare child of #tabs, not a row), which
-  // would resolve no target and silently no-op. Capture the intended row from the line's adjacent
-  // sibling BEFORE clearDropMarks() detaches it — the line sits ABOVE the row it inserts before, so
-  // prefer nextElementSibling (insert BEFORE = after:false), else previousElementSibling (after).
-  const lineEl = dropLineEl;
-  let lineRow = null, lineAfter = false;
-  if (lineEl) {
-    const nxt = lineEl.nextElementSibling && lineEl.nextElementSibling.closest && lineEl.nextElementSibling.closest(".tab[data-name]");
-    const prv = lineEl.previousElementSibling && lineEl.previousElementSibling.closest && lineEl.previousElementSibling.closest(".tab[data-name]");
-    if (nxt) { lineRow = nxt; lineAfter = false; } else if (prv) { lineRow = prv; lineAfter = true; }
-  }
-  clearDropMarks();
-  if (!dragged) return;
-  const folder = e.target.closest(".tab.folder");
-  let fileRow = e.target.closest(".tab[data-name]");
-  let dropAfter = null;   // set when the drop landed on the .drop-line: use this instead of clientY
-  if (!folder && !fileRow && lineRow) { fileRow = lineRow; dropAfter = lineAfter; }
-  if (folder) {
-    const dest = folder.dataset.path;
-    // Slice A: an ASSET drag (in assetFS.list, not project.files) re-keys via assetFS.move, which
-    // atomically moves IndexedDB + MEMFS + the list and runs warn-on-move. Async; it re-renders
-    // itself (renderAssets). Assets can't be folders, so no descendant guard is needed here.
-    if (!project.files[dragged] && assetFS.list.some(a => a.name === dragged)) {
-      assetFS.move(dragged, dest).then(() => { closedFolders.delete(dest); flushSave(); });
-      dragPath = null; return;
-    }
-    const draggedIsFolder = !!project.emptyDirs.has(dragged) || project._fileDirs().has(dragged);
-    if (draggedIsFolder && isDescendantDrop(dragged, dest)) { dragPath = null; return; }   // descendant guard
-    // Capture the pre-move path set so a file/folder move can mirror each re-keyed child.
-    const beforeMove = [...project.order];
-    if (project.move(dragged, dest)) {
-      closedFolders.delete(dest);
-      // S6b: a move re-keys 1 (file) or N (folder) paths. Mirror every key that disappeared
-      // from order as a copy-and-delete into its new key (positional pairing: project.move
-      // re-keys in place, so order index i maps old->new). One change = atomic for peers.
-      mirrorMove(beforeMove, project.order);
-      renderTabs(); flushSave();
-    }
-  } else if (fileRow) {
-    // reorder within project.order (files only; folders aren't in order).
-    const target = fileRow.dataset.name;
-    if (project.files[dragged] && project.files[target] && dragged !== target) {
-      const r = fileRow.getBoundingClientRect();
-      const after = (dropAfter !== null) ? dropAfter : ((e.clientY - r.top) > r.height / 2);
-      const ord = project.order;
-      ord.splice(ord.indexOf(dragged), 1);
-      let idx = ord.indexOf(target) + (after ? 1 : 0);
-      ord.splice(idx, 0, dragged);
-      // S6b: rewrite the doc order from the reconciled local order (files only changed position).
-      roomOp(d => { d.order = project.order.map(encPath); });
-      renderTabs(); flushSave();
-    }
-  }
-  dragPath = null;
-});
+window.addEventListener("pointercancel", (e) => { if (drag && e.pointerId === drag.pointerId) dragCleanup(); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && drag) dragCleanup(); });
 // #8 (refinement v2): new file/folder via an INLINE editable row (no browser prompt), matching the
 // inline-rename UX. The header buttons call these; both open startInlineCreate.
 function newFilePrompt() { startInlineCreate("file"); }
@@ -2228,6 +2349,7 @@ function folderRenameInline(path) {
     for (const k of kids) project.rename(k, target + k.slice(path.length));
     mirrorMove(beforeFolderRename, project.order);   // S6b: mirror the per-descendant re-key
     if (project.emptyDirs.delete(path)) project.emptyDirs.add(target);
+    project._rekeyDirOrder(path, target);   // #11: keep the renamed folder's render position
     for (const p of [...closedFolders]) {
       if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(target + p.slice(path.length)); }
     }
@@ -2249,6 +2371,7 @@ function folderDelete(path) {
   for (const k of kids) project.remove(k);
   mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));   // S6b: mirror dropped children
   project.emptyDirs.delete(path);
+  project._dropDirOrder(path);   // #11: drop the deleted folder (+ descendants) from dirOrder
   for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
   if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
   selectedFolder = "";
@@ -3013,8 +3136,9 @@ function mirrorDeletes(paths) {
 // double-encode: nothing outside encodeProject/docToRecord + per-file updateText sees a key.
 const encPath = (p) => encodeURIComponent(p);   // human path -> CRDT key  ("a/b.py" -> "a%2Fb.py")
 const decKey  = (k) => decodeURIComponent(k);   // CRDT key -> human path
-// project.serialize() returns HUMAN {files,order,entry,emptyDirs}. encodeProject re-keys it
-// for the doc; emptyDirs is dropped (empty folders aren't in the v1 shared shape). `order`
+// project.serialize() returns HUMAN {files,order,entry,emptyDirs,dirOrder}. encodeProject re-keys it
+// for the doc; emptyDirs AND dirOrder are dropped (empty folders + folder order aren't in the v1
+// shared shape — both are LOCAL-only, like each other). `order`
 // drives the key set so a file missing from order can never seed an orphan key.
 function encodeProject(rec) {
   const files = {};

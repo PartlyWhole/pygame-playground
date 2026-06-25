@@ -90,7 +90,20 @@ so the drag is now genuinely exercised end-to-end (unlike native DnD). New/updat
 - **R3 — move-into-folder via pointer (files/folders/assets) + remove native-DnD remnants + adversarial review.**
 
 ## 7. Out of scope (v1)
-Asset reordering; precise cross-dir move-AND-position; keyboard-driven reorder (a11y follow-up); multi-select drag.
+Asset reordering; ~~precise cross-dir move-AND-position~~ (partially shipped in #12 — see below); keyboard-driven
+reorder (a11y follow-up); multi-select drag.
+
+### Follow-up #12 — drag a file OUT of a folder (move-and-position, shipped)
+Original v1 deferred cross-dir move-and-position, which made "drag a file out of a folder" impossible: a file's
+folder membership IS its path key, but `reorder-file` only spliced `project.order` and never re-keyed the path, so
+reordering a nested file relative to a root file left it nested (no visible move). Fix: a **file reorder now adopts
+the target row's directory** — dropping a nested file on a root item moves it OUT to root; dropping a file on an
+item inside folder X moves it INTO X at that position — reusing the tested `project.move` (root = `move(path,"")`),
+mirrored to peers via `mirrorMove` + an `order` roomOp. Same-directory reorders are unchanged (no move). **Known v1
+edge (not handled):** with ZERO root files there is no root item to drop onto, so a file can't be pulled fully back
+to root that way (rare — the default project keeps `main.py` at root). A bounded "drop in the explorer's empty area
+→ root" gesture was considered and deferred (it needs panel-bounds geometry to avoid a drop over the editor moving a
+file to root). Tests: `test/explorer-dnd.mjs` MO.1–MO.3.
 **Touch devices:** drag-reorder is desktop-first. We deliberately do NOT set `touch-action: none` on rows — it would
 enable touch-drag but block touch-*scrolling* the file list by dragging on a row (a worse trade for a long list on a
 device this tool doesn't target). On touch, a drag attempt falls back to a scroll (`pointercancel`) and the model is

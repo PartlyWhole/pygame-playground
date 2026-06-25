@@ -2000,11 +2000,23 @@ function applyDrop() {
     }
   } else if (d.type === "reorder-file") {
     if (!project.files[path] || !project.files[d.ref] || path === d.ref) return;
+    let cur = path;
+    // #12: a file's folder membership IS its path key, so a reorder relative to a target in ANOTHER
+    // directory must MOVE the file into that dir (OUT to root when the target is at root) — not just
+    // reorder. dropping a nested file onto a root item moves it out; onto a file in folder X, into X.
+    const destDir = dirname(d.ref);
+    if (dirname(path) !== destDir) {
+      const beforeMove = [...project.order];
+      if (!project.move(path, destDir)) return;   // name collision in destDir / invalid → no-op
+      mirrorMove(beforeMove, project.order);       // S6b: mirror the re-key to peers (positional)
+      cur = (destDir ? destDir + "/" : "") + basename(path);
+      if (destDir) closedFolders.delete(destDir);  // reveal the destination folder if it was collapsed
+    }
     const ord = project.order;
-    ord.splice(ord.indexOf(path), 1);
+    ord.splice(ord.indexOf(cur), 1);
     const idx = ord.indexOf(d.ref) + (d.after ? 1 : 0);
-    ord.splice(idx, 0, path);
-    roomOp(dd => { dd.order = project.order.map(encPath); });   // S6b: files only changed position
+    ord.splice(idx, 0, cur);
+    roomOp(dd => { dd.order = project.order.map(encPath); });   // S6b: rewrite the reconciled order
     renderTabs(); flushSave();
   } else if (d.type === "reorder-folder") {
     if (path === d.ref || dirname(path) !== dirname(d.ref)) return;   // siblings only

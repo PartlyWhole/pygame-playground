@@ -22,7 +22,7 @@
 //
 // Style mirrors explorer-tree.mjs / subdirs.mjs: ok()/fail() + process.exitCode.
 
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 import { WAV_B64 } from './fixtures.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
@@ -265,7 +265,8 @@ await ensureExplorerOpen();
     const del = menu && [...menu.querySelectorAll('[role="menuitem"]')].find(el => /delete/i.test(el.textContent || ''));
     del?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
-  await page.waitForTimeout(200);
+  await acceptModal(page);   // #13: confirm the delete in the aesthetic modal
+  await page.waitForTimeout(150);
   const r = await page.evaluate(() => ({ dirOrder: window.project.dirOrder, gone: !window.project.files['sprites/enemy.py'] }));
   if (r.gone && eq(r.dirOrder, []))
     ok('R1.9 folder delete via ⋯ menu drops dirOrder entries (sprites,sprites/sub removed)');

@@ -38,7 +38,7 @@
 // downloadItem() synthesizes an <a download> and calls .click() (index.html downloadBlob). We spy on
 // HTMLAnchorElement.prototype.click and record any anchor that carried a `download` attribute.
 
-import { launch } from './_harness.mjs';
+import { launch, acceptModal, modalOpen } from './_harness.mjs';
 import { PNG_B64 } from './fixtures.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
@@ -453,29 +453,30 @@ if (collideReverted.row && collideReverted.noInput && collideReverted.hasLabel)
 else fail('  Esc did not revert the kept-open input cleanly: ' + JSON.stringify(collideReverted));
 
 // ================================================================================================
-// 7. DELETE (FILE) VIA MENU IS CONFIRM-GATED. Choose Delete from the file menu; with confirm()
-//    accepting, the file is removed. (design §1: "Delete keeps the existing confirm()".)
+// 7. DELETE (FILE) VIA MENU IS MODAL-GATED. Choose Delete from the file menu; the aesthetic confirm
+//    modal (#13, replaced native confirm()) gates it — accept it → the file is removed.
 // ================================================================================================
 await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'a = 1\n', 'enemy.py': 'E = 1\n' }, order: ['main.py', 'enemy.py'], entry: 'main.py', active: 'main.py' });
   window.renderTabs();
-  window.__confirms = 0; window.confirm = () => { window.__confirms++; return true; };
   window.__prompts = [];
 });
 await ensureExplorerOpen();
 await clickRowMenu('#tabs .tab[data-name="enemy.py"]');
 await page.waitForTimeout(150);
 const fileDeleteChosen = await activateMenuItem('Delete');
-await page.waitForTimeout(200);
+await page.waitForTimeout(120);
+const fileDeleteGated = await modalOpen(page);   // #13: the modal IS the gate (no native confirm)
+await acceptModal(page);
+await page.waitForTimeout(150);
 const fileDeleted = await page.evaluate(() => ({
   gone: !window.project.files['enemy.py'] && !window.project.order.includes('enemy.py'),
   mainKept: !!window.project.files['main.py'],
-  confirms: window.__confirms,
   prompts: window.__prompts.slice(),
 }));
-if (fileDeleteChosen && fileDeleted.gone && fileDeleted.mainKept && fileDeleted.confirms >= 1)
-  ok('file Delete via menu is confirm-gated and removes enemy.py (main.py kept)');
-else fail('file Delete via menu did not confirm-gate + remove: ' + JSON.stringify({ fileDeleteChosen, fileDeleted }));
+if (fileDeleteChosen && fileDeleteGated && fileDeleted.gone && fileDeleted.mainKept)
+  ok('file Delete via menu is modal-gated and removes enemy.py (main.py kept)');
+else fail('file Delete via menu did not modal-gate + remove: ' + JSON.stringify({ fileDeleteChosen, fileDeleteGated, fileDeleted }));
 if (fileDeleteChosen && fileDeleted.prompts.length === 0)
   ok('  ...file Delete fired NO window.prompt for the action');
 else fail('  file Delete fired a window.prompt: ' + JSON.stringify(fileDeleted.prompts));
@@ -493,25 +494,24 @@ await page.evaluate((b64) => {
   return window.assetFS.add(new File([bytes], 'doomed.png', { type: 'image/png' }));
 }, PNG_B64).catch(() => {});
 await page.waitForTimeout(250);
-await page.evaluate(() => {
-  window.__confirms = 0; window.confirm = () => { window.__confirms++; return true; };
-  window.__prompts = [];
-});
+await page.evaluate(() => { window.__prompts = []; });
 await ensureExplorerOpen();
 await clickRowMenu('#tabs .tab.asset[data-name="doomed.png"]');
 await page.waitForTimeout(150);
 const assetDeleteChosen = await activateMenuItem('Delete');
+await page.waitForTimeout(120);
+const assetDeleteGated = await modalOpen(page);   // #13: the modal IS the gate
+await acceptModal(page);
 await page.waitForTimeout(400);   // assetFS.remove is async
 const assetDeleted = await page.evaluate(() => ({
   goneFromList: !window.assetFS.list.some(a => a.name === 'doomed.png'),
   goneFromFs: (() => { try { return !pyodide.FS.analyzePath('doomed.png').exists; } catch { return true; } })(),
   goneFromDom: !document.querySelector('#tabs .tab.asset[data-name="doomed.png"]'),
-  confirms: window.__confirms,
   prompts: window.__prompts.slice(),
 }));
-if (assetDeleteChosen && assetDeleted.goneFromList && assetDeleted.goneFromFs && assetDeleted.confirms >= 1)
-  ok('asset Delete via menu is confirm-gated and removes doomed.png from assetFS + MEMFS');
-else fail('asset Delete via menu did not confirm-gate + remove: ' + JSON.stringify({ assetDeleteChosen, assetDeleted }));
+if (assetDeleteChosen && assetDeleteGated && assetDeleted.goneFromList && assetDeleted.goneFromFs)
+  ok('asset Delete via menu is modal-gated and removes doomed.png from assetFS + MEMFS');
+else fail('asset Delete via menu did not modal-gate + remove: ' + JSON.stringify({ assetDeleteChosen, assetDeleteGated, assetDeleted }));
 if (assetDeleteChosen && assetDeleted.prompts.length === 0)
   ok('  ...asset Delete fired NO window.prompt for the action');
 else fail('  asset Delete fired a window.prompt: ' + JSON.stringify(assetDeleted.prompts));

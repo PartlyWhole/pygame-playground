@@ -25,18 +25,14 @@
 // per-assertion timeouts so a still-missing seam fails its OWN assertion fast instead of hanging
 // the whole battery.
 //
-// --- DnD-simulation approach (assertion 6) -------------------------------------------------------
-// HTML5 native drag-and-drop cannot be driven by Playwright's real mouse headlessly (the OS-level
-// drag is never produced). The proto (proto/sandbox.html:624-655) and the design (§5.5) both wire
-// HTML5 DnD events (dragstart/dragover/drop) carrying the dragged id via a DataTransfer. So we
-// SIMULATE that protocol in-page: build a real DataTransfer, set the dragged path on it, and
-// dispatch dragstart on the source row, then dragover + drop on the target row. We assert the
-// load-bearing RESULT (project.files / order re-keyed; descendant move BLOCKED) — never pixels.
-// If the impl instead reads the dragged path from an in-page variable (proto stores dragId in a
-// closure) rather than the DataTransfer, the synthetic dragstart on the real row still runs the
-// impl's own dragstart handler (which sets that variable), so this approach is robust to either
-// wiring. As a final fallback, an assertion that the synthetic protocol produced no result is
-// still a clean RED today (the flat build has no DnD handlers at all).
+// --- DnD approach (#11): REAL pointer gestures, not synthetic DragEvent ---------------------------
+// The drag-and-drop here was rewritten (#11) from native HTML5 DnD to a pointer-events controller
+// precisely because native DnD fires ZERO events from a headless mouse (so synthetic DragEvent tests
+// gave false confidence — they passed while the real browser was broken, the #6 regression). These
+// drag assertions now drive page.mouse.move/down/up (the `pointerDrag` helper below), which fire the
+// real pointerdown/move/up the controller listens to, and assert the load-bearing RESULT (project
+// model re-keyed/reordered; descendant move BLOCKED). The dedicated, fuller pointer-DnD coverage
+// (file/folder reorder, threshold, abort) lives in test/explorer-dnd.mjs.
 
 import { launch } from './_harness.mjs';
 import { WAV_B64 } from './fixtures.mjs';
@@ -53,6 +49,27 @@ const info = (m) => console.log('info -', m);
 // Resilient click: a short timeout so a missing seam fails its OWN assertion fast (RED phase)
 // instead of hanging 30s and aborting the whole battery.
 const click = (sel) => page.click(sel, { timeout: 2500 }).catch(() => {});
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// #11: REAL pointer gesture (press src center, cross the ~5px threshold, settle on the target at the
+// given Y-fraction, release). Fires real pointerdown/move/up that the controller handles. yFrac ~0.5 =
+// a folder's middle band (move-into); <0.25 = top (reorder-before); >0.75 = bottom (reorder-after).
+const rectOf = (sel) => page.evaluate((s) => {
+  const el = document.querySelector(s); if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, cy: r.top + r.height / 2, top: r.top, height: r.height };
+}, sel);
+async function pointerDrag(srcSel, dstSel, yFrac = 0.5) {
+  const s = await rectOf(srcSel), d = await rectOf(dstSel);
+  if (!s || !d) return { srcFound: !!s, dstFound: !!d };
+  const ty = d.top + d.height * yFrac;
+  await page.mouse.move(s.x, s.cy); await page.mouse.down();
+  await page.mouse.move(s.x, s.cy + 8, { steps: 2 });
+  await page.mouse.move(d.x, ty, { steps: 5 });
+  await page.mouse.move(d.x, ty, { steps: 2 });
+  await page.mouse.up();
+  return { srcFound: true, dstFound: true };
+}
 
 const booted = () => page.waitForFunction(
   () => ['running', 'ready', 'finished'].includes(document.getElementById('status').textContent),
@@ -338,12 +355,12 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
 // ================================================================================================
 // 6. DRAG-MOVE-INTO-FOLDER + DESCENDANT GUARD. Drag the enemy.py file row onto the sprites/ folder
 //    row → project.files['sprites/enemy.py']. Then drag sprites/ into its own descendant →
-//    the move is BLOCKED (paths unchanged). (design §7.1 #10, §5.5)
-//    DnD-simulation: synthetic HTML5 dragstart/dragover/drop with a real DataTransfer (see the
-//    header comment). Load-bearing = the resulting project.files / order, and the descendant BLOCK.
+//    the move is BLOCKED (paths unchanged). (design §7.1 #10, §5.5; #11 pointer-events rewrite)
+//    Driven by REAL page.mouse pointer gestures (pointerDrag). Load-bearing = the resulting
+//    project.files / order, and the descendant BLOCK.
 // ================================================================================================
 {
-  // 6a. move a root file INTO a folder.
+  // 6a. move a root file INTO a folder (real pointer gesture onto the folder's middle band).
   await page.evaluate(() => {
     window.project.load({
       files: { 'main.py': 'a = 1\n', 'enemy.py': '# enemy\nE = 1\n', 'sprites/util.py': 'U = 1\n' },
@@ -352,27 +369,7 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     window.renderTabs();
   });
   await ensureExplorerOpen();
-  // The synthetic-DnD driver. Returns whether both source + target rows existed (so a missing tree
-  // fails for the RIGHT reason).
-  const dndResult = await page.evaluate(() => {
-    function fireDnd(srcSel, dstSel) {
-      const src = document.querySelector(srcSel);
-      const dst = document.querySelector(dstSel);
-      if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
-      const dt = new DataTransfer();
-      // mirror the proto/§5.5 wiring: the dragged identifier rides text/plain. For a file row the
-      // dragged path is data-name; for a folder row it is data-path.
-      const dragged = src.getAttribute('data-name') || src.getAttribute('data-path');
-      dt.setData('text/plain', dragged);
-      const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
-      const [ds, dsTgt] = mk('dragstart', src); dsTgt.dispatchEvent(ds);
-      const [dov, dovTgt] = mk('dragover', dst); dovTgt.dispatchEvent(dov);
-      const [dp, dpTgt] = mk('drop', dst); dpTgt.dispatchEvent(dp);
-      const [de, deTgt] = mk('dragend', src); deTgt.dispatchEvent(de);
-      return { srcFound: true, dstFound: true };
-    }
-    return fireDnd('#tabs .tab[data-name="enemy.py"]', '#tabs .tab.folder[data-path="sprites"]');
-  });
+  const dndResult = await pointerDrag('#tabs .tab[data-name="enemy.py"]', '#tabs .tab.folder[data-path="sprites"]', 0.5);
   await page.waitForTimeout(150);
   const movedIn = await page.evaluate(() => ({
     intoFolder: !!window.project.files['sprites/enemy.py'],
@@ -392,32 +389,8 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     window.renderTabs();
   });
   await ensureExplorerOpen();
-  // open the nested folder so the descendant target row exists in the DOM.
-  await page.evaluate(() => {
-    const sub = document.querySelector('#tabs .tab.folder[data-path="sprites/sub"]');
-    if (!sub) {
-      // ensure parent is open first (impls collapse by default sometimes).
-      const sp = document.querySelector('#tabs .tab.folder[data-path="sprites"]');
-      if (sp && getComputedStyle(sp).display !== 'none') sp.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    }
-  });
   await page.waitForTimeout(120);
-  const guardResult = await page.evaluate(() => {
-    function fireDnd(srcSel, dstSel) {
-      const src = document.querySelector(srcSel);
-      const dst = document.querySelector(dstSel);
-      if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
-      const dt = new DataTransfer();
-      dt.setData('text/plain', src.getAttribute('data-path') || src.getAttribute('data-name'));
-      const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
-      src.dispatchEvent(mk('dragstart', src)[0]);
-      dst.dispatchEvent(mk('dragover', dst)[0]);
-      dst.dispatchEvent(mk('drop', dst)[0]);
-      src.dispatchEvent(mk('dragend', src)[0]);
-      return { srcFound: true, dstFound: true };
-    }
-    return fireDnd('#tabs .tab.folder[data-path="sprites"]', '#tabs .tab.folder[data-path="sprites/sub"]');
-  });
+  await pointerDrag('#tabs .tab.folder[data-path="sprites"]', '#tabs .tab.folder[data-path="sprites/sub"]', 0.5);
   await page.waitForTimeout(150);
   const guardOk = await page.evaluate(() => ({
     enemyUnchanged: !!window.project.files['sprites/enemy.py'],
@@ -425,9 +398,9 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     // a blocked self-move must NOT have created a doubled prefix.
     noDoublePrefix: !Object.keys(window.project.files).some(k => k.startsWith('sprites/sub/sprites')),
   }));
-  if (guardResult.srcFound && guardResult.dstFound && guardOk.enemyUnchanged && guardOk.subUnchanged && guardOk.noDoublePrefix)
+  if (guardOk.enemyUnchanged && guardOk.subUnchanged && guardOk.noDoublePrefix)
     ok('descendant guard: dragging sprites/ into sprites/sub/ is BLOCKED (paths unchanged)');
-  else fail('descendant-into-self drag was not blocked: ' + JSON.stringify({ guardResult, guardOk }));
+  else fail('descendant-into-self drag was not blocked: ' + JSON.stringify(guardOk));
 }
 
 // ================================================================================================
@@ -470,8 +443,8 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     ok('  ...#assetPanel is gone from the DOM (assets are tree-only in Slice A)');
   else fail('  #assetPanel still exists (Slice A retires it): ' + JSON.stringify(nested));
 
-  // 7b. DRAG-MOVE an asset row into a folder re-keys assetFS + MEMFS. Seed a root asset and an
-  //     empty target folder, then fire the synthetic dragstart/dragover/drop protocol.
+  // 7b. DRAG-MOVE an asset row into a folder re-keys assetFS + MEMFS (real pointer gesture). Seed a
+  //     root asset + an empty target folder, then drag the asset onto the folder's middle band.
   await page.evaluate(() => {
     window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
     window.project.addFolder('audio');
@@ -484,19 +457,7 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
   }, WAV_B64).catch(() => {});
   await page.waitForTimeout(250);
   await ensureExplorerOpen();
-  const dndAsset = await page.evaluate(() => {
-    const src = document.querySelector('#tabs .tab.asset[data-name="beep.wav"]');
-    const dst = document.querySelector('#tabs .tab.folder[data-path="audio"]');
-    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
-    const dt = new DataTransfer();
-    dt.setData('text/plain', src.getAttribute('data-name'));
-    const mk = (type, target) => { const e = new DragEvent(type, { bubbles: true, cancelable: true }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} return [e, target]; };
-    src.dispatchEvent(mk('dragstart', src)[0]);
-    dst.dispatchEvent(mk('dragover', dst)[0]);
-    dst.dispatchEvent(mk('drop', dst)[0]);
-    src.dispatchEvent(mk('dragend', src)[0]);
-    return { srcFound: true, dstFound: true };
-  });
+  const dndAsset = await pointerDrag('#tabs .tab.asset[data-name="beep.wav"]', '#tabs .tab.folder[data-path="audio"]', 0.5);
   await page.waitForTimeout(300);
   const movedAsset = await page.evaluate(() => ({
     newInList: window.assetFS.list.some(a => a.name === 'audio/beep.wav'),
@@ -680,70 +641,40 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
 }
 
 // ================================================================================================
-// Request #6 (refinement v2): dragging a file to REORDER actually reorders — even when the drop
-// lands on the thin .drop-line indicator (the natural release target). RED today: a drop on the
-// .drop-line resolves no row, so project.order never changes.
+// Request #6 / #11: dragging a file to REORDER actually reorders, via a REAL pointer gesture (the
+// regression that prompted #11 was that native DnD never fired from a real mouse — so this now drives
+// page.mouse and asserts the reconciled model + rendered order).
 {
   await ensureExplorerOpen();
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    await window.assetFS.clearAll();
     window.project.load({ files: { 'a.py': '# a\n', 'b.py': '# b\n', 'c.py': '# c\n' }, order: ['a.py', 'b.py', 'c.py'], entry: 'a.py', active: 'a.py' });
     window.renderTabs();
   });
-  const reordered = await page.evaluate(() => {
-    const src = document.querySelector('#tabs .tab[data-name="b.py"]');
-    const dst = document.querySelector('#tabs .tab[data-name="a.py"]');
-    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
-    const dt = new DataTransfer();
-    dt.setData('text/plain', 'b.py');
-    const topY = dst.getBoundingClientRect().top + 2;   // top half → drop-line BEFORE a.py
-    const mk = (type, target, y) => { const e = new DragEvent(type, { bubbles: true, cancelable: true, clientY: y }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} target.dispatchEvent(e); };
-    mk('dragstart', src, topY);
-    mk('dragover', dst, topY);
-    const line = document.querySelector('#tabs .drop-line');
-    const lineFound = !!line;
-    if (line) mk('drop', line, topY);   // drop on the INDICATOR, not a row (the previously-broken path)
-    mk('dragend', src, topY);
-    return { srcFound: true, dstFound: true, lineFound };
-  });
+  // drag b.py to the TOP half of a.py → b before a.
+  const reordered = await pointerDrag('#tabs .tab[data-name="b.py"]', '#tabs .tab[data-name="a.py"]', 0.2);
   await page.waitForTimeout(120);
   const res = await page.evaluate(() => ({
     order: window.project.order.slice(),
     rows: [...document.querySelectorAll('#tabs .tab.py')].map(n => n.dataset.name),
   }));
   const want = ['b.py', 'a.py', 'c.py'];
-  const eq = (x) => JSON.stringify(x) === JSON.stringify(want);
-  if (reordered.lineFound && eq(res.order) && eq(res.rows))
-    ok('#6: dropping on the .drop-line reorders b.py above a.py (model + rendered order = b,a,c)');
-  else fail('#6: reorder via drop-line failed: ' + JSON.stringify({ reordered, ...res }));
+  if (reordered.srcFound && eq(res.order, want) && eq(res.rows, want))
+    ok('#6: pointer drag reorders b.py above a.py (model + rendered order = b,a,c)');
+  else fail('#6: pointer reorder failed: ' + JSON.stringify({ reordered, ...res }));
 
-  // #6 (review): drop on a line placed AFTER the last row (bottom half of c.py) → reorder-to-end.
-  // Covers the fallback's previousElementSibling branch (lineRow=prv, lineAfter=true). Clear assets
-  // first so a leftover asset row (seeded earlier, persists across project.load) isn't last.
+  // drag a.py to the BOTTOM half of c.py (the last row) → reorder-to-end (b,c,a).
   await page.evaluate(async () => {
     await window.assetFS.clearAll();
     window.project.load({ files: { 'a.py': '# a\n', 'b.py': '# b\n', 'c.py': '# c\n' }, order: ['a.py', 'b.py', 'c.py'], entry: 'a.py', active: 'a.py' });
     window.renderTabs();
   });
-  const endDbg = await page.evaluate(() => {
-    const src = document.querySelector('#tabs .tab[data-name="a.py"]');
-    const dst = document.querySelector('#tabs .tab[data-name="c.py"]');
-    if (!src || !dst) return { err: 'rows missing' };
-    const dt = new DataTransfer(); dt.setData('text/plain', 'a.py');
-    const botY = dst.getBoundingClientRect().bottom - 2;   // bottom half → drop-line AFTER c.py (last row)
-    const mk = (t, tg, y) => { const e = new DragEvent(t, { bubbles: true, cancelable: true, clientY: y }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} tg.dispatchEvent(e); };
-    mk('dragstart', src, botY); mk('dragover', dst, botY);
-    const line = document.querySelector('#tabs .drop-line');
-    const lineFound = !!line;
-    const linePos = line ? (line.nextElementSibling ? 'before-' + (line.nextElementSibling.dataset && line.nextElementSibling.dataset.name) : 'at-end') : 'none';
-    if (line) mk('drop', line, botY);
-    mk('dragend', src, botY);
-    return { lineFound, linePos };
-  });
+  await pointerDrag('#tabs .tab[data-name="a.py"]', '#tabs .tab[data-name="c.py"]', 0.85);
   await page.waitForTimeout(120);
   const endOrder = await page.evaluate(() => window.project.order.slice());
-  if (JSON.stringify(endOrder) === JSON.stringify(['b.py', 'c.py', 'a.py']))
-    ok('#6: dropping on a line after the last row moves a.py to the end (prv branch)');
-  else fail('#6: drop-at-end (prv branch) failed: ' + JSON.stringify({ endOrder, ...endDbg }));
+  if (eq(endOrder, ['b.py', 'c.py', 'a.py']))
+    ok('#6: pointer drag to the bottom half of the last row moves a.py to the end (b,c,a)');
+  else fail('#6: drag-to-end failed: ' + JSON.stringify({ endOrder }));
 }
 
 // ================================================================================================

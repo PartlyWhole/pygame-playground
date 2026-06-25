@@ -91,3 +91,21 @@ so the drag is now genuinely exercised end-to-end (unlike native DnD). New/updat
 
 ## 7. Out of scope (v1)
 Asset reordering; precise cross-dir move-AND-position; keyboard-driven reorder (a11y follow-up); multi-select drag.
+**Touch devices:** drag-reorder is desktop-first. We deliberately do NOT set `touch-action: none` on rows — it would
+enable touch-drag but block touch-*scrolling* the file list by dragging on a row (a worse trade for a long list on a
+device this tool doesn't target). On touch, a drag attempt falls back to a scroll (`pointercancel`) and the model is
+left unchanged. Touch reorder is a follow-up alongside keyboard reorder.
+
+### Implementation notes (R3 — adversarial review + hardening)
+Built R3 as a *review + hardening* slice (move-into-folder was folded into R2 — see the R2 commit: the native drop
+handler was monolithic, so splitting move-into out would have left a window where tests AND real behavior were broken
+at a checkpoint). A 5-lens adversarial review (each finding independently verified, 13 of 20 refuted) plus an
+orchestrator pass produced these hardening fixes (all desktop-neutral):
+1. **Measure-before-paint:** the drop indicator is removed BEFORE `computeDrop` reads row rects each frame, so its 2px
+   height never perturbs the measurement (the last residue of the native drop-line thrash this rewrite set out to kill).
+2. **Multi-pointer safety:** `pointerdown` ignores a second concurrent pointer (`if (drag) return`); `pointermove`/
+   `pointerup`/`pointercancel` act only for the gesture's own `pointerId` — a second finger can no longer hijack or
+   abort an active drag.
+3. **Reorder-folder guard:** if the drop's reference row vanished mid-gesture (e.g. a concurrent remote re-render), the
+   `seq.indexOf(ref) < 0` case bails instead of `splice(-1, …)` writing a wrong (local-only) `dirOrder`.
+4. **Escape** now cancels even a pre-threshold press; stale-comment fixes (serialize/encodeProject now name `dirOrder`).

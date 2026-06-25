@@ -1953,10 +1953,9 @@ function computeDrop(y) {
 }
 
 // Paint the resolved intent: the ONE reused indicator line for a reorder, a .drop-into highlight for a
-// move-into. Clears the previous marks first (so the single indicator never thrashes the row layout).
+// move-into. The caller (pointermove) clears the previous marks BEFORE measuring, so the 2px indicator
+// never perturbs the rects computeDrop reads (the residual of the native drop-line thrash this kills).
 function paintDrop() {
-  if (drag.indicator.parentNode) drag.indicator.remove();
-  if (drag.intoEl) { drag.intoEl.classList.remove("drop-into"); drag.intoEl = null; }
   const d = drag.drop;
   if (!d) return;
   if (d.type === "into") {
@@ -2013,8 +2012,9 @@ function applyDrop() {
     // the current sibling render order (DOM order), with `path` repositioned relative to `ref`.
     const seq = [...tabsEl.querySelectorAll(".tab.folder")].map(r => r.dataset.path)
       .filter(p => dirname(p) === parent && p !== path);
-    const idx = seq.indexOf(d.ref) + (d.after ? 1 : 0);
-    seq.splice(idx, 0, path);
+    const refIdx = seq.indexOf(d.ref);
+    if (refIdx < 0) return;   // ref row vanished mid-gesture (e.g. a concurrent remote re-render) — bail
+    seq.splice(refIdx + (d.after ? 1 : 0), 0, path);
     // Write the sibling block to dirOrder in the new order. buildTree's emit() only ever compares
     // dirs with the SAME parent, so re-appending this block (other dirs kept in place) sets the order.
     project.dirOrder = [...project.dirOrder.filter(p => !seq.includes(p)), ...seq];
@@ -2041,6 +2041,7 @@ function scrollParentOf(el) {
 }
 
 tabsEl.addEventListener("pointerdown", (e) => {
+  if (drag) return;                                      // a gesture is already active (e.g. a 2nd pointer)
   suppressClick = false;                                 // start of a fresh gesture
   if (e.button !== 0) return;                            // primary button only
   const row = e.target.closest(".tab");
@@ -2056,7 +2057,7 @@ tabsEl.addEventListener("pointerdown", (e) => {
 });
 
 window.addEventListener("pointermove", (e) => {
-  if (!drag) return;
+  if (!drag || e.pointerId !== drag.pointerId) return;   // only the gesture's own pointer
   if (!drag.dragging) {
     if (Math.abs(e.clientX - drag.startX) < DRAG_THRESHOLD && Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD) return;
     drag.dragging = true;                                // crossed the threshold → begin dragging
@@ -2066,18 +2067,21 @@ window.addEventListener("pointermove", (e) => {
     try { drag.row.setPointerCapture(drag.pointerId); } catch {}
   }
   e.preventDefault();
+  // Clear last frame's marks BEFORE measuring, so the 2px indicator never perturbs the rects.
+  if (drag.indicator.parentNode) drag.indicator.remove();
+  if (drag.intoEl) { drag.intoEl.classList.remove("drop-into"); drag.intoEl = null; }
   drag.drop = computeDrop(e.clientY);
   paintDrop();
   autoScroll(e.clientY);
 });
 
-window.addEventListener("pointerup", () => {
-  if (!drag) return;
+window.addEventListener("pointerup", (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;   // ignore a different pointer's release
   if (drag.dragging) { applyDrop(); suppressClick = true; }   // a real drag → apply + swallow the click
   dragCleanup();
 });
-window.addEventListener("pointercancel", () => { dragCleanup(); });
-window.addEventListener("keydown", (e) => { if (e.key === "Escape" && drag && drag.dragging) dragCleanup(); });
+window.addEventListener("pointercancel", (e) => { if (drag && e.pointerId === drag.pointerId) dragCleanup(); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && drag) dragCleanup(); });
 // #8 (refinement v2): new file/folder via an INLINE editable row (no browser prompt), matching the
 // inline-rename UX. The header buttons call these; both open startInlineCreate.
 function newFilePrompt() { startInlineCreate("file"); }
@@ -3132,8 +3136,9 @@ function mirrorDeletes(paths) {
 // double-encode: nothing outside encodeProject/docToRecord + per-file updateText sees a key.
 const encPath = (p) => encodeURIComponent(p);   // human path -> CRDT key  ("a/b.py" -> "a%2Fb.py")
 const decKey  = (k) => decodeURIComponent(k);   // CRDT key -> human path
-// project.serialize() returns HUMAN {files,order,entry,emptyDirs}. encodeProject re-keys it
-// for the doc; emptyDirs is dropped (empty folders aren't in the v1 shared shape). `order`
+// project.serialize() returns HUMAN {files,order,entry,emptyDirs,dirOrder}. encodeProject re-keys it
+// for the doc; emptyDirs AND dirOrder are dropped (empty folders + folder order aren't in the v1
+// shared shape — both are LOCAL-only, like each other). `order`
 // drives the key set so a file missing from order can never seed an orphan key.
 function encodeProject(rec) {
   const files = {};

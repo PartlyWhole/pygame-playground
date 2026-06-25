@@ -438,6 +438,69 @@ await ensureExplorerOpen();
 }
 
 // ================================================================================================
+// MO (request #12) — drag a file OUT of a folder. A file's folder membership IS its path key, so
+// move-out must RE-KEY the path (project.move), not just reorder project.order. The fix: a file
+// reorder ADOPTS the target row's directory (drop a nested file on a root item → moves OUT to root;
+// drop on a file in folder X → moves INTO X). Real page.mouse gestures. (Known v1 edge, not tested:
+// with ZERO root files there's no root item to drop onto — drop a nested file on a root item instead.)
+// ================================================================================================
+
+// MO.1 — drag a NESTED file onto a ROOT file → moves OUT to root (path re-keyed).
+{
+  await page.evaluate(async () => {
+    await window.assetFS.clearAll();
+    window.project.load({ files: { 'main.py': 'a=1\n', 'sprites/enemy.py': 'E=1\n' }, order: ['main.py', 'sprites/enemy.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  const g = await pointerDrag('#tabs .tab.py[data-name="sprites/enemy.py"]', '#tabs .tab.py[data-name="main.py"]', 0.8);
+  await page.waitForTimeout(150);
+  const r = await page.evaluate(() => ({
+    atRoot: !!window.project.files['enemy.py'],
+    nestedGone: !window.project.files['sprites/enemy.py'],
+    rows: [...document.querySelectorAll('#tabs .tab.py')].map(n => n.dataset.name),
+  }));
+  if (g.srcFound && r.atRoot && r.nestedGone && r.rows.includes('enemy.py'))
+    ok('MO.1 drag a nested file onto a root file moves it OUT to root (sprites/enemy.py → enemy.py)');
+  else fail('MO.1 move-out-onto-root-file failed: ' + JSON.stringify(r));
+}
+
+// MO.2 — adopt-target-dir the OTHER way: drag a ROOT file onto a file inside folder pkg → moves INTO pkg.
+{
+  await page.evaluate(async () => {
+    await window.assetFS.clearAll();
+    window.project.load({ files: { 'main.py': 'a=1\n', 'loose.py': 'L=1\n', 'pkg/mod.py': 'M=1\n' }, order: ['main.py', 'loose.py', 'pkg/mod.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  const g = await pointerDrag('#tabs .tab.py[data-name="loose.py"]', '#tabs .tab.py[data-name="pkg/mod.py"]', 0.8);
+  await page.waitForTimeout(150);
+  const r = await page.evaluate(() => ({ intoPkg: !!window.project.files['pkg/loose.py'], rootGone: !window.project.files['loose.py'] }));
+  if (g.srcFound && r.intoPkg && r.rootGone)
+    ok('MO.2 drag a root file onto a file inside pkg moves it INTO pkg (loose.py → pkg/loose.py)');
+  else fail('MO.2 move-into-via-file-target failed: ' + JSON.stringify(r));
+}
+
+// MO.3 — regression: a SAME-dir reorder must stay a pure reorder (no path change).
+{
+  await page.evaluate(async () => {
+    await window.assetFS.clearAll();
+    window.project.load({ files: { 'a.py': 'a\n', 'b.py': 'b\n', 'pkg/x.py': 'x\n' }, order: ['a.py', 'b.py', 'pkg/x.py'], entry: 'a.py', active: 'a.py' });
+    window.renderTabs();
+  });
+  await ensureExplorerOpen();
+  const g = await pointerDrag('#tabs .tab.py[data-name="b.py"]', '#tabs .tab.py[data-name="a.py"]', 0.2);
+  await page.waitForTimeout(150);
+  const r = await page.evaluate(() => ({
+    bStillRoot: !!window.project.files['b.py'] && !window.project.files['pkg/b.py'],
+    rootOrder: window.project.order.filter(p => !p.startsWith('pkg/')),
+  }));
+  if (g.srcFound && r.bStillRoot && eq(r.rootOrder, ['b.py', 'a.py']))
+    ok('MO.3 regression: same-dir reorder stays a pure reorder (b above a, no path change)');
+  else fail('MO.3 same-dir reorder regression: ' + JSON.stringify(r));
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) console.log('info - JS console errors observed: ' + realErrors.join(' | '));
 else ok('no JS console errors');

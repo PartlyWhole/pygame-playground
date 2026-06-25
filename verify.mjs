@@ -53,9 +53,11 @@ console.log('stop:', await page.textContent('#status'));
 await page.evaluate(() => {
   const sel = document.getElementById('examples');
   sel.value = 'Snake';
-  window.confirm = () => true;
   sel.dispatchEvent(new Event('change'));
 });
+// #13: the example-replace confirm is now the aesthetic modal — accept it so Snake loads + runs.
+await page.click('#modalBackdrop [data-act="confirm"]', { timeout: 3000 }).catch(() => {});
+await page.waitForFunction(() => !document.querySelector('#modalBackdrop'), null, { timeout: 3000 }).catch(() => {});
 await page.waitForFunction(() => document.getElementById('status').textContent === 'running', null, { timeout: 15_000 })
   .catch(() => fail('snake did not start'));
 // Sample frames immediately — after ~1.8s the snake hits the wall and the

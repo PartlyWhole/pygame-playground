@@ -47,7 +47,7 @@
 //   #liveDot / #peerCount / .remote-cursor / .remote-flag /
 //   document.querySelector('.CodeMirror').CodeMirror
 
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 
 const BASE = process.argv[2] || 'http://localhost:8923/';
 const b = await launch();
@@ -115,28 +115,9 @@ const waitConverge = (page, predicate, arg, timeout = 15000) =>
   page.waitForFunction(predicate, arg, { timeout }).then(() => true, () => false);
 
 // ---- explorer-affordance drivers (drive the REAL wiring, not window.project directly) ----
-// The explorer ops are prompt()/confirm()-driven (the app's house style). Playwright auto-
-// DISMISSES dialogs, so we register a ONE-SHOT dialog handler that answers the prompt chain
-// for a single op, then resolves. Driving the real handler proves the wiring routes to the
-// doc (the seam under test) rather than only the local model.
-
-// Answer an ordered list of dialog responses for the NEXT op, then auto-clean the handler.
-// Each entry: a string (prompt answer) | true (accept confirm) | false (dismiss). The list
-// is consumed in dialog order; when exhausted, further dialogs are accepted (defensive).
-function withDialogs(page, answers) {
-  const queue = [...answers];
-  const handler = async (d) => {
-    const a = queue.length ? queue.shift() : true;
-    try {
-      if (d.type() === 'prompt') await d.accept(typeof a === 'string' ? a : '');
-      else if (a === false) await d.dismiss();
-      else await d.accept();
-    } catch {}
-    if (!queue.length) page.off('dialog', handler);   // op's dialog chain done
-  };
-  page.on('dialog', handler);
-  return () => page.off('dialog', handler);
-}
+// The explorer ops are inline-input + popup-menu driven (#8 retired the browser prompt(); #13 retired
+// confirm() for the aesthetic modal). The drivers below open the ⋯ menu / inline rows and, for delete,
+// accept the modal — proving the wiring routes to the doc (the seam under test), not the local model.
 
 // Create a new file via the REAL explorer flow (#8: inline create row, no browser prompt).
 // newFilePrompt() opens the inline <input>; we type `name` (may be a full dir/file path) + Enter.
@@ -187,9 +168,8 @@ async function explorerRename(page, oldPath, newPath) {
 }
 
 // Delete a file via the REAL explorer flow (Slice B: tabMenu opens the ⋯ popup; activate "Delete";
-// the confirm() gate is auto-accepted by a one-shot dialog handler).
+// #13: the confirm() gate is now the aesthetic modal — accept it by clicking [data-act="confirm"]).
 async function explorerDelete(page, path) {
-  const off = withDialogs(page, [true]);                      // accept the delete confirm
   await page.evaluate((p) => window.tabMenu(p), path);
   await page.waitForTimeout(120);
   await page.evaluate(() => {
@@ -198,8 +178,8 @@ async function explorerDelete(page, path) {
     const item = menu && [...menu.querySelectorAll('[role="menuitem"]')].find(el => /delete/i.test(el.textContent || ''));
     if (item) item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
+  await acceptModal(page);   // confirm the delete in the modal (replaced the native-dialog handler)
   await page.waitForTimeout(200);
-  off();
 }
 
 // Upload a .py via the REAL upload flow (#assetInput change → uploadFiles → routeUpload). This
@@ -232,8 +212,7 @@ try {
   const A = await bootPage(BASE);
   await seedNestedProject(A);
   // Defensive: accept a startRoom confirm if one fires (S6a deletes it, so normally none does).
-  // ONE-SHOT + removed after the hash so it never races the per-op withDialogs handlers below
-  // ("Cannot accept dialog which is already handled" if two handlers answer one dialog).
+  // ONE-SHOT + removed after the hash so it never races any later dialog handling.
   const offStartConfirm = (() => {
     const h = (d) => { d.accept().catch(() => {}); A.off('dialog', h); };
     A.on('dialog', h);
@@ -484,30 +463,27 @@ try {
         await window.renderHistory();   // refresh the in-memory _histSnaps from the store
       }, RESTORED).catch(() => {});
 
-      // Capture the confirm text the restore path shows (the WARN-for-everyone requirement).
-      let confirmText = '';
-      const off = (() => {
-        const handler = async (d) => {
-          if (d.type() === 'confirm') { confirmText = d.message(); await d.accept(); }
-          else await d.accept();
-        };
-        A.on('dialog', handler);
-        return () => A.off('dialog', handler);
-      })();
-
-      // Drive the restore via the REAL restoreSnapshot path: find the snapshot's real
-      // (auto-incremented) id from the store, then replay it through the actual restore wiring.
+      // #13: restore now confirms via the aesthetic MODAL (not a native confirm dialog). FIRE
+      // restoreSnapshot WITHOUT awaiting it inside the evaluate — awaiting would DEADLOCK (it blocks
+      // on the modal, which the test can only dismiss AFTER the evaluate returns). Then read the
+      // modal's warning text + accept it.
       const drove = await A.evaluate(async (proj) => {
         if (!window.restoreSnapshot || !window.historyStore) return 'none';
         const all = await window.historyStore.getAll();   // newest-first
         const rec = all.find(s => JSON.stringify(s.project) === JSON.stringify(proj));
         if (!rec) return 'no-snapshot';
-        await window.restoreSnapshot(rec.id);
+        window.restoreSnapshot(rec.id);   // FIRE (don't await) — the test dismisses the modal next
         return 'restoreSnapshot';
       }, RESTORED).catch((e) => 'error:' + (e?.message || e));
 
+      // The WARN-for-everyone requirement is now the modal's message text.
+      await A.waitForSelector('#modalBackdrop .modal-msg', { timeout: 2000 }).catch(() => {});
+      const confirmText = await A.evaluate(() => {
+        const m = document.querySelector('#modalBackdrop .modal-msg');
+        return m ? m.textContent : '';
+      });
+      await acceptModal(A);
       await A.waitForTimeout(300);
-      off();
 
       // (a) the confirm must WARN it affects ALL peers / everyone (not just "your code").
       const warnsPeers = /\b(everyone|all peers|other(s)?|peers|in the room)\b/i.test(confirmText);

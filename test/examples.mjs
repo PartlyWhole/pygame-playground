@@ -23,7 +23,7 @@
 //                                             fails isModuleName).
 //
 // Run: python3 -m http.server 8923   then   node test/examples.mjs http://localhost:8923/
-import { launch } from './_harness.mjs';
+import { launch, acceptModal, cancelModal } from './_harness.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
 const browser = await launch();
@@ -222,28 +222,28 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(80);
 
-// CANCEL path: confirm rejected -> content unchanged.
-await page.evaluate(() => { window.confirm = () => false; });
+// CANCEL path: the #13 modal is dismissed -> content unchanged.
 await page.evaluate((k) => {
   const row = document.querySelector(`#examplesPanel .exrow[data-ex="${CSS.escape(k)}"]`);
   const btn = row && row.querySelector('.reset');
   if (btn) btn.click();
 }, EX_NAME);
+await cancelModal(page);
 await page.waitForTimeout(80);
 const afterCancel = await page.evaluate(() =>
   (window.project && window.project.files && window.project.files['bouncy_balls.py'])
     ? window.project.text('bouncy_balls.py') : null);
 if (afterCancel && afterCancel.includes('RESETME_9'))
-  ok('(d) reset CANCEL (confirm=false): file content unchanged');
-else fail('(d) reset cancel wrong — content changed despite confirm=false: ' + JSON.stringify({ hasMarker: afterCancel && afterCancel.includes('RESETME_9') }));
+  ok('(d) reset CANCEL (modal dismissed): file content unchanged');
+else fail('(d) reset cancel wrong — content changed despite a dismissed modal: ' + JSON.stringify({ hasMarker: afterCancel && afterCancel.includes('RESETME_9') }));
 
-// ACCEPT path: confirm accepted -> content == EXAMPLES[name], ● cleared in BOTH surfaces, fresh undo.
-await page.evaluate(() => { window.confirm = () => true; });
+// ACCEPT path: confirm the modal -> content == EXAMPLES[name], ● cleared in BOTH surfaces, fresh undo.
 await page.evaluate((k) => {
   const row = document.querySelector(`#examplesPanel .exrow[data-ex="${CSS.escape(k)}"]`);
   const btn = row && row.querySelector('.reset');
   if (btn) btn.click();
 }, EX_NAME);
+await acceptModal(page);
 await page.waitForTimeout(120);
 const afterReset = await page.evaluate((k) => {
   const p = window.project;
@@ -260,7 +260,7 @@ const afterReset = await page.evaluate((k) => {
   };
 }, EX_NAME);
 if (afterReset.contentIsPristine && afterReset.treeModdotGone && afterReset.exModdotGone && afterReset.freshUndo)
-  ok('(d) reset ACCEPT (confirm=true): content == EXAMPLES[name], ● cleared in tree + examples, fresh undo stack');
+  ok('(d) reset ACCEPT (modal confirmed): content == EXAMPLES[name], ● cleared in tree + examples, fresh undo stack');
 else fail('(d) reset accept wrong: ' + JSON.stringify(afterReset));
 
 // ----------------------------------------------------------------------------

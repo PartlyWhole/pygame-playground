@@ -1654,7 +1654,7 @@ async function restoreSnapshot(id) {
   const msg = collab.active
     ? "Restore this version for EVERYONE in the room? This overwrites the project for all peers and can't be undone."
     : "Replace your current code with this version?";
-  if (!confirm(msg)) return;
+  if (!(await confirmModal({ title: collab.active ? "Restore for everyone" : "Restore version", message: msg, confirmLabel: "Restore" }))) return;
   await captureSnapshot();            // save the current state first, so a restore is itself recoverable
   _histSelectedId = null;
   project.load(rec.project);
@@ -2487,11 +2487,11 @@ function folderRenameInline(path) {
     return true;
   });
 }
-function folderDelete(path) {
+async function folderDelete(path) {
   const prefix = path + "/";
   const kids = project.order.filter(p => p.startsWith(prefix));
-  if (kids.length && project.order.length - kids.length < 1) { alert("Can't delete every file — keep at least one."); return; }
-  if (!confirm(`Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+  if (kids.length && project.order.length - kids.length < 1) { toast("Can't delete every file — keep at least one."); return; }
+  if (!(await confirmModal({ title: "Delete folder", message: `Delete folder "${path}" and ${kids.length} file${kids.length === 1 ? "" : "s"}? This can't be undone.`, confirmLabel: "Delete", danger: true }))) return;
   const beforeFolderDel = [...project.order];
   for (const k of kids) project.remove(k);
   mirrorDeletes(beforeFolderDel.filter(k => !project.files[k]));   // S6b: mirror dropped children
@@ -2530,9 +2530,9 @@ function fileRenameInline(name) {
     return true;
   });
 }
-function fileDelete(name) {
-  if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
-  if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+async function fileDelete(name) {
+  if (project.order.length <= 1) { toast("Can't delete the only file."); return; }
+  if (!(await confirmModal({ title: "Delete file", message: `Delete "${name}"? This can't be undone.`, confirmLabel: "Delete", danger: true }))) return;
   if (project.remove(name)) mirrorDeletes([name]);   // S6b: mirror only a successful delete
   if (viewerSel === name) renderViewer(project.active);
   renderTabs(); flushSave();
@@ -2559,8 +2559,8 @@ function assetRenameInline(name) {
     return assetFS.rename(name, next);
   });
 }
-function assetDelete(name) {
-  if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+async function assetDelete(name) {
+  if (!(await confirmModal({ title: "Delete asset", message: `Delete "${name}"? This can't be undone.`, confirmLabel: "Delete", danger: true }))) return;
   assetFS.remove(name);
 }
 // Build a CSS attribute-selector-safe value: escape backslash + double-quote (paths may carry
@@ -2721,13 +2721,13 @@ async function downloadFolder(folderPath) {
 // via getElementById('examples') + a dispatched change event to load + run the Snake example
 // (the asyncify smoke test). The visible, editable Examples rail panel (S4) is the user-facing
 // path — see renderExamplesPanel(); this select is the headless test seam only.
-exampleSel.addEventListener("change", () => {
+exampleSel.addEventListener("change", async () => {
   const chosen = EXAMPLES[exampleSel.value];
   const differs = project.isMulti() || editor.getValue() !== chosen;
   const msg = project.isMulti()
     ? `Replace your whole project (${project.order.length} files) with this example?`
     : "Replace your current code with the example?";
-  if (differs && !confirm(msg)) return;
+  if (differs && !(await confirmModal({ title: "Load example", message: msg, confirmLabel: "Replace" }))) return;
   project.load({ files: { "main.py": chosen } });   // collapse to a one-file project
   viewerSel = "main.py";
   renderViewer("main.py");
@@ -2827,10 +2827,10 @@ editor.on("change", () => {
 });
 
 // Reset a promoted+modified example to its immutable source: a FRESH Doc (fresh undo), behind confirm.
-function resetExampleFile(fileName) {
+async function resetExampleFile(fileName) {
   const key = exampleOf[fileName];
   if (!key) return;
-  if (!confirm(`Reset "${fileName}" to the original example? Your edits to this file will be lost.`)) return;
+  if (!(await confirmModal({ title: "Reset to original", message: `Reset "${fileName}" to the original example? Your edits to this file will be lost.`, confirmLabel: "Reset" }))) return;
   const fresh = new CodeMirror.Doc(EXAMPLES[key], "python");   // FRESH Doc = FRESH undo stack
   project.files[fileName] = fresh;                             // replace the Doc in-place (key unchanged)
   if (project.active === fileName) editor.swapDoc(fresh);       // re-show it (swapDoc, never setValue)

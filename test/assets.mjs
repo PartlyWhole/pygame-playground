@@ -24,7 +24,7 @@
 //   node test/assets.mjs http://localhost:8923/
 //
 // Style mirrors shell.mjs / explorer-tree.mjs: ok()/fail() + process.exitCode.
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 import { PNG_B64, WAV_B64, MP3_B64, buf } from './fixtures.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
@@ -288,6 +288,7 @@ else fail('no warning badge on the MP3 .tab.asset row');
     const del = items.find(el => /delete/i.test(el.textContent || ''));
     if (del) del.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
+  await acceptModal(page);   // #13: confirm the delete in the aesthetic modal
   await page.waitForTimeout(300);
   const deleted = await page.evaluate(() => ({
     goneFs: !pyodide.FS.analyzePath('trash.png').exists,

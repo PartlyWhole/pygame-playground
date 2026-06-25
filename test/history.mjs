@@ -1,5 +1,5 @@
 // Headless verification of the history panel. Mirrors test/assets.mjs.
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 const URL = process.argv[2] || 'http://localhost:8923/';
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
@@ -96,8 +96,8 @@ const diff = await page.evaluate(() => document.querySelector('#historyPanel .hp
 if (/d-del/.test(diff) && /d-add/.test(diff)) ok('diff shows added + removed lines'); else fail('diff missing add/del: ' + diff.slice(0, 200));
 
 // Restore the older version -> editor becomes 'a = 1\nb = 2\n'.
-await page.evaluate(() => { window.confirm = () => true; });
 await page.click('#historyPanel .hp-restore');
+await acceptModal(page);   // #13: confirm the restore in the modal
 await page.waitForTimeout(200);
 const restored = await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
 if (restored.trim() === 'a = 1\nb = 2'.trim()) ok('restore loads the chosen version'); else fail('restore wrong: ' + JSON.stringify(restored));
@@ -109,10 +109,10 @@ await page.evaluate(() => window.project.load({ files: { 'main.py': 'import e\n'
 await page.click('#runBtn'); await page.waitForTimeout(600);
 await page.evaluate(() => window.project.load({ files: { 'main.py': 'solo = 1\n' } }));   // collapse to one file
 await ensureHistoryOpen(); await page.waitForSelector('#historyPanel .hist-row', { timeout: 5000 });
-await page.evaluate(() => { window.confirm = () => true; });
 await page.click('#historyPanel .hist-row:last-child');
 await page.waitForSelector('#historyPanel .hp-restore', { timeout: 10_000 });
 await page.click('#historyPanel .hp-restore');
+await acceptModal(page);   // #13: confirm the restore in the modal
 await page.waitForTimeout(200);
 const back = await page.evaluate(() => ({ order: window.project.order, e: window.project.files['e.py']?.getValue() }));
 if (back.order.length === 2 && back.e?.includes('Z = 7')) ok('multi-file restore brings back all files'); else fail('multi-file restore wrong: ' + JSON.stringify(back));

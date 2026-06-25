@@ -34,7 +34,7 @@
 // model re-keyed/reordered; descendant move BLOCKED). The dedicated, fuller pointer-DnD coverage
 // (file/folder reorder, threshold, abort) lives in test/explorer-dnd.mjs.
 
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 import { WAV_B64 } from './fixtures.mjs';
 
 const URL = process.argv[2] || 'http://localhost:8923/';
@@ -339,6 +339,7 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
     const del = items.find(el => /delete/i.test(el.textContent || ''));
     if (del) del.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   });
+  await acceptModal(page);   // #13: confirm the delete in the aesthetic modal (replaced window.confirm)
   await page.waitForTimeout(200);
   const deleted = await page.evaluate(() => ({
     pathsGone: !window.project.files['sprites/enemy.py'] && !window.project.files['sprites/util.py']

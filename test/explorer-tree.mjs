@@ -182,34 +182,46 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
   if (btnVisible) ok('#newFolderBtn is visible (un-hidden in S2b)');
   else fail('#newFolderBtn still hidden / not laid out');
 
-  // happy path: stub prompt to return an identifier-safe name, click the button.
-  await page.evaluate(() => { window.prompt = () => 'actors'; });
+  // #8: new folder is now an INLINE create row (no browser prompt). Helper: fill the inline input + key.
+  const fillCreate = (val, key) => page.evaluate(({ v, k }) => {
+    const input = document.querySelector('#tabs .tab.creating input');
+    if (!input) return false;
+    input.value = v; input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k, bubbles: true, cancelable: true }));
+    return true;
+  }, { v: val, k: key });
+  // happy path: click the button to open the inline row, type an identifier-safe name + Enter.
   await click('#newFolderBtn');
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(80);
+  const folderInputShown = await page.evaluate(() => !!document.querySelector('#tabs .tab.folder.creating input'));
+  await fillCreate('actors', 'Enter');
+  await page.waitForTimeout(120);
   const created = await page.evaluate(() => {
     const row = document.querySelector('#tabs .tab.folder[data-path="actors"]');
     const inEmptyDirs = window.project.serialize().emptyDirs.includes('actors');
     return { row: !!row, inEmptyDirs };
   });
-  if (created.row && created.inEmptyDirs)
-    ok('#newFolderBtn creates an empty `actors/` folder row that persists via serialize().emptyDirs');
-  else fail('new folder not created/persisted: ' + JSON.stringify(created));
+  if (folderInputShown && created.row && created.inEmptyDirs)
+    ok('#newFolderBtn opens an inline input that creates an empty `actors/` folder (persists via serialize().emptyDirs)');
+  else fail('new folder not created/persisted: ' + JSON.stringify({ folderInputShown, ...created }));
 
-  // rejection: a non-identifier folder name must be refused (no row, not in emptyDirs) AND
-  // produce a user-facing rejection signal (the house alert). Gating on btnVisible + the alert
-  // (not just the absent row) prevents a vacuous pass while #newFolderBtn is hidden/unwired — the
-  // absent row is trivially true today, so without these the reject path would false-GREEN.
-  await page.evaluate(() => { window.prompt = () => 'my-folder'; window.__alerted = false; window.alert = () => { window.__alerted = true; }; });
+  // rejection: a non-identifier folder name must be refused (no row, not in emptyDirs) AND surface a
+  // CALM INLINE HINT (no browser alert — #8 replaced alert() with an in-row hint), staying in edit.
+  // Gating on btnVisible + the hint (not just the absent row) prevents a vacuous pass.
   await click('#newFolderBtn');
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(80);
+  await fillCreate('my-folder', 'Enter');
+  await page.waitForTimeout(120);
   const rejected = await page.evaluate(() => ({
     noRow: !document.querySelector('#tabs .tab.folder[data-path="my-folder"]'),
     notInEmptyDirs: !window.project.serialize().emptyDirs.includes('my-folder'),
-    alerted: !!window.__alerted,
+    hinted: !!document.querySelector('#tabs .tab.creating input.invalid') || !!document.querySelector('#tabs .tab.creating .rename-hint'),
   }));
-  if (btnVisible && rejected.noRow && rejected.notInEmptyDirs && rejected.alerted)
-    ok('#newFolderBtn rejects a non-identifier folder name (`my-folder` not created, user alerted)');
+  if (btnVisible && rejected.noRow && rejected.notInEmptyDirs && rejected.hinted)
+    ok('#newFolderBtn rejects a non-identifier folder name (`my-folder` not created; calm inline hint, no browser alert)');
   else fail('non-identifier folder name reject path wrong: ' + JSON.stringify({ btnVisible, ...rejected }));
+  // close the lingering create row so it doesn't bleed into the next block.
+  await page.evaluate(() => { const i = document.querySelector('#tabs .tab.creating input'); if (i) i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); });
 }
 
 // ================================================================================================
@@ -579,57 +591,19 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
   await page.waitForTimeout(250);
   await ensureExplorerOpen();
 
+  // #9: the fixed-entry cue is RETIRED — the open file is what runs. Assert no .tab.entry class and
+  // no start tag anywhere; the 🐍 type glyph stays on .py rows; running highlight is checked in §9a.
   const entry = await page.evaluate(() => {
-    const entryRow = document.querySelector('#tabs .tab.py.entry[data-name="main.py"]');
-    // util.py is the PLAIN reference: not entry, not active, not running — its .tab-name color is the
-    // baseline so an "accent-colored entry name" cue is detected against a true plain row.
-    const plainRow = document.querySelector('#tabs .tab.py[data-name="util.py"]');
-    const entryName = entryRow && entryRow.querySelector('.tab-name');
-    const plainName = plainRow && plainRow.querySelector('.tab-name');
-    const before = entryName ? (getComputedStyle(entryName, '::before').content || '') : '(no entry row)';
-    // The CALM entry-marker seam: ANY non-play indicator the implementer exposes. Accept any of:
-    //  - a dedicated marker element inside the entry row (a class containing entry/start/run-from,
-    //    or a [data-entry] / [data-start] hook), OR
-    //  - the entry filename rendered in the accent color (a calm color cue distinct from a plain
-    //    row's dim name color), OR
-    //  - a calm NON-triangle ::before/::after text tag on the entry name.
-    const markerEl = !!entryRow && !!entryRow.querySelector(
-      '.entry-tag, .entry-marker, .start-tag, .start-marker, .run-from, [data-entry], [data-start]');
-    const accentColored = !!entryName && !!plainName &&
-      getComputedStyle(entryName).color !== getComputedStyle(plainName).color;
-    const after = entryName ? (getComputedStyle(entryName, '::after').content || '') : '';
-    // a "calm text tag" = a QUOTED pseudo string carrying letters (e.g. "start"). getComputedStyle
-    // returns the keyword `none`/`normal` (UNQUOTED) when there is no generated content — exclude
-    // those so the absence of a tag isn't mistaken for one.
-    const quotedLetters = (s) => {
-      const m = /^["'](.*)["']$/s.exec(s);          // only a quoted content string counts
-      return !!m && /[A-Za-z]/.test(m[1]);
-    };
-    const calmPseudoTag = quotedLetters(before) || quotedLetters(after);
-    // the accent-color cue is only trustworthy when the entry row is ISOLATED (not .active/.running,
-    // which recolor the name on their own) — otherwise a color delta is a confounder, not the marker.
-    const isolated = !!entryRow && !entryRow.classList.contains('active') && !entryRow.classList.contains('running');
+    const anyPy = document.querySelector('#tabs .tab.py[data-name="main.py"]') || document.querySelector('#tabs .tab.py');
     return {
-      hasEntryRow: !!entryRow,
-      isolated,
-      entryClassKept: !!entryRow,                 // the .tab.entry semantic seam (§5) is preserved
-      beforeContent: before,
-      // RED today: ::before is "▸ " → contains the play triangle. GREEN: no ▸ and no ▶.
-      noEntryTriangle: !/▸/.test(before) && !/▶/.test(before),
-      // the calm marker exists by SOME seam (element / accent color while isolated / text tag).
-      calmMarker: markerEl || (accentColored && isolated) || calmPseudoTag,
-      pyGlyph: entryRow ? (entryRow.querySelector('.ic') || {}).textContent : null,
+      entryRows: document.querySelectorAll('#tabs .tab.entry').length,
+      startTags: document.querySelectorAll('#tabs .start-tag, #tabs [data-entry], #tabs [data-start]').length,
+      pyGlyph: anyPy ? (anyPy.querySelector('.ic') || {}).textContent : null,
     };
   });
-  if (entry.hasEntryRow && entry.entryClassKept)
-    ok('entry row keeps the .tab.entry semantic class (the seam tests rely on, §5)');
-  else fail('entry row / .tab.entry class missing: ' + JSON.stringify(entry));
-  if (entry.noEntryTriangle)
-    ok('entry marker is CALM: ::before carries no "▸"/"▶" play triangle: ' + JSON.stringify(entry.beforeContent));
-  else fail('entry marker still a play triangle (CSS .tab.entry .tab-name::before "▸ "): ' + JSON.stringify(entry.beforeContent));
-  if (entry.calmMarker)
-    ok('  ...a calm NON-play entry marker is exposed (element / accent color / text tag)');
-  else fail('  no calm entry-marker seam found (need an element/accent-color/text-tag indicator): ' + JSON.stringify(entry));
+  if (entry.entryRows === 0 && entry.startTags === 0)
+    ok('#9: no fixed-entry cue in the tree (.tab.entry + start tag retired — the open file runs)');
+  else fail('entry cue still present: ' + JSON.stringify(entry));
   if (entry.pyGlyph === '🐍')
     ok('🐍 type glyph STILL present on .py rows (.ic === 🐍)');
   else fail('🐍 type glyph missing/changed on .py rows: ' + JSON.stringify(entry.pyGlyph));
@@ -703,6 +677,90 @@ else fail('  nested file not indented past root file: ' + JSON.stringify(tree));
   // End the live task so it doesn't leak into later batteries / hang teardown.
   await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
   await page.waitForTimeout(150);
+}
+
+// ================================================================================================
+// Request #6 (refinement v2): dragging a file to REORDER actually reorders — even when the drop
+// lands on the thin .drop-line indicator (the natural release target). RED today: a drop on the
+// .drop-line resolves no row, so project.order never changes.
+{
+  await ensureExplorerOpen();
+  await page.evaluate(() => {
+    window.project.load({ files: { 'a.py': '# a\n', 'b.py': '# b\n', 'c.py': '# c\n' }, order: ['a.py', 'b.py', 'c.py'], entry: 'a.py', active: 'a.py' });
+    window.renderTabs();
+  });
+  const reordered = await page.evaluate(() => {
+    const src = document.querySelector('#tabs .tab[data-name="b.py"]');
+    const dst = document.querySelector('#tabs .tab[data-name="a.py"]');
+    if (!src || !dst) return { srcFound: !!src, dstFound: !!dst };
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'b.py');
+    const topY = dst.getBoundingClientRect().top + 2;   // top half → drop-line BEFORE a.py
+    const mk = (type, target, y) => { const e = new DragEvent(type, { bubbles: true, cancelable: true, clientY: y }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} target.dispatchEvent(e); };
+    mk('dragstart', src, topY);
+    mk('dragover', dst, topY);
+    const line = document.querySelector('#tabs .drop-line');
+    const lineFound = !!line;
+    if (line) mk('drop', line, topY);   // drop on the INDICATOR, not a row (the previously-broken path)
+    mk('dragend', src, topY);
+    return { srcFound: true, dstFound: true, lineFound };
+  });
+  await page.waitForTimeout(120);
+  const res = await page.evaluate(() => ({
+    order: window.project.order.slice(),
+    rows: [...document.querySelectorAll('#tabs .tab.py')].map(n => n.dataset.name),
+  }));
+  const want = ['b.py', 'a.py', 'c.py'];
+  const eq = (x) => JSON.stringify(x) === JSON.stringify(want);
+  if (reordered.lineFound && eq(res.order) && eq(res.rows))
+    ok('#6: dropping on the .drop-line reorders b.py above a.py (model + rendered order = b,a,c)');
+  else fail('#6: reorder via drop-line failed: ' + JSON.stringify({ reordered, ...res }));
+
+  // #6 (review): drop on a line placed AFTER the last row (bottom half of c.py) → reorder-to-end.
+  // Covers the fallback's previousElementSibling branch (lineRow=prv, lineAfter=true). Clear assets
+  // first so a leftover asset row (seeded earlier, persists across project.load) isn't last.
+  await page.evaluate(async () => {
+    await window.assetFS.clearAll();
+    window.project.load({ files: { 'a.py': '# a\n', 'b.py': '# b\n', 'c.py': '# c\n' }, order: ['a.py', 'b.py', 'c.py'], entry: 'a.py', active: 'a.py' });
+    window.renderTabs();
+  });
+  const endDbg = await page.evaluate(() => {
+    const src = document.querySelector('#tabs .tab[data-name="a.py"]');
+    const dst = document.querySelector('#tabs .tab[data-name="c.py"]');
+    if (!src || !dst) return { err: 'rows missing' };
+    const dt = new DataTransfer(); dt.setData('text/plain', 'a.py');
+    const botY = dst.getBoundingClientRect().bottom - 2;   // bottom half → drop-line AFTER c.py (last row)
+    const mk = (t, tg, y) => { const e = new DragEvent(t, { bubbles: true, cancelable: true, clientY: y }); try { Object.defineProperty(e, 'dataTransfer', { value: dt }); } catch {} tg.dispatchEvent(e); };
+    mk('dragstart', src, botY); mk('dragover', dst, botY);
+    const line = document.querySelector('#tabs .drop-line');
+    const lineFound = !!line;
+    const linePos = line ? (line.nextElementSibling ? 'before-' + (line.nextElementSibling.dataset && line.nextElementSibling.dataset.name) : 'at-end') : 'none';
+    if (line) mk('drop', line, botY);
+    mk('dragend', src, botY);
+    return { lineFound, linePos };
+  });
+  await page.waitForTimeout(120);
+  const endOrder = await page.evaluate(() => window.project.order.slice());
+  if (JSON.stringify(endOrder) === JSON.stringify(['b.py', 'c.py', 'a.py']))
+    ok('#6: dropping on a line after the last row moves a.py to the end (prv branch)');
+  else fail('#6: drop-at-end (prv branch) failed: ' + JSON.stringify({ endOrder, ...endDbg }));
+}
+
+// ================================================================================================
+// Request #10 (refinement v2): the redundant trailing "+ new file" affordance (.tab-add) is GONE.
+// The header New-file button (#newFileBtn) remains the single in-explorer new-file entry point.
+{
+  await ensureExplorerOpen();
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a=1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+  });
+  const noAdd = await page.evaluate(() => document.querySelectorAll('#tabs .tab-add').length);
+  if (noAdd === 0) ok('#10: no redundant ".tab-add" (+ new file) span in the tree');
+  else fail(`#10: redundant .tab-add still present (count=${noAdd})`);
+  const headerBtn = await page.evaluate(() => !!document.getElementById('newFileBtn'));
+  if (headerBtn) ok('#10: header New-file button (#newFileBtn) remains as the new-file entry point');
+  else fail('#10: header #newFileBtn missing — new-file affordance lost');
 }
 
 // ================================================================================================

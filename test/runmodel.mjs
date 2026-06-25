@@ -329,7 +329,8 @@ console.log('\n=== 5. Re-run after stop works ===');
 // =====================================================================
 console.log('\n=== 8. Running-file badge + click-to-jump ===');
 {
-  // Load a 2-file project: main.py (entry, frame-paced RED loop) + lib.py (open non-entry module).
+  // #9: the OPEN file is what runs. Seed entry=lib.py (a sibling) but OPEN game.py (the animating
+  // loop) — Start must run the OPEN file (game.py), proving the fixed entry is ignored.
   await page.evaluate(() => {
     if (typeof pyodide !== 'undefined' && pyodide) try { pyodide.runPython('_stop()'); } catch (e) {}
   });
@@ -337,11 +338,11 @@ console.log('\n=== 8. Running-file badge + click-to-jump ===');
   await page.evaluate((src) => {
     window.project.load({
       files: {
-        'main.py': src,
-        'lib.py': '# a sibling module, not the entry\nHELPER = 1\n',
+        'game.py': src,
+        'lib.py': '# a sibling module\nHELPER = 1\n',
       },
-      entry: 'main.py',
-      active: 'lib.py',     // a DIFFERENT file is open at Start
+      entry: 'lib.py',
+      active: 'game.py',     // the OPEN file is the animating loop
     });
     window.renderTabs();
   }, FRAME_PACED);
@@ -350,8 +351,8 @@ console.log('\n=== 8. Running-file badge + click-to-jump ===');
 
   // window.runFile() seam reports the running ENTRY (not the open file).
   const runFile = await page.evaluate(() => (typeof window.runFile === 'function' ? window.runFile() : '__no_seam__'));
-  if (runFile === 'main.py') ok('window.runFile() reports the running entry (main.py) even though lib.py is open');
-  else fail(`window.runFile() wrong (got ${JSON.stringify(runFile)}; expected "main.py")`);
+  if (runFile === 'game.py') ok('#9: window.runFile() reports the OPEN file (game.py) — Start runs what is open, not the fixed entry (lib.py)');
+  else fail(`window.runFile() wrong (got ${JSON.stringify(runFile)}; expected "game.py" — the open file)`);
 
   // The badge element is shown and reads `▶ running: main.py` (basename ok).
   const badge = await page.evaluate(() => {
@@ -359,15 +360,16 @@ console.log('\n=== 8. Running-file badge + click-to-jump ===');
     if (!b) return { present: false };
     return { present: true, visible: b.offsetParent !== null, text: (b.textContent || '').trim() };
   });
-  if (badge.present && badge.visible && /running/i.test(badge.text) && /main\.py/.test(badge.text))
+  if (badge.present && badge.visible && /running/i.test(badge.text) && /game\.py/.test(badge.text))
     ok(`running badge shown: "${badge.text}"`);
   else fail('running badge wrong/absent: ' + JSON.stringify(badge));
 
-  // Clicking the badge jumps the editor/viewer to the running file (project.active === entry).
+  // Clicking the badge jumps to the running file. Switch the open file away first so the jump is observable.
+  await page.evaluate(() => { window.project.setActive('lib.py'); window.renderTabs(); });
   await click('#runFileBadge');
   await page.waitForTimeout(150);
   const activeAfterJump = await page.evaluate(() => window.project.active);
-  if (activeAfterJump === 'main.py') ok('clicking the badge jumps to the running file (project.active === entry)');
+  if (activeAfterJump === 'game.py') ok('clicking the badge jumps back to the running file (project.active === game.py)');
   else fail(`badge click did not jump (project.active=${activeAfterJump})`);
 
   // When PAUSED the badge reads `⏸ paused: <file>`.
@@ -377,7 +379,7 @@ console.log('\n=== 8. Running-file badge + click-to-jump ===');
     const b = document.getElementById('runFileBadge');
     return b ? (b.textContent || '').trim() : null;
   });
-  if (pausedBadge && /paus/i.test(pausedBadge) && /main\.py/.test(pausedBadge))
+  if (pausedBadge && /paus/i.test(pausedBadge) && /game\.py/.test(pausedBadge))
     ok(`paused badge reads: "${pausedBadge}"`);
   else fail('paused badge wrong/absent: ' + JSON.stringify(pausedBadge));
   await click('#pauseBtn');   // resume for the next checks
@@ -395,8 +397,8 @@ console.log('\n=== 9. Explorer highlights the running file ===');
     const running = rows.filter(r => r.classList.contains('running')).map(r => r.dataset.name);
     return { count: rows.length, running };
   });
-  if (hi.running.length === 1 && hi.running[0] === 'main.py')
-    ok('explorer: exactly the running file (main.py) row carries the .running class');
+  if (hi.running.length === 1 && hi.running[0] === 'game.py')
+    ok('explorer: exactly the running file (game.py) row carries the .running class');
   else fail('explorer running-highlight wrong: ' + JSON.stringify(hi));
 }
 
@@ -412,18 +414,18 @@ console.log('\n=== 10. Editor independence (Start-time snapshot) ===');
     window.project.setActive('lib.py');
     window.project.files['lib.py'].setValue('HELPER = 999\n# edited while running\n');
     // Also mutate the RUNNING file's source Doc — must NOT affect the already-snapshotted run.
-    window.project.files['main.py'].setValue('raise RuntimeError("should not be running this edited source")\n');
+    window.project.files['game.py'].setValue('raise RuntimeError("should not be running this edited source")\n');
   });
   await page.waitForTimeout(150);
   // The live program must STILL be animating (it runs the Start-time snapshot, not the edited Doc).
   const stillAnimating = await animatesOver(600);
   const stillRunning = (await status()) === 'running';
-  const stillEntry = await page.evaluate(() => (typeof window.runFile === 'function' ? window.runFile() : null));
+  const stillRunFile = await page.evaluate(() => (typeof window.runFile === 'function' ? window.runFile() : null));
   if (stillAnimating && stillRunning)
-    ok('independence: live program keeps animating after editing other + running files (snapshot honored)');
+    ok('independence: live program keeps animating after editing other + running files (Start-time snapshot honored)');
   else fail(`independence broken: animating=${stillAnimating} status=${await status()}`);
-  if (stillEntry === 'main.py') ok('independence: window.runFile() still reports the entry after the open-file switch');
-  else fail(`independence: runFile() changed with the open file (got ${JSON.stringify(stillEntry)})`);
+  if (stillRunFile === 'game.py') ok('#9 independence: window.runFile() still reports the file open at Start (game.py), not the now-open lib.py');
+  else fail(`independence: runFile() changed with the open file (got ${JSON.stringify(stillRunFile)})`);
   // Clean up: stop the run.
   await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch (e) {} });
   await waitStatus(['stopped'], 5000).catch(() => {});

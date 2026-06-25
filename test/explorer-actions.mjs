@@ -179,17 +179,18 @@ const fileMenu = await readMenu();
 const filePrompts = await page.evaluate(() => window.__prompts.slice());
 const fileItemsOk = fileMenu.open &&
   fileMenu.items.some(t => /rename/i.test(t)) &&
-  fileMenu.items.some(t => /set as start/i.test(t)) &&
-  fileMenu.items.some(t => /delete/i.test(t));
+  fileMenu.items.some(t => /delete/i.test(t)) &&
+  fileMenu.items.some(t => /download/i.test(t)) &&   // #7: Download moved into the ⋯ menu
+  !fileMenu.items.some(t => /set as start/i.test(t));   // #9: fixed entry retired — no "Set as start"
 if (fileBtn && fileItemsOk)
-  ok('file ⋯ opens a [role=menu] with Rename / Set as start file / Delete: ' + JSON.stringify(fileMenu.items));
-else fail('file ⋯ did not open a role=menu with the 3 file items: ' + JSON.stringify({ fileBtn, fileMenu }));
+  ok('file ⋯ opens a [role=menu] with Rename / Delete / Download (no "Set as start" — #9): ' + JSON.stringify(fileMenu.items));
+else fail('file ⋯ did not open a role=menu with the expected file items: ' + JSON.stringify({ fileBtn, fileMenu }));
 if (fileBtn && filePrompts.length === 0)
   ok('  ...opening the file ⋯ menu fired NO window.prompt');
 else fail('  file ⋯ fired a window.prompt (typed-prompt menu still live): ' + JSON.stringify(filePrompts));
 
 // ================================================================================================
-// 2. FOLDER ⋯ OPENS A [role=menu] WITH Rename / Delete (no "Set as start", no Download). (design §1)
+// 2. FOLDER ⋯ OPENS A [role=menu] WITH Rename / Delete / Download (no "Set as start"). (#7)
 // ================================================================================================
 await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'a = 1\n', 'sprites/enemy.py': 'E = 1\n' }, order: ['main.py', 'sprites/enemy.py'], entry: 'main.py', active: 'main.py' });
@@ -204,10 +205,22 @@ const folderPrompts = await page.evaluate(() => window.__prompts.slice());
 const folderItemsOk = folderMenu.open &&
   folderMenu.items.some(t => /rename/i.test(t)) &&
   folderMenu.items.some(t => /delete/i.test(t)) &&
-  !folderMenu.items.some(t => /set as start|download/i.test(t));
+  folderMenu.items.some(t => /download/i.test(t)) &&   // #7: folder Download now in the ⋯ menu
+  !folderMenu.items.some(t => /set as start/i.test(t));
 if (folderBtn && folderItemsOk)
-  ok('folder ⋯ opens a [role=menu] with exactly Rename / Delete: ' + JSON.stringify(folderMenu.items));
-else fail('folder ⋯ did not open a role=menu with just Rename/Delete: ' + JSON.stringify({ folderBtn, folderMenu }));
+  ok('folder ⋯ opens a [role=menu] with Rename / Delete / Download: ' + JSON.stringify(folderMenu.items));
+else fail('folder ⋯ did not open a role=menu with Rename/Delete/Download: ' + JSON.stringify({ folderBtn, folderMenu }));
+
+// #7: the standalone per-row .dl download button is GONE — download lives in the ⋯ menu now.
+{
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a=1\n', 'sprites/enemy.py': 'E=1\n' }, order: ['main.py', 'sprites/enemy.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+  });
+  const noDl = await page.evaluate(() => document.querySelectorAll('#tabs .tab .dl').length);
+  if (noDl === 0) ok('#7: no standalone .dl button on any row (download is in the ⋯ menu)');
+  else fail(`#7: standalone .dl button still present (count=${noDl})`);
+}
 if (folderBtn && folderPrompts.length === 0)
   ok('  ...opening the folder ⋯ menu fired NO window.prompt');
 else fail('  folder ⋯ fired a window.prompt: ' + JSON.stringify(folderPrompts));
@@ -504,7 +517,8 @@ if (assetDeleteChosen && assetDeleted.prompts.length === 0)
 else fail('  asset Delete fired a window.prompt: ' + JSON.stringify(assetDeleted.prompts));
 
 // ================================================================================================
-// 9. SET-AS-START (FILE) VIA MENU SETS project.entry — IMMEDIATELY, NO PROMPT. (design §1)
+// 9. #9: "Set as start file" is RETIRED — the open file is what runs, so the file ⋯ menu must NOT
+//    offer it. (was: set-as-start sets project.entry)
 // ================================================================================================
 await page.evaluate(() => {
   window.project.load({ files: { 'main.py': 'a = 1\n', 'enemy.py': 'E = 1\n' }, order: ['main.py', 'enemy.py'], entry: 'main.py', active: 'main.py' });
@@ -514,15 +528,11 @@ await page.evaluate(() => {
 await ensureExplorerOpen();
 await clickRowMenu('#tabs .tab[data-name="enemy.py"]');
 await page.waitForTimeout(150);
-const startChosen = await activateMenuItem('Set as start');
-await page.waitForTimeout(200);
-const startSet = await page.evaluate(() => ({ entry: window.project.entry, prompts: window.__prompts.slice() }));
-if (startChosen && startSet.entry === 'enemy.py')
-  ok('Set as start file via menu sets project.entry = enemy.py');
-else fail('Set as start file did not set project.entry: ' + JSON.stringify({ startChosen, startSet }));
-if (startChosen && startSet.prompts.length === 0)
-  ok('  ...Set as start fired NO window.prompt');
-else fail('  Set as start fired a window.prompt: ' + JSON.stringify(startSet.prompts));
+const startMenu = await readMenu();
+await page.evaluate(() => window.__closePopMenu && window.__closePopMenu(false));
+if (startMenu.open && !startMenu.items.some(t => /set as start/i.test(t)))
+  ok('#9: the file ⋯ menu no longer offers "Set as start file" (fixed entry retired): ' + JSON.stringify(startMenu.items));
+else fail('#9: "Set as start" still present in the file menu: ' + JSON.stringify(startMenu.items));
 
 // ================================================================================================
 // 10. DOWNLOAD (ASSET) VIA MENU TRIGGERS A DOWNLOAD EVENT. Choose Download from the asset menu;
@@ -623,12 +633,15 @@ await page.evaluate(() => window.__closePopMenu && window.__closePopMenu(false))
 await page.waitForTimeout(80);
 const assetMenuRight = assetClashMenu.open &&
   assetClashMenu.items.some(t => /download/i.test(t)) &&
-  !assetClashMenu.items.some(t => /set as start/i.test(t));
+  assetClashMenu.items.some(t => /rename/i.test(t)) &&
+  assetClashMenu.items.some(t => /delete/i.test(t));
 if (assetMenuRight)
-  ok('same-path: the ASSET row\'s ⋯ opens the ASSET menu (Download, no "Set as start"): ' + JSON.stringify(assetClashMenu.items));
-else fail('same-path: ASSET row\'s ⋯ opened the WRONG menu (path-lookup routes to the code file): ' + JSON.stringify(assetClashMenu));
+  ok('same-path: the ASSET row\'s ⋯ opens a menu (Rename/Delete/Download): ' + JSON.stringify(assetClashMenu.items));
+else fail('same-path: ASSET row\'s ⋯ did not open the expected menu: ' + JSON.stringify(assetClashMenu));
 
-// open the CODE row's ⋯ — its menu must be the FILE menu (Set as start present, no Download).
+// open the CODE row's ⋯. #9 retired "Set as start", so code & asset menus now carry the SAME items —
+// the real code-vs-asset disambiguation is proven BEHAVIORALLY by the rename leg below (the inline
+// input must land on the .tab.py row, not the same-path .tab.asset row).
 await page.evaluate(() => { window.__prompts = []; });
 await clickRowMenu('#tabs .tab.py[data-name="dup.png"]');
 await page.waitForTimeout(150);
@@ -636,11 +649,11 @@ const codeClashMenu = await readMenu();
 await page.evaluate(() => window.__closePopMenu && window.__closePopMenu(false));
 await page.waitForTimeout(80);
 const codeMenuRight = codeClashMenu.open &&
-  codeClashMenu.items.some(t => /set as start/i.test(t)) &&
-  !codeClashMenu.items.some(t => /download/i.test(t));
+  codeClashMenu.items.some(t => /rename/i.test(t)) &&
+  codeClashMenu.items.some(t => /delete/i.test(t));
 if (codeMenuRight)
-  ok('same-path: the CODE row\'s ⋯ opens the FILE menu (Set as start, no Download): ' + JSON.stringify(codeClashMenu.items));
-else fail('same-path: CODE row\'s ⋯ opened the WRONG menu: ' + JSON.stringify(codeClashMenu));
+  ok('same-path: the CODE row\'s ⋯ opens a menu (Rename/Delete/Download): ' + JSON.stringify(codeClashMenu.items));
+else fail('same-path: CODE row\'s ⋯ did not open the expected menu: ' + JSON.stringify(codeClashMenu));
 
 // Slice-C follow-up A (rename leg): choosing "Rename" from the CODE row's menu must attach the inline
 // <input> to the .tab.py row — NOT the same-path .tab.asset row. fileRenameInline must qualify its
@@ -663,6 +676,25 @@ await page.waitForTimeout(80);
 if (codeRenameChosen && renameTarget.pyRowHasInput && !renameTarget.assetRowHasInput)
   ok('same-path: CODE "Rename" attaches the inline <input> to the .tab.py row (not the asset row)');
 else fail('same-path: CODE "Rename" did NOT land on the .tab.py row (selector not qualified to code): ' + JSON.stringify({ codeRenameChosen, renameTarget }));
+
+// #9-review: mirror the rename leg for the ASSET side. Since #7/#9 made the code & asset menus carry
+// IDENTICAL items, item-set checks can't disambiguate — so prove the ASSET row's ⋯ Rename lands on
+// the .tab.asset row, NOT the same-path .tab.py row (restores the lost asset-direction routing coverage).
+await page.evaluate(() => { window.__prompts = []; });
+await clickRowMenu('#tabs .tab.asset[data-name="dup.png"]');
+await page.waitForTimeout(150);
+const clashAssetRenameChosen = await activateMenuItem('Rename');
+await page.waitForTimeout(150);
+const clashAssetRenameTarget = await page.evaluate(() => ({
+  assetRowHasInput: !!document.querySelector('#tabs .tab.asset[data-name="dup.png"] input'),
+  pyRowHasInput: !!document.querySelector('#tabs .tab.py[data-name="dup.png"] input'),
+}));
+await inlineRename('#tabs .tab.asset[data-name="dup.png"]', '', 'Escape').catch(() => {});
+await inlineRename('#tabs .tab.py[data-name="dup.png"]', '', 'Escape').catch(() => {});
+await page.waitForTimeout(80);
+if (clashAssetRenameChosen && clashAssetRenameTarget.assetRowHasInput && !clashAssetRenameTarget.pyRowHasInput)
+  ok('same-path: ASSET "Rename" attaches the inline <input> to the .tab.asset row (not the code row)');
+else fail('same-path: ASSET "Rename" did NOT land on the .tab.asset row: ' + JSON.stringify({ clashAssetRenameChosen, clashAssetRenameTarget }));
 
 // ================================================================================================
 // 13. SLICE-C FOLLOW-UP B — popup-menu Tab focus-trap (a11y) (design Slice C §3).
@@ -731,6 +763,43 @@ else fail('Tab inside the open menu does NOT preventDefault — the native Tab l
 if (!trapAfter.leakedToPage && !trapAfter.leakedToCM && (trapAfter.inMenu || trapAfter.onAnchor))
   ok('  ...and focus stays within the menu or returns to the ⋯ (not an unrelated page control): ' + JSON.stringify({ inMenu: trapAfter.inMenu, onAnchor: trapAfter.onAnchor }));
 else fail('  Tab landed focus on an unrelated page control / the editor: ' + JSON.stringify(trapAfter));
+
+// ================================================================================================
+// Request #8 (refinement v2): NEW file/folder creation uses an inline editable row, NOT a browser
+// prompt(). Clicking the header New-file button shows an inline <input>; type + Enter creates;
+// Esc cancels. window.prompt must NOT fire.
+{
+  await ensureExplorerOpen();
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a=1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+    window.__prompts = [];
+  });
+  await page.click('#newFileBtn');
+  await page.waitForTimeout(60);
+  const created = await page.evaluate(() => !!document.querySelector('#tabs .tab.creating input'));
+  if (created) ok('#8: New-file button opens an inline create input (no browser prompt dialog)');
+  else fail('#8: New-file button did not show an inline create input');
+  await inlineRename('#tabs .tab.creating', 'spawned', 'Enter');
+  await page.waitForTimeout(60);
+  const madeFile = await page.evaluate(() =>
+    Object.keys(window.project.files).some(k => k.split('/').pop() === 'spawned.py'));
+  if (madeFile) ok('#8: typing + Enter creates the file (spawned.py) via the model');
+  else fail('#8: inline create did not add spawned.py to the project');
+  const noPrompt = await page.evaluate(() => (window.__prompts || []).length);
+  if (noPrompt === 0) ok('#8: NO window.prompt invoked during inline create');
+  else fail(`#8: window.prompt was called ${noPrompt}x (ugly browser dialog still in use)`);
+  await page.evaluate(() => { window.__prompts = []; });
+  await page.click('#newFileBtn');
+  await page.waitForTimeout(60);
+  await inlineRename('#tabs .tab.creating', 'temp', 'Escape');
+  await page.waitForTimeout(60);
+  const cancelled = await page.evaluate(() =>
+    !Object.keys(window.project.files).some(k => k.split('/').pop() === 'temp.py')
+    && !document.querySelector('#tabs .tab.creating'));
+  if (cancelled) ok('#8: Esc cancels inline create (no file added, input removed)');
+  else fail('#8: Esc did not cleanly cancel inline create');
+}
 
 // ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));

@@ -138,13 +138,20 @@ function withDialogs(page, answers) {
   return () => page.off('dialog', handler);
 }
 
-// Create a new file via the REAL explorer flow (newFilePrompt — the "+ new file" affordance).
-// Answers the single "New file name" prompt with `name`. Returns once the local op settled.
+// Create a new file via the REAL explorer flow (#8: inline create row, no browser prompt).
+// newFilePrompt() opens the inline <input>; we type `name` (may be a full dir/file path) + Enter.
 async function explorerNewFile(page, name) {
-  const off = withDialogs(page, [name]);
   await page.evaluate(() => window.newFilePrompt());
+  await page.waitForTimeout(80);
+  await page.evaluate((n) => {
+    const input = document.querySelector('#tabs .tab.creating input');
+    if (input) {
+      input.value = n;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+    }
+  }, name);
   await page.waitForTimeout(150);
-  off();
 }
 
 // Rename a file via the REAL explorer flow (Slice B: tabMenu opens the ⋯ popup [role=menu];

@@ -60,6 +60,33 @@ async function clickDownload(selector) {
   } catch { return null; }
 }
 
+// #7: download now lives in the row's ⋯ menu (not a standalone .dl button). Open the row menu and
+// activate its "Download" item, capturing the resulting download. rowSel = the .tab row selector.
+async function menuDownload(rowSel) {
+  const has = await page.$(rowSel);
+  if (!has) return null;
+  await page.evaluate((sel) => {
+    const r = document.querySelector(sel);
+    const btn = r && r.querySelector('.tab-menu');
+    if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }, rowSel);
+  await page.waitForTimeout(80);
+  try {
+    const [dl] = await Promise.all([
+      page.waitForEvent('download', { timeout: 6000 }),   // folder Download is async (loads JSZip)
+      page.evaluate(() => {
+        const menus = [...document.querySelectorAll('[role="menu"]')].filter(m => m.offsetParent !== null);
+        const menu = menus[menus.length - 1];
+        let items = menu ? [...menu.querySelectorAll('[role="menuitem"]')] : [];
+        if (!items.length && menu) items = [...menu.querySelectorAll('button, li, a')];
+        const item = items.find(el => /download/i.test(el.textContent || ''));
+        if (item) item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }),
+    ]);
+    return dl;
+  } catch { return null; }
+}
+
 // 1. Save button exists.
 const hasBtn = await page.evaluate(() => !!document.getElementById('saveBtn'));
 if (hasBtn) ok('save button present'); else fail('no #saveBtn');
@@ -214,7 +241,7 @@ else fail('user __init__.py clobbered: ' + JSON.stringify(zu['sprites/__init__.p
 await page.evaluate(() => { window.project.load({
   files: { 'main.py': 'import helper\n', 'helper.py': 'H = 42  # bare\n' },
   order: ['main.py', 'helper.py'], entry: 'main.py', active: 'main.py' }); window.renderTabs(); });
-const pyRowDl = await clickDownload('#tabs .tab.py[data-name="helper.py"] .dl');
+const pyRowDl = await menuDownload('#tabs .tab.py[data-name="helper.py"]');
 if (!pyRowDl) fail('.py row .dl missing or no download (expected bare helper.py)');
 else if (pyRowDl.suggestedFilename() !== 'helper.py') fail('.py row .dl wrong filename (expected helper.py): ' + pyRowDl.suggestedFilename());
 else {
@@ -244,7 +271,7 @@ await page.waitForFunction(
   () => typeof pyodide !== 'undefined' && pyodide.FS.analyzePath('art.png').exists,
   null, { timeout: 5000 }).catch(() => {});
 await page.waitForTimeout(600);
-const assetRowDl = await clickDownload('#tabs .tab.asset[data-name="art.png"] .dl');
+const assetRowDl = await menuDownload('#tabs .tab.asset[data-name="art.png"]');
 if (!assetRowDl) fail('asset row .dl missing or no download (expected bare art.png)');
 else if (assetRowDl.suggestedFilename() !== 'art.png') fail('asset row .dl wrong filename (expected art.png): ' + assetRowDl.suggestedFilename());
 else {
@@ -263,7 +290,7 @@ await page.evaluate(() => { window.project.load({
   order: ['main.py', 'sprites/enemy.py', 'sprites/boss.py'], entry: 'main.py', active: 'main.py' });
   if (typeof closedFolders !== 'undefined') closedFolders.clear();   // ensure the folder row renders
   window.renderTabs(); });
-const folderDl = await clickDownload('#tabs .tab.folder[data-path="sprites"] .dl');
+const folderDl = await menuDownload('#tabs .tab.folder[data-path="sprites"]');
 if (!folderDl) fail('folder row .dl missing or no download (expected sprites.zip)');
 else if (folderDl.suggestedFilename() !== 'sprites.zip') fail('folder row .dl wrong filename (expected sprites.zip): ' + folderDl.suggestedFilename());
 else {

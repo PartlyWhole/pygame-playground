@@ -146,14 +146,6 @@
   #tabs .tab .ic { width: 16px; flex: 0 0 16px; text-align: center; font-size: 13px; }
   #tabs .tab.py .ic { color: var(--color-py-icon); }
   #tabs .tab .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--mono); font-size: 12px; }
-  /* Slice C: calm, NON-play entry cue — accent-colored name + a small unobtrusive "start" tag,
-     never a play triangle. The .tab.entry semantic class is preserved (tests + run model rely on it). */
-  #tabs .tab.entry .tab-name { color: var(--accent); }
-  #tabs .tab .start-tag {
-    flex: 0 0 auto; font-size: 9px; line-height: 1; letter-spacing: 0.04em; text-transform: uppercase;
-    color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px;
-    opacity: 0.85; font-family: var(--mono);
-  }
   /* S3: the file whose program is live gets a warm left-bar + warm name (the at-a-glance running cue),
      distinct from .active selection. Slice C dropped the redundant in-row ▶ — the stage #runFileBadge
      stays the authoritative "what's running"; running shows here via border + warm name only. */
@@ -191,11 +183,6 @@
   .popmenu .mi:hover, .popmenu .mi:focus, .popmenu .mi.active { background: var(--color-row-hover); outline: none; }
   .popmenu .mi.danger { color: var(--bad); }
   .popmenu .mi.danger:hover, .popmenu .mi.danger:focus, .popmenu .mi.danger.active { background: #3a2329; }
-  /* S5: per-row download button (bare file / asset; folder -> subtree zip). */
-  #tabs .tab .dl { color: var(--dim); border: none; background: none; cursor: pointer; padding: 0 2px; border-radius: 3px; flex: 0 0 auto; display: inline-flex; align-items: center; }
-  #tabs .tab .dl svg { display: block; }
-  #tabs .tab .dl:hover { color: var(--text); background: #34384a; }
-  #tabs .tab-add { display: block; padding: 5px 8px; color: var(--accent); cursor: pointer; user-select: none; font-size: 12px; }
   /* S2: folder rows + caret + DnD drop affordances (retargeted from proto/sandbox.html) */
   #tabs .tab .caret { width: 12px; flex: 0 0 12px; text-align: center; color: var(--dim); font-size: 9px; transition: transform .12s; }
   #tabs .tab .caret.spacer { visibility: hidden; }
@@ -438,7 +425,7 @@
         <div class="pane-head">
           <span class="name">🎮 Game stage</span>
           <button id="stageHint" class="stage-hint" type="button">press start to run</button>
-          <!-- S3: running-file badge — shows the live program's entry; click jumps to it. -->
+          <!-- S3/#9: running-file badge — shows the live program's OPEN file; click jumps to it. -->
           <button id="runFileBadge" class="stage-hint" type="button" hidden></button>
           <span class="spacer"></span>
           <!-- S3: split run model. Pause ⇄ Resume + End shown only while a task is live. -->
@@ -981,7 +968,10 @@ const project = {
     // by old readers).
     const occupied = this._fileDirs();
     const emptyDirs = [...this.emptyDirs].filter(d => !occupied.has(d));
-    return { files, order: [...this.order], entry: this.entry, emptyDirs };
+    // #9: persist the OPEN file as `entry` (kept in the schema for rollback / cross-version / older
+    // readers that still run `entry`) so a saved/shared/reconciled project runs what was open. Falls
+    // back to the stored entry if active is somehow not a live file.
+    return { files, order: [...this.order], entry: this.files[this.active] ? this.active : this.entry, emptyDirs };
   },
   // Build docs from a plain record; the `active` doc becomes editor.getDoc() (adopt).
   load(rec) {
@@ -1085,7 +1075,6 @@ const project = {
     if (pyodide) try { if (pyodide.FS.analyzePath(name).exists) pyodide.FS.unlink(name); } catch {}
     return true;
   },
-  setEntry(name) { if (this.files[name]) this.entry = name; },
 };
 window.project = project;   // test seam
 
@@ -1229,7 +1218,7 @@ window.historyStore = historyStore;   // test seam
 
 async function captureSnapshot() {
   try {
-    const proj = project.serialize();
+    const proj = project.serialize();   // #9-review: serialize() now sets entry=active, so restore reopens the file open at capture
     const last = await historyStore.latest();
     if (last && JSON.stringify(last.project) === JSON.stringify(proj)) return;   // dedup unchanged re-runs
     await historyStore.add({ at: Date.now(), mode: collab.active ? "room" : "solo", project: proj });
@@ -1696,7 +1685,7 @@ function renderViewer(name) {
     // Show the ONE CodeMirror; swapDoc into the file's Doc via the project seam (never setValue).
     viewerBodyEl.querySelectorAll(".imgview, .sound, .empty").forEach(n => n.remove());
     if (cmWrap.parentElement !== viewerBodyEl) viewerBodyEl.appendChild(cmWrap);   // bring CM back (same instance)
-    vMetaEl.textContent = "· Python" + (name === project.entry ? " · entry point" : "");
+    vMetaEl.textContent = "· Python";
     runBtnEl.style.display = "";
     if (project.files[name] && project.active !== name) project.setActive(name);
     else editor.refresh();
@@ -1779,7 +1768,7 @@ function buildTree() {
     ensureDir(dir).files.push({ path, ...meta });
   };
   for (const name of project.order)
-    place(name, { kind: "py", asset: false, entry: name === project.entry, active: name === viewerSel });
+    place(name, { kind: "py", asset: false, active: name === viewerSel });
   for (const a of assetFS.list)
     place(a.name, { kind: classifyKind(a.name), asset: true, warn: a.warn, active: a.name === viewerSel });
   for (const d of project.emptyDirs) ensureDir(d);
@@ -1804,7 +1793,6 @@ function renderTabs() {
         `<span class="caret" aria-hidden="true">▸</span>` +
         `<span class="ic" aria-hidden="true">📁</span>` +
         `<span class="tab-name">${escTab(d.name)}</span>` +
-        dlBtn(d.name, true) +
         `<button class="tab-menu" title="Folder actions" aria-haspopup="menu" aria-expanded="false" aria-label="Folder actions for ${escTab(d.path)}">⋯</button>` +
         `</div>`);
       if (open) emit(d, depth + 1);
@@ -1816,49 +1804,28 @@ function renderTabs() {
           `<span class="ic" aria-hidden="true">${f.kind === "image" ? "🖼️" : f.kind === "audio" ? "🔊" : "📄"}</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
           (f.warn ? '<span class="asset-warn" title="Only WAV and OGG play in the browser audio engine — convert this file.">⚠</span>' : "") +
-          dlBtn(basename(f.path), false) +
           `<button class="tab-menu" title="Asset actions" aria-haspopup="menu" aria-expanded="false" aria-label="Asset actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       } else {
-        out.push(`<div class="tab py${f.active ? " active" : ""}${f.entry ? " entry" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
+        out.push(`<div class="tab py${f.active ? " active" : ""}${f.path === runFile ? " running" : ""}" data-name="${escTab(f.path)}" draggable="true" style="padding-left:${pad}px">` +
           `<span class="ic" aria-hidden="true">🐍</span>` +
           `<span class="tab-name">${escTab(basename(f.path))}</span>` +
-          (f.entry ? `<span class="start-tag" data-entry="true" title="Start runs this file" aria-label="Start file">start</span>` : "") +
           (modifiedExamples.has(f.path) ? `<span class="moddot" data-tip="Modified — now your file">●</span>` : "") +
-          dlBtn(basename(f.path), false) +
           `<button class="tab-menu" title="File actions" aria-haspopup="menu" aria-expanded="false" aria-label="File actions for ${escTab(f.path)}">⋯</button>` +
           `</div>`);
       }
     }
   };
   emit(tree, 0);
-  tabsEl.innerHTML = out.join("") + `<span class="tab-add" title="New file">+ new file</span>`;
+  tabsEl.innerHTML = out.join("");
   editor.refresh();
 }
 window.renderTabs = renderTabs;   // test seam
 const basename = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
 const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); };
-// S5: the per-row download affordance. A file row downloads the bare item; a folder row
-// (isFolder) downloads a zip of its subtree. Glyph reused from the proto's download path.
-function dlBtn(label, isFolder) {
-  const tip = isFolder ? `Download ${label} (zip)` : `Download ${label}`;
-  return `<button class="dl" title="${escTab(tip)}" aria-label="${escTab(tip)}" data-tip="${escTab(tip)}">` +
-    `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-    `<path d="M12 5v11"/><path d="M8 12l4 4 4-4"/><path d="M5 19h14"/></svg></button>`;
-}
-
+// #7: per-row download moved into the ⋯ menu (file → downloadItem, folder → downloadFolder zip,
+// asset → downloadItem). The standalone .dl button + its click branch are retired.
 tabsEl.addEventListener("click", (e) => {
-  // S5: a .dl click downloads the item and must NOT select the row or toggle the folder.
-  const dl = e.target.closest(".dl");
-  if (dl) {
-    e.stopPropagation();
-    const folder = e.target.closest(".tab.folder");
-    if (folder) downloadFolder(folder.dataset.path);
-    else downloadItem(e.target.closest(".tab").dataset.name);
-    return;
-  }
-  const add = e.target.closest(".tab-add");
-  if (add) { newFilePrompt(); return; }
   const folder = e.target.closest(".tab.folder");
   if (folder) {
     const path = folder.dataset.path;
@@ -1939,10 +1906,23 @@ tabsEl.addEventListener("drop", (e) => {
   e.preventDefault();
   let dragged = dragPath;
   try { if (!dragged && e.dataTransfer) dragged = e.dataTransfer.getData("text/plain"); } catch {}
+  // #6: a drop can land on the thin .drop-line indicator (a bare child of #tabs, not a row), which
+  // would resolve no target and silently no-op. Capture the intended row from the line's adjacent
+  // sibling BEFORE clearDropMarks() detaches it — the line sits ABOVE the row it inserts before, so
+  // prefer nextElementSibling (insert BEFORE = after:false), else previousElementSibling (after).
+  const lineEl = dropLineEl;
+  let lineRow = null, lineAfter = false;
+  if (lineEl) {
+    const nxt = lineEl.nextElementSibling && lineEl.nextElementSibling.closest && lineEl.nextElementSibling.closest(".tab[data-name]");
+    const prv = lineEl.previousElementSibling && lineEl.previousElementSibling.closest && lineEl.previousElementSibling.closest(".tab[data-name]");
+    if (nxt) { lineRow = nxt; lineAfter = false; } else if (prv) { lineRow = prv; lineAfter = true; }
+  }
   clearDropMarks();
   if (!dragged) return;
   const folder = e.target.closest(".tab.folder");
-  const fileRow = e.target.closest(".tab[data-name]");
+  let fileRow = e.target.closest(".tab[data-name]");
+  let dropAfter = null;   // set when the drop landed on the .drop-line: use this instead of clientY
+  if (!folder && !fileRow && lineRow) { fileRow = lineRow; dropAfter = lineAfter; }
   if (folder) {
     const dest = folder.dataset.path;
     // Slice A: an ASSET drag (in assetFS.list, not project.files) re-keys via assetFS.move, which
@@ -1969,7 +1949,7 @@ tabsEl.addEventListener("drop", (e) => {
     const target = fileRow.dataset.name;
     if (project.files[dragged] && project.files[target] && dragged !== target) {
       const r = fileRow.getBoundingClientRect();
-      const after = (e.clientY - r.top) > r.height / 2;
+      const after = (dropAfter !== null) ? dropAfter : ((e.clientY - r.top) > r.height / 2);
       const ord = project.order;
       ord.splice(ord.indexOf(dragged), 1);
       let idx = ord.indexOf(target) + (after ? 1 : 0);
@@ -1981,14 +1961,17 @@ tabsEl.addEventListener("drop", (e) => {
   }
   dragPath = null;
 });
-function newFilePrompt() {
-  const raw = prompt("New file name (e.g. enemy.py):", "");
-  if (raw == null) return;
-  let leaf = raw.endsWith(".py") ? raw : raw + ".py";
-  // Create relative to the selected folder (if a folder/file in one is selected), unless
-  // the typed name already carries a path.
+// #8 (refinement v2): new file/folder via an INLINE editable row (no browser prompt), matching the
+// inline-rename UX. The header buttons call these; both open startInlineCreate.
+function newFilePrompt() { startInlineCreate("file"); }
+function newFolderPrompt() { startInlineCreate("folder"); }
+
+// The model+side-effect half (returns true on success; false keeps the inline row open with a hint).
+function createFile(raw, hint) {
+  const leaf = raw.endsWith(".py") ? raw : raw + ".py";
+  // Create relative to the selected folder unless the typed name already carries a path.
   const name = (selectedFolder && !leaf.includes("/")) ? selectedFolder + "/" + leaf : leaf;
-  if (!project.add(name)) { alert("Use a valid, unique name ending in .py"); return; }
+  if (!project.add(name)) { hint("a valid, unique name ending in .py"); return false; }
   if (selectedFolder) project.emptyDirs.delete(selectedFolder);   // folder now occupied
   if (dirname(name)) closedFolders.delete(dirname(name));
   project.setActive(name);
@@ -1996,18 +1979,64 @@ function newFilePrompt() {
   // S6b: mirror the new file to the shared doc — plain assignment (updateText can't create a key).
   roomOp(d => { d.files[encPath(name)] = ""; d.order.push(encPath(name)); });
   renderTabs(); flushSave();
+  return true;
 }
-// S2: create an empty folder. Validated as a Python-identifier-safe segment. Created
-// relative to the selected folder when one is selected, else ROOT. Persists via emptyDirs.
-function newFolderPrompt() {
-  const raw = prompt("New folder name (letters, digits, underscore):", "");
-  if (raw == null) return;
+// S2: empty folder, validated as a Python-identifier-safe segment, relative to the selected folder
+// (else ROOT). Persists via emptyDirs. NOTE: empty folders are intentionally NOT mirrored to the
+// collab room (excluded from the shared shape), so there is no roomOp here.
+function createFolder(raw, hint) {
   const seg = raw.trim();
-  if (!isFolderSegment(seg)) { alert("Folder names must be a Python identifier (letters, digits, underscore; no leading digit)."); return; }
+  if (!isFolderSegment(seg)) { hint("letters, digits, _ (no leading digit)"); return false; }
   const path = selectedFolder ? selectedFolder + "/" + seg : seg;
-  if (!project.addFolder(path)) { alert("That folder already exists or has an invalid name."); return; }
+  if (!project.addFolder(path)) { hint("that folder already exists or is invalid"); return false; }
   closedFolders.delete(path);
   renderTabs(); flushSave();
+  return true;
+}
+// A transient editable row appended to the tree; Enter commits (createFile/createFolder), Esc/blur
+// cancels. Reuses the .rename-input look + the calm inline-hint of startInlineRename. Created under
+// the selected folder (made visible) or at root. One create row at a time.
+function startInlineCreate(kind) {
+  // Guard BEFORE any renderTabs: if a create row is already open, keep it (don't repaint it away
+  // or stack a second one). (#9-review: the old guard ran AFTER renderTabs and never fired.)
+  if (tabsEl.querySelector(".tab.creating")) return;
+  if (selectedFolder) closedFolders.delete(selectedFolder);   // ensure the destination is visible
+  renderTabs();
+  const depth = selectedFolder ? selectedFolder.split("/").length : 0;
+  const pad = 6 + depth * 14 + (kind === "folder" ? 0 : 12);
+  const row = document.createElement("div");
+  row.className = `tab ${kind === "folder" ? "folder" : "py"} creating`;
+  row.style.paddingLeft = pad + "px";
+  row.innerHTML = `<span class="ic" aria-hidden="true">${kind === "folder" ? "📁" : "🐍"}</span>`;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "rename-input";
+  input.setAttribute("aria-label", kind === "folder" ? "New folder name" : "New file name");
+  row.appendChild(input);
+  tabsEl.appendChild(row);
+  let done = false;
+  const cancel = () => { if (done || !row.isConnected) return; done = true; renderTabs(); };   // #9-review: a stale deferred blur-cancel on a detached row must not repaint over a newer row
+  const hint = (msg) => {
+    input.classList.add("invalid");
+    let h = row.querySelector(".rename-hint");
+    if (!h) { h = document.createElement("span"); h.className = "rename-hint"; row.appendChild(h); }
+    h.textContent = msg; input.focus();
+  };
+  const tryCommit = () => {
+    if (done) return;
+    const raw = input.value.trim();
+    if (!raw) { cancel(); return; }                                  // empty -> cancel cleanly
+    const ok = kind === "folder" ? createFolder(raw, hint) : createFile(raw, hint);
+    if (ok === false) return;                                        // stay in edit; hint shown
+    done = true;                                                     // success -> create*() re-rendered (drops this row)
+  };
+  input.focus();
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tryCommit(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
+  });
+  input.addEventListener("input", () => { input.classList.remove("invalid"); const h = row.querySelector(".rename-hint"); if (h) h.remove(); });
+  input.addEventListener("blur", () => { setTimeout(() => { if (!done) cancel(); }, 0); });
 }
 // =============================================================== Slice B: popup action menu
 // ONE shared popup instance, anchored to the clicked row's ⋯. Opening it (via tabMenu /
@@ -2182,6 +2211,7 @@ function folderMenu(path) {
   openPopMenu(anchor, [
     { label: "Rename", icon: "✎", run: () => folderRenameInline(path) },
     { label: "Delete", icon: "🗑", danger: true, run: () => folderDelete(path) },
+    { label: "Download", icon: "⬇", run: () => downloadFolder(path) },   // #7: zip of the subtree
   ]);
 }
 function folderRenameInline(path) {
@@ -2233,8 +2263,8 @@ function tabMenu(name) {
   if (!anchor) return;
   openPopMenu(anchor, [
     { label: "Rename", icon: "✎", run: () => fileRenameInline(name) },
-    { label: "Set as start file", icon: "▸", run: () => fileSetEntry(name) },
     { label: "Delete", icon: "🗑", danger: true, run: () => fileDelete(name) },
+    { label: "Download", icon: "⬇", run: () => downloadItem(name) },   // #7: bare .py download
   ]);
 }
 function fileRenameInline(name) {
@@ -2251,11 +2281,6 @@ function fileRenameInline(name) {
     renderTabs(); flushSave();
     return true;
   });
-}
-function fileSetEntry(name) {
-  project.setEntry(name);
-  roomOp(d => { d.entry = encPath(name); });   // S6b: mirror the entry change
-  renderTabs(); flushSave();
 }
 function fileDelete(name) {
   if (project.order.length <= 1) { alert("Can't delete the only file."); return; }
@@ -2525,7 +2550,6 @@ function promotePreview() {
   const finalName = freePromoteName(exampleFilename(key));
   const taken = finalName !== exampleFilename(key);
   project.adoptDoc(finalName, doc);                          // ADOPT the live Doc (keystroke + undo survive)
-  project.setEntry(finalName);                              // a promoted single edit becomes the runnable entry
   // S6 — a promoted example becomes a real code file (and the new entry); in a room it must reach
   // peers. Mirror the adopt to the shared doc with the Doc's CURRENT text (same shape as
   // newFilePrompt/upload), in ONE atomic roomOp that also moves the entry so the doc invariant
@@ -2542,7 +2566,7 @@ function promotePreview() {
   previewExample = null;                                     // it's a real file now, no longer floating
   viewerSel = finalName;
   vNameEl.textContent = finalName;
-  vMetaEl.textContent = "· Python" + (finalName === project.entry ? " · entry point" : "");
+  vMetaEl.textContent = "· Python";
   if (taken) logLine(`That name was taken — saved your edit as ${finalName}.`, "sys");
   renderTabs();
   renderExamplesPanel();
@@ -2862,11 +2886,11 @@ async function run() {
     engine.purgeProjectFiles();
     task = engine.start(editor.getValue());                     // single-file path — snapshots the text NOW
   } else {
-    task = engine.startProject(project.serialize().files, project.entry);  // snapshots EVERY file's Doc text NOW
+    task = engine.startProject(project.serialize().files, project.active);  // #9: the OPEN file is the entry; snapshots EVERY file's Doc text NOW
   }
   runTask = task;
-  // The running file is the ENTRY (single-file: the open file is the entry; multi-file: project.entry).
-  runFile = isSingle ? project.active : project.entry;
+  // #9: the running file is the OPEN (active) file in both paths (the fixed entry is retired).
+  runFile = project.active;   // #9: the running file is the OPEN (active) file in both paths
   setStatus("running", "running");
   syncRunControls();
   renderTabs();             // light up the running file's explorer row

@@ -295,16 +295,23 @@ if (afterSwitch.val.includes('enemy') && afterSwitch.active === 'enemy.py' && af
   ok('tab switch swaps doc + Python highlighting on the new file');
 else fail('tab switch wrong: ' + JSON.stringify(afterSwitch));
 
-// Entry badge on main.py; set enemy.py as entry moves it.
-await page.evaluate(() => { window.project.setEntry('enemy.py'); window.renderTabs(); });
-const entryTab = await page.evaluate(() =>
-  document.querySelector('#tabs .tab.entry')?.dataset.name);
-if (entryTab === 'enemy.py') ok('set-as-entry moves the entry badge');
-else fail('entry badge wrong: ' + entryTab);
+// #9: the fixed-entry cue is retired (the OPEN file is what runs). No .tab.entry / start tag.
+const noEntryCue = await page.evaluate(() => ({
+  entryRows: document.querySelectorAll('#tabs .tab.entry').length,
+  startTags: document.querySelectorAll('#tabs .start-tag, #tabs [data-entry]').length,
+}));
+if (noEntryCue.entryRows === 0 && noEntryCue.startTags === 0)
+  ok('#9: no fixed-entry cue in the tree (.tab.entry / start tag retired — the open file runs)');
+else fail('entry cue still present: ' + JSON.stringify(noEntryCue));
+
+// #9-review: serialize() persists the OPEN file as `entry` (rollback / cross-version / older-build
+// safety) — so a saved/shared/reconciled project runs what was open, not a frozen entry. active=enemy.py here.
+const serializedEntry = await page.evaluate(() => window.project.serialize().entry);
+if (serializedEntry === 'enemy.py') ok('#9: serialize().entry follows the open file (enemy.py)');
+else fail('serialize().entry did not follow the open file (got ' + serializedEntry + ')');
 
 // Non-active edit survives reload (serialize reads every Doc).
 await page.evaluate(() => {
-  window.project.setEntry('main.py');
   window.project.files['enemy.py'].setValue('# enemy edited\nZZ = 9\n');  // edit non-active doc
   window.__flushSave();
 });

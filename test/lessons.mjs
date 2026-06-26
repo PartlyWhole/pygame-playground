@@ -168,7 +168,8 @@ async function installFixture() {
       id: 'fix-lesson', title: 'Fixture lesson', steps: [
         { phase: 'concept', text: 'A short concept explanation.' },
         { phase: 'demo', file: 'demo_fixture.py', source: src, instruction: 'Press Start and watch.' },
-        { phase: 'tweak', instruction: 'Change a value.' },
+        { phase: 'tweak', instruction: 'Change a value.',
+          predict: { mode: 'choices', prompt: 'What will happen?', choices: ['Bigger window', 'Smaller window', 'An error'] } },
       ],
     }];
     // reset to a clean project + the lesson LIST (fixture row visible).
@@ -279,6 +280,101 @@ async function installFixture() {
 
 // restore real content + list view for any later sections / reuse.
 await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });
+
+// ================================================================================================
+// L3 — PREDICT-BEFORE-RUN gate + TWEAK phase. On a demo/tweak phase carrying a `predict` config,
+// Start (#runBtn) is LOCKED until the student commits a prediction; after they Start, the panel shows
+// their prediction beside a calm matched/surprised self-check (no grading). The gate must NOT affect
+// the regular playground Start when no predict-gated phase is active.
+// ================================================================================================
+
+// Navigate the open stepper to a named phase (bounded Next clicks).
+async function goToPhase(phase) {
+  for (let k = 0; k < 8; k++) {
+    const cur = await page.evaluate(() => document.querySelector('#panel-lessons .lesson-phase')?.dataset.phase);
+    if (cur === phase) return true;
+    await page.evaluate(() => document.querySelector('#panel-lessons .lesson-next')?.click());
+    await page.waitForTimeout(60);
+  }
+  return false;
+}
+
+// L3.1 — the tweak phase (has predict) gates Start and renders the prompt + choices.
+{
+  await ensureLessonsOpen();
+  await installFixture();
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-row[data-lesson-id="fix-lesson"]')?.click());
+  await page.waitForTimeout(80);
+  await goToPhase('tweak');
+  const r = await page.evaluate(() => ({
+    phase: document.querySelector('#panel-lessons .lesson-phase')?.dataset.phase,
+    runDisabled: document.getElementById('runBtn').disabled,
+    prompt: document.querySelector('#panel-lessons .predict-prompt')?.textContent || '',
+    choices: [...document.querySelectorAll('#panel-lessons .predict-choice')].map(c => c.textContent),
+  }));
+  if (r.phase === 'tweak' && r.runDisabled && /What will happen/.test(r.prompt) && r.choices.length === 3)
+    ok('L3.1 tweak phase gates Start (#runBtn disabled) + renders the predict prompt and 3 choices');
+  else fail('L3.1 predict gate/UI wrong: ' + JSON.stringify(r));
+}
+
+// L3.2 — selecting a choice enables Commit (Start still locked); committing enables Start + shows it.
+{
+  await page.evaluate(() => document.querySelector('#panel-lessons .predict-choice[data-i="0"]')?.click());
+  await page.waitForTimeout(50);
+  const afterSelect = await page.evaluate(() => ({
+    commitEnabled: document.querySelector('#panel-lessons .predict-commit')?.disabled === false,
+    runStillDisabled: document.getElementById('runBtn').disabled === true,
+  }));
+  await page.evaluate(() => document.querySelector('#panel-lessons .predict-commit')?.click());
+  await page.waitForTimeout(60);
+  const afterCommit = await page.evaluate(() => ({
+    runEnabled: document.getElementById('runBtn').disabled === false,
+    youPredicted: document.querySelector('#panel-lessons .predict-you')?.textContent || '',
+  }));
+  if (afterSelect.commitEnabled && afterSelect.runStillDisabled)
+    ok('L3.2 selecting a choice enables Commit but Start stays locked until committed');
+  else fail('L3.2 select state wrong: ' + JSON.stringify(afterSelect));
+  if (afterCommit.runEnabled && /Bigger window/.test(afterCommit.youPredicted))
+    ok('L3.2  ...committing enables Start and shows "You predicted: Bigger window"');
+  else fail('L3.2 commit did not enable Start / show prediction: ' + JSON.stringify(afterCommit));
+}
+
+// L3.3 — after Start, the reconcile self-check (.predict-result) appears with matched/surprised.
+{
+  await page.evaluate(() => { window.project.setActive('main.py'); });   // safe content to run
+  await page.evaluate(() => document.getElementById('runBtn').click());
+  await page.waitForTimeout(150);
+  const r = await page.evaluate(() => ({
+    hasResult: !!document.querySelector('#panel-lessons .predict-result'),
+    matched: !!document.querySelector('#panel-lessons .predict-matched'),
+    surprised: !!document.querySelector('#panel-lessons .predict-surprised'),
+    youText: document.querySelector('#panel-lessons .predict-you')?.textContent || '',
+  }));
+  if (r.hasResult && r.matched && r.surprised && /Bigger window/.test(r.youText))
+    ok('L3.3 after Start, .predict-result shows the prediction + matched/surprised self-check (no grading)');
+  else fail('L3.3 predict-result reconcile wrong: ' + JSON.stringify(r));
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });   // stop the run
+  await page.waitForTimeout(80);
+}
+
+// L3.4 — the gate does NOT affect Start outside a gated phase (a non-predict phase + closed lesson).
+{
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-back')?.click());   // tweak→demo
+  await page.waitForTimeout(50);
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-back')?.click());   // demo→concept
+  await page.waitForTimeout(50);
+  const onConcept = await page.evaluate(() => ({
+    phase: document.querySelector('#panel-lessons .lesson-phase')?.dataset.phase,
+    runEnabled: document.getElementById('runBtn').disabled === false,
+  }));
+  await page.evaluate(() => window.lessonClose && window.lessonClose());
+  await page.waitForTimeout(50);
+  const closedEnabled = await page.evaluate(() => document.getElementById('runBtn').disabled === false);
+  if (onConcept.phase === 'concept' && onConcept.runEnabled) ok('L3.4 a non-predict phase (concept) leaves Start enabled');
+  else fail('L3.4 concept phase wrongly gated Start: ' + JSON.stringify(onConcept));
+  if (closedEnabled) ok('L3.4  ...closing the lesson leaves Start enabled (gate cleared)');
+  else fail('L3.4 closing the lesson left Start disabled');
+}
 
 // ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));

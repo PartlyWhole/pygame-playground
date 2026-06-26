@@ -272,6 +272,21 @@
   .stepper-nav { display: flex; gap: 8px; margin-top: 4px; }
   .stepper-nav .btn { flex: 1; justify-content: center; }
   .stepper-nav .btn:disabled { opacity: .45; cursor: default; }
+  /* predict-before-Run */
+  .predict { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px; border: 1px solid var(--color-border-hover); border-radius: 8px; background: var(--color-row-hover); }
+  .predict-prompt { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+  .predict-choices { display: flex; flex-direction: column; gap: 5px; }
+  .predict-choice { text-align: left; padding: 7px 10px; border: 1px solid var(--color-border-hover); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+  .predict-choice:hover { border-color: var(--accent); }
+  .predict-choice.selected { border-color: var(--accent); background: var(--color-row-selected); }
+  .predict-commit { align-self: flex-start; justify-content: center; }
+  .predict-commit:disabled { opacity: .45; cursor: default; }
+  .predict-you { margin: 0; font-size: 13px; color: var(--text); }
+  .predict-result { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--color-border-hover); }
+  .predict-reconcile-q { margin: 0 0 6px; font-size: 12px; color: var(--dim); }
+  .predict-reconcile { display: flex; gap: 8px; }
+  .predict-reconcile .btn { flex: 1; justify-content: center; }
+  .predict-reconcile .btn.selected { border-color: var(--accent); background: var(--color-row-selected); }
 
   /* ---------- history rail panel (#historyPanel — in-flow) ---------- */
   #historyPanel { font-size: 12.5px; }
@@ -2931,10 +2946,10 @@ function renderLessons() {
 function lessonOpen(id) {
   const lesson = window.LESSONS.find(l => l.id === id);
   if (!lesson || !lesson.steps.length) return;   // L1 stubs (no steps) aren't openable until L6 content
-  lessonState = { lessonId: id, stepIndex: 0 };
+  lessonState = { lessonId: id, stepIndex: 0, predict: {} };   // predict: per-step prediction state
   renderStepper();
 }
-function lessonClose() { lessonState = null; renderLessons(); }
+function lessonClose() { lessonState = null; renderLessons(); updateRunGate(); }
 window.lessonClose = lessonClose;          // test seam
 window.renderLessons = renderLessons;      // test seam (re-render the list)
 function lessonStep(delta) {
@@ -2966,18 +2981,78 @@ function renderStepper() {
         `<button class="lesson-next btn primary" type="button"${i === total - 1 ? " disabled" : ""}>Next</button>` +
       `</div>` +
     `</div>`;
+  updateRunGate();
 }
 // Per-phase content. Concept = plain text; Demo = instruction + a Start hint. Tweak/Recreate/Verify
 // renderers gain their interactive bodies in L3/L4 — here they show their instruction/prompt text.
 function renderPhase(step) {
-  const body = (() => {
+  let body = (() => {
     if (step.phase === "concept") return `<p class="lesson-text">${escTab(step.text || "")}</p>`;
     if (step.phase === "demo")
       return `<p class="lesson-text">${escTab(step.instruction || "Press Start and watch.")}</p>` +
              `<p class="lesson-hint">Click “Show the demo”, then press ▶ Start above to run it.</p>`;
     return `<p class="lesson-text">${escTab(step.instruction || step.prompt || "")}</p>`;
   })();
+  // Predict-before-Run (§4): a demo/tweak step with a `predict` config locks Start until committed.
+  if (step.predict && ["demo", "tweak"].includes(step.phase)) body += renderPredict(step, lessonState.stepIndex);
   return `<div class="lesson-phase" data-phase="${escTab(step.phase)}">${body}</div>`;
+}
+// Quick-choices predict UI. Before commit: prompt + selectable choices + a (disabled-until-selected)
+// "Lock in" button. After commit: "You predicted: X"; once the student Starts the run, a calm
+// matched/surprised reconcile self-check (no grading — the gap between prediction and reality is the
+// lesson). State lives per-step on lessonState.predict[i].
+function predictState(i) {
+  if (!lessonState.predict[i]) lessonState.predict[i] = { selected: null, committed: false, showResult: false, reconcile: null };
+  return lessonState.predict[i];
+}
+function renderPredict(step, i) {
+  const p = step.predict; if (!p) return "";
+  const st = predictState(i);
+  const choices = p.choices || [];
+  const promptHtml = `<p class="predict-prompt">${escTab(p.prompt || "What will happen?")}</p>`;
+  if (!st.committed) {
+    return `<div class="predict">` + promptHtml +
+      `<div class="predict-choices">` +
+        choices.map((c, ci) => `<button class="predict-choice${st.selected === ci ? " selected" : ""}" type="button" data-i="${ci}">${escTab(c)}</button>`).join("") +
+      `</div>` +
+      `<button class="predict-commit btn" type="button"${st.selected == null ? " disabled" : ""}>Lock in my prediction</button>` +
+    `</div>`;
+  }
+  let out = `<div class="predict committed">` + promptHtml +
+    `<p class="predict-you">You predicted: <strong>${escTab(choices[st.selected] ?? "")}</strong></p>`;
+  if (st.showResult) {
+    out += `<div class="predict-result">` +
+      `<p class="predict-reconcile-q">Now run it and watch. Did it match your prediction?</p>` +
+      `<div class="predict-reconcile">` +
+        `<button class="predict-matched btn${st.reconcile === "matched" ? " selected" : ""}" type="button">It matched</button>` +
+        `<button class="predict-surprised btn${st.reconcile === "surprised" ? " selected" : ""}" type="button">It surprised me</button>` +
+      `</div>` +
+    `</div>`;
+  }
+  return out + `</div>`;
+}
+// The run-gate: while a demo/tweak step with a predict config is active and uncommitted, Start is
+// locked (disabled). Cleared (enabled) on any other phase or when no lesson is open — so the regular
+// playground Start is never affected.
+function predictGateBlocks() {
+  if (!lessonState) return false;
+  const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+  const step = lesson && lesson.steps[lessonState.stepIndex];
+  if (!step || !step.predict || !["demo", "tweak"].includes(step.phase)) return false;
+  const st = lessonState.predict[lessonState.stepIndex];
+  return !(st && st.committed);
+}
+function updateRunGate() { runBtnEl.disabled = predictGateBlocks(); }
+// Start click, gated: a committed predict phase reveals the reconcile self-check as the run starts.
+function onRunClick() {
+  if (predictGateBlocks()) return;   // belt-and-suspenders (the button is also disabled)
+  if (lessonState) {
+    const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+    const step = lesson && lesson.steps[lessonState.stepIndex];
+    const st = lessonState.predict[lessonState.stepIndex];
+    if (step && step.predict && st && st.committed && !st.showResult) { st.showResult = true; renderStepper(); }
+  }
+  run();
 }
 // Load the lesson's demo source into the editor VIA THE ENGINE — adoptDoc (a real, runnable project
 // file) then renderViewer→setActive→swapDoc. NEVER editor.setValue (arms lint / breaks laziness).
@@ -2999,6 +3074,16 @@ lessonListEl?.addEventListener("click", (e) => {
   if (e.target.closest(".lesson-next")) { lessonStep(1); return; }
   if (e.target.closest(".lesson-back")) { lessonStep(-1); return; }
   if (e.target.closest(".lesson-show-demo")) { showCurrentDemo(); return; }
+  // predict-before-Run interactions
+  const choice = e.target.closest(".predict-choice");
+  if (choice) { predictState(lessonState.stepIndex).selected = +choice.dataset.i; renderStepper(); return; }
+  if (e.target.closest(".predict-commit")) {
+    const st = predictState(lessonState.stepIndex);
+    if (st.selected != null) { st.committed = true; renderStepper(); }
+    return;
+  }
+  const matched = e.target.closest(".predict-matched"), surprised = e.target.closest(".predict-surprised");
+  if (matched || surprised) { predictState(lessonState.stepIndex).reconcile = matched ? "matched" : "surprised"; renderStepper(); return; }
 });
 
 const railEl = document.querySelector("nav.rail");
@@ -3305,7 +3390,7 @@ function resumeAudio() {
 }
 canvasEl.addEventListener("click", resumeAudio);
 
-document.getElementById("runBtn").addEventListener("click", run);
+document.getElementById("runBtn").addEventListener("click", onRunClick);   // gated for lesson predict-phases; plain run() otherwise
 document.getElementById("stopBtn").addEventListener("click", () => {
   if (engine) engine.stop();   // End — task settle clears runFile + syncs controls
 });

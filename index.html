@@ -2941,6 +2941,29 @@ window.LESSONS = [
   { id: "warmup-0b", title: "Make it move",    steps: [] },
   { id: "warmup-0c", title: "Keep it looping", steps: [] },
 ];
+// Friendly-error map (declarative): a known runtime error is rewritten in the instructor's
+// encouraging voice — framed as "the computer telling us the exact rule we crossed," never failure.
+// The original traceback is ALWAYS preserved and the line number is ALWAYS re-attached (locating the
+// line is part of the skill). First matching entry wins; unmapped errors fall through untouched.
+window.FRIENDLY_ERRORS = [
+  { match: /size must be two numbers/,
+    say: "set_mode wants ONE thing: a (width, height) pair in parentheses — like set_mode((800, 600)). It looks like you passed two separate numbers." },
+  { match: /NameError: name '([^']+)' is not defined/,
+    say: "Python doesn't recognize that name yet. Check the spelling, or make sure it's defined (with =) above the line that uses it." },
+  { match: /(SyntaxError|IndentationError)/,
+    say: "Python couldn't read this line as a valid instruction — look for a typo, a missing ':' '(' ')' or quote, or indentation that doesn't line up." },
+];
+// Append a friendly explanation after the raw traceback (never replaces it). The line number is
+// pulled from the `<your code>` frame (the engine labels user code that way), else the last frame.
+function showFriendlyError(stderr) {
+  if (!stderr) return;
+  const entry = (window.FRIENDLY_ERRORS || []).find(e => e.match.test(stderr));
+  if (!entry) return;   // unmapped → the raw message (with its line number) already stands on its own
+  const mine = [...stderr.matchAll(/File "<your code>", line (\d+)/g)];
+  const any = [...stderr.matchAll(/line (\d+)/g)];
+  const lineNo = mine.length ? mine[mine.length - 1][1] : (any.length ? any[any.length - 1][1] : null);
+  logLine("💡 " + entry.say + (lineNo ? ` (look at line ${lineNo})` : ""), "sys");
+}
 const lessonListEl = document.getElementById("lessonList");
 // Stepper state: null = the lesson LIST is shown; {lessonId, stepIndex} = a lesson is OPEN and we
 // show ONE phase at a time (Concept→Demo→Tweak→Recreate→Verify) with Next/Back. Pure DOM render; the
@@ -3317,6 +3340,7 @@ updateStorageReadout();   // seed the tree-footer browser-storage metric
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
 let pyodide = null;
 let runTask = null;
+let runStderr = "";   // L5: buffered stderr of the current run, for the friendly-error rewrite on settle
 let engine = null;   // cooperative-engine wrapper (vendor/engine.mjs createEngine); set during boot()
 
 // Engine module (cooperative pygame engine) — lazily imported on a cached promise, the
@@ -3388,7 +3412,7 @@ async function boot() {
                                                  // BEFORE hydrate/_memfs/lazy-loaders read it
     canvas: canvasEl,
     setStatus,                                                    // host owns the exact #status tokens
-    logSink: { out: (s) => logLine(s, "out"), err: (s) => logLine(s, "err") },
+    logSink: { out: (s) => logLine(s, "out"), err: (s) => { runStderr += s + "\n"; logLine(s, "err"); } },
     hydrateAssets: () => assetFS.hydrateAll(),
   });
   return pyodide;
@@ -3409,6 +3433,7 @@ async function run() {
   // there are never two concurrent loops and a restart-from-paused clears the pause. NO disabled-Start
   // guard here — #runBtn stays enabled while live.
   clearConsole();
+  runStderr = "";   // L5: fresh stderr buffer for this run's friendly-error rewrite
   captureSnapshot();   // fire-and-forget: save this version to history
   canvasEl.focus();
   resumeAudio();
@@ -3432,7 +3457,7 @@ async function run() {
   task.then((kind) => {
     if (runTask !== task) return;
     runFile = null; syncRunControls(); renderTabs();
-    if (kind === "error") return setStatus("error", "error — see console");
+    if (kind === "error") { setStatus("error", "error — see console"); showFriendlyError(runStderr); return; }
     setStatus("ready", kind === "stopped" ? "stopped" : "finished");
     logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {

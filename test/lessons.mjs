@@ -514,6 +514,54 @@ let recreateName = null;
 }
 
 // ================================================================================================
+// L5 — FRIENDLY-ERROR map. A known runtime error (two-arg set_mode, NameError, …) is rewritten in
+// the instructor's encouraging voice in #console, ALWAYS keeping the line number (locating the line
+// is part of the skill). The raw traceback is preserved and #status still reaches the `error` token.
+// An unmapped error falls through to the normal message (with its line) — no crash.
+// ================================================================================================
+
+// run a program that errors; return the resulting #console text.
+async function runCodeExpectError(src) {
+  await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });   // no lesson gate
+  await page.evaluate((s) => {
+    window.project.load({ files: { 'main.py': s }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.project.setActive('main.py');
+  }, src);
+  await page.evaluate(() => document.getElementById('runBtn').click());
+  await page.waitForFunction(() => /error/.test(document.getElementById('status').textContent), null, { timeout: 30_000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  return page.evaluate(() => document.getElementById('console')?.innerText || '');
+}
+
+// L5.1 — two-arg set_mode → friendly rewrite whose OWN line carries the line number; raw preserved.
+{
+  const out = await runCodeExpectError('import pygame\npygame.init()\nscreen = pygame.display.set_mode(800, 600)\n');
+  const status = await page.evaluate(() => document.getElementById('status').textContent);
+  const friendlyLine = out.split('\n').find(l => /set_mode wants ONE/i.test(l)) || '';
+  if (friendlyLine && /line 3/.test(friendlyLine) && /size must be two numbers/.test(out) && /error/.test(status))
+    ok('L5.1 two-arg set_mode → friendly rewrite WITH the line number; raw traceback preserved; #status error');
+  else fail('L5.1 wrong: ' + JSON.stringify({ friendlyLine, raw: /size must be two numbers/.test(out), status, out: out.slice(0, 260) }));
+}
+
+// L5.2 — a NameError → friendly rewrite + line number; raw preserved.
+{
+  const out = await runCodeExpectError('print(undefined_name)\n');
+  const friendlyLine = out.split('\n').find(l => /recognize that name|not defined yet|check the spelling/i.test(l)) || '';
+  if (friendlyLine && /line 1/.test(friendlyLine) && /NameError/.test(out))
+    ok('L5.2 NameError → friendly rewrite WITH the line number; raw traceback preserved');
+  else fail('L5.2 wrong: ' + JSON.stringify({ friendlyLine, raw: /NameError/.test(out), out: out.slice(0, 260) }));
+}
+
+// L5.3 — an UNMAPPED error falls through: raw error + its line number, NO friendly line, no crash.
+{
+  const out = await runCodeExpectError('x = 1 / 0\n');
+  const status = await page.evaluate(() => document.getElementById('status').textContent);
+  if (!/💡/.test(out) && /ZeroDivisionError/.test(out) && /line 1/.test(out) && /error/.test(status))
+    ok('L5.3 unmapped error (ZeroDivisionError) falls through: raw error + line number, no friendly line, no crash');
+  else fail('L5.3 wrong: ' + JSON.stringify({ noFriendly: !/💡/.test(out), raw: /ZeroDivisionError/.test(out), hasLine: /line 1/.test(out), status, out: out.slice(0, 260) }));
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) console.log('info - JS console errors observed: ' + realErrors.join(' | '));
 else ok('no JS console errors');

@@ -251,6 +251,56 @@
   #examplesPanel .exrow .reset { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 13px; padding: 0 3px; border-radius: 3px; flex: 0 0 auto; opacity: 0; }
   #examplesPanel .exrow:hover .reset { opacity: 1; }
   #examplesPanel .exrow .reset:hover { color: var(--accent); background: var(--color-border-hover); }
+  /* lessons (curriculum Phase 1): a calm list, consistent with the examples rows. */
+  .lesson-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; }
+  .lesson-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 6px; border: 0; border-left: 2px solid transparent; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  .lesson-row:hover { background: var(--color-row-hover); }
+  .lesson-row.current { border-left-color: var(--accent); }
+  .lesson-row .lesson-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lesson-row .lesson-done, .lesson-row .lesson-lock, .lesson-row .lesson-bullet { width: 16px; flex: 0 0 16px; text-align: center; font-size: 12px; }
+  .lesson-row .lesson-done { color: var(--ok, #4caf50); }
+  .lesson-row.done .lesson-title { color: var(--dim); }
+  .lesson-row.locked { opacity: .5; cursor: default; }
+  .lesson-row.locked:hover { background: none; }
+  .lesson-row.locked .lesson-bullet { display: none; }
+  /* recreate/verify reference + confirm controls */
+  .lesson-refs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lesson-my-code { align-self: flex-start; background: none; border: 1px solid var(--color-border-hover); color: var(--dim); cursor: pointer; font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px; }
+  .lesson-my-code:hover { color: var(--text); border-color: var(--accent); }
+  .lesson-verify { margin-top: 4px; }
+  .lesson-verify.done { color: var(--text); font-size: 13px; }
+  .lesson-verify.done .lesson-done { color: var(--ok, #4caf50); font-weight: 700; }
+  .lesson-confirm { justify-content: center; }
+  /* the stepper (one phase at a time) */
+  .stepper { display: flex; flex-direction: column; gap: 10px; padding: 4px 6px 8px; }
+  .stepper-head { display: flex; align-items: center; gap: 8px; }
+  .stepper-head .lesson-back-to-list { background: none; border: 0; color: var(--dim); cursor: pointer; font: inherit; padding: 2px 4px; border-radius: 4px; }
+  .stepper-head .lesson-back-to-list:hover { color: var(--text); background: var(--color-row-hover); }
+  .stepper-head .stepper-title { font-weight: 600; color: var(--text); }
+  .stepper-progress { color: var(--dim); font-size: 11px; letter-spacing: .02em; }
+  .lesson-phase { color: var(--text); line-height: 1.55; }
+  .lesson-phase .lesson-text { margin: 0 0 6px; font-size: 13px; }
+  .lesson-phase .lesson-hint { margin: 0; color: var(--dim); font-size: 12px; }
+  .lesson-show-demo { align-self: flex-start; background: none; border: 1px solid var(--color-border-hover); color: var(--dim); cursor: pointer; font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px; }
+  .lesson-show-demo:hover { color: var(--text); border-color: var(--accent); }
+  .stepper-nav { display: flex; gap: 8px; margin-top: 4px; }
+  .stepper-nav .btn { flex: 1; justify-content: center; }
+  .stepper-nav .btn:disabled { opacity: .45; cursor: default; }
+  /* predict-before-Run */
+  .predict { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px; border: 1px solid var(--color-border-hover); border-radius: 8px; background: var(--color-row-hover); }
+  .predict-prompt { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+  .predict-choices { display: flex; flex-direction: column; gap: 5px; }
+  .predict-choice { text-align: left; padding: 7px 10px; border: 1px solid var(--color-border-hover); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+  .predict-choice:hover { border-color: var(--accent); }
+  .predict-choice.selected { border-color: var(--accent); background: var(--color-row-selected); }
+  .predict-commit { align-self: flex-start; justify-content: center; }
+  .predict-commit:disabled { opacity: .45; cursor: default; }
+  .predict-you { margin: 0; font-size: 13px; color: var(--text); }
+  .predict-result { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--color-border-hover); }
+  .predict-reconcile-q { margin: 0 0 6px; font-size: 12px; color: var(--dim); }
+  .predict-reconcile { display: flex; gap: 8px; }
+  .predict-reconcile .btn { flex: 1; justify-content: center; }
+  .predict-reconcile .btn.selected { border-color: var(--accent); background: var(--color-row-selected); }
 
   /* ---------- history rail panel (#historyPanel — in-flow) ---------- */
   #historyPanel { font-size: 12.5px; }
@@ -391,6 +441,7 @@
     <button class="acttab" data-view="history" role="tab" aria-selected="false" aria-controls="panel-history" id="tab-history" tabindex="-1" aria-label="History" data-tip="History" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
     <button class="acttab" data-view="examples" role="tab" aria-selected="false" aria-controls="panel-examples" id="tab-examples" tabindex="-1" aria-label="Examples" data-tip="Examples" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 18h5"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 3.6 10.8c-.6.5-1.1 1.2-1.1 2H9.5c0-.8-.5-1.5-1.1-2A6 6 0 0 1 12 3z"/></svg></button>
     <button class="acttab" data-view="collab" role="tab" aria-selected="false" aria-controls="panel-collab" id="tab-collab" tabindex="-1" aria-label="Collaboration" data-tip="Collaboration" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/></svg></button>
+    <button class="acttab" data-view="lessons" role="tab" aria-selected="false" aria-controls="panel-lessons" id="tab-lessons" tabindex="-1" aria-label="Lessons" data-tip="Lessons" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5 2 9l10 4 10-4z"/><path d="M6 11v4c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-4"/></svg></button>
   </nav>
 
   <!-- side panel (one section per view; only the active one is visible) -->
@@ -437,6 +488,13 @@
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
         <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
       </div></div>
+    </section>
+
+    <!-- LESSONS (curriculum Phase 1: the five-phase lesson loop; list is declarative window.LESSONS) -->
+    <section class="panelview" id="panel-lessons" data-panel="lessons" role="tabpanel" aria-labelledby="tab-lessons" hidden>
+      <div class="side-head"><span>Lessons</span></div>
+      <div class="panel-note">Short, guided steps. Work at your own pace.</div>
+      <div class="side-body"><div id="lessonList" class="lesson-list"></div></div>
     </section>
   </aside>
 
@@ -2872,6 +2930,415 @@ document.getElementById("examplesPanel").addEventListener("click", (e) => {
 });
 
 // ---------------------------------------------------------------- activity rail (§3) + roving tabindex (§8.1)
+// ---------------------------------------------------------------- lessons (curriculum Phase 1)
+// Declarative lesson content (data, not code) so non-engineers can author lessons by editing this.
+// L1 seeds id/title stubs (steps:[]); the five-phase step content (Concept→Demo→Tweak→Recreate→
+// Verify) arrives in L6. Rendered as a calm list in the Lessons rail view — pure DOM, so opening the
+// panel costs nothing at first paint (no Pyodide/ruff/Automerge).
+window.LESSONS = [
+  { id: "lesson-0", title: "Welcome", steps: [
+    { phase: "concept", text: "This first lesson is about the workshop itself — not pygame yet. The rhythm never changes: change one small thing, say what you think will happen, press Start, then look at the canvas. Press End to stop and start over. Nothing here is timed, and nothing can break." },
+    { phase: "demo", file: "demo_lesson0.py", instruction: "Press Start and watch — a small window fills with a near-black blue. That's your first run: you pressed Start, and the screen changed.",
+      source: `# The workshop. Read it top to bottom, then press Start.
+import pygame
+
+WIDTH, HEIGHT = 400, 300
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+
+blue = 40                  # <- the number we'll play with
+screen.fill((0, 0, blue))  # paint the whole canvas: (red, green, blue)
+pygame.display.flip()      # show what we painted
+` },
+    { phase: "tweak", instruction: "Change blue = 40 to blue = 255 (the brightest a colour goes). Pick your prediction below — that unlocks Start — then press Start and compare.",
+      predict: { mode: "choices", prompt: "After you raise blue to 255 and press Start, the canvas will be…",
+        choices: ["A much brighter, fuller blue", "Exactly the same dark blue", "The window turns red", "An error — 255 is too big"] } },
+    { phase: "recreate", referenceFile: "demo_lesson0.py", instruction: "Press End (watch the canvas clear — End is always safe), then set blue to a new number of your choice between 0 and 255, and Start again. You're practising the rhythm, not learning pygame yet.",
+      scaffold: `# Press End (the canvas clears), pick a NEW blue, predict, then Start again.
+import pygame
+
+WIDTH, HEIGHT = 400, 300
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+
+blue = 120                 # <- pick any NEW number, 0-255
+screen.fill((0, 0, blue))
+pygame.display.flip()
+` },
+    { phase: "verify", prompt: "Did the blue brighten when you raised the number, and did End clear the canvas while Start brought a fresh paint back? If yes, you've got the rhythm — change, Start, look, End — and it carries every lesson from here. Mark done." },
+  ] },
+
+  { id: "warmup-0a", title: "Draw once", steps: [
+    { phase: "concept", text: "Today we draw on the screen exactly once. The new idea hides in set_mode: a SIZE is not two loose numbers — it is ONE value made of two, a (width, height) pair. The COMMA makes the pair; the parentheses just keep it tidy. set_mode wants to be handed that ONE pair." },
+    { phase: "demo", file: "demo_0a.py", instruction: "Press Start. The window opens, fills with dark blue, and almost instantly disappears. That's correct — the program drew once, reached the end, and stopped. Nothing told it to stay.",
+      source: `# Draw once, then stop. Watch the window flash open and disappear.
+import pygame
+
+WIDTH, HEIGHT = 800, 600
+pygame.init()
+WINDOW_SIZE = (WIDTH, HEIGHT)                  # build the pair, name it
+screen = pygame.display.set_mode(WINDOW_SIZE)  # hand set_mode ONE thing
+screen.fill((20, 30, 80))                      # a colour is also a bundle (r, g, b)
+pygame.display.flip()                          # show what we painted
+` },
+    { phase: "tweak", instruction: "Now the deliberate mistake — the real lesson. Change the set_mode line to hand it two LOOSE numbers: screen = pygame.display.set_mode(WIDTH, HEIGHT) (remove the pair). Predict, then Start, and read the message out loud.",
+      predict: { mode: "choices", prompt: "set_mode(WIDTH, HEIGHT) — two loose numbers instead of one pair. On Start…",
+        choices: ["It crashes: 'size must be two numbers'", "A wider window opens — two numbers is fine", "It says 'too many arguments'", "A blank window, no error"] } },
+    { phase: "recreate", referenceFile: "demo_0a.py", instruction: "Write it yourself: build the pair, hand set_mode ONE thing, fill, flip. Fill the blanks (___). 'Show the demo' puts the reference beside your work without erasing it. It should flash open and disappear, like the demo.",
+      scaffold: `import pygame
+
+WIDTH, HEIGHT = 800, 600
+pygame.init()
+
+# A) build the size pair (the COMMA makes the pair; parens keep it tidy)
+WINDOW_SIZE = ___
+
+# B) hand set_mode ONE thing — the pair
+screen = pygame.display.set_mode(___)
+
+# C) fill the window with a colour (a TRIPLE: r, g, b) — same pattern, three parts
+screen.fill(___)
+
+# D) show what we painted
+pygame.display.___()
+` },
+    { phase: "verify", prompt: "When you Start, does a window open, fill, and then disappear? Point at the line where you built the PAIR — is the comma there doing its real job, and is set_mode handed exactly ONE thing? The disappearing is the itch we fix next (0b). Mark done." },
+  ] },
+
+  { id: "warmup-0b", title: "Make it move", steps: [
+    { phase: "concept", text: "Last time the window flashed and died. This time we keep it alive with a LOOP: 'while True:' runs the lines underneath, then goes back to the top — over and over. Each trip is one frame. The new trick: keep one number, blue, and make it one bigger every trip (blue = blue + 1). As blue climbs, the colour (0, 0, blue) gets stronger. A loop that repeats + one number that changes is the secret behind all motion." },
+    { phase: "demo", file: "demo_0b.py", instruction: "Press Start and watch for a few seconds — there's nothing to press. The screen fades, slowly getting more blue: proof the loop is running and blue is climbing. After a while it crashes on purpose (we fix that in 0c). Use End to stop it any time.",
+      source: `import pygame
+
+WINDOW_SIZE = (800, 600)
+FPS = 60                       # paces the loop (we'll turn this knob in a minute)
+pygame.init()
+screen = pygame.display.set_mode(WINDOW_SIZE)
+clock = pygame.time.Clock()
+
+blue = 0                       # our one changing number
+while True:
+    blue = blue + 1            # a little bigger every frame
+    screen.fill((0, 0, blue))  # paint (red, green, blue)
+    pygame.display.flip()      # show it
+    clock.tick(FPS)            # the metronome — paces the loop
+` },
+    { phase: "tweak", instruction: "Turn the metronome knob: change FPS = 60 to FPS = 10. The colour rule is unchanged — blue still goes up by 1 each frame — only the timing changes. Predict, then Start.",
+      predict: { mode: "choices", prompt: "With FPS 60 → 10 (blue still +1 per frame), what changes on screen?",
+        choices: ["The fade is SLOWER — it creeps up, and crashes later", "The fade is FASTER and crashes sooner", "Nothing changes — FPS doesn't affect the colour", "The colours come out different (red or green)"] } },
+    { phase: "recreate", referenceFile: "demo_0b.py", instruction: "Write the four lines INSIDE the loop, in order: make blue one bigger; fill with (0, 0, blue); flip; tick the clock at FPS. The SHAPE is what matters. 'Show the demo' peeks without erasing your work.",
+      scaffold: `import pygame
+
+WINDOW_SIZE = (800, 600)
+FPS = 60
+pygame.init()
+screen = pygame.display.set_mode(WINDOW_SIZE)
+clock = pygame.time.Clock()
+
+blue = 0
+while True:
+    # 1) make blue one bigger
+    ___
+    # 2) fill the screen with (0, 0, blue)
+    ___
+    # 3) show it
+    ___
+    # 4) tick the clock at FPS
+    ___
+` },
+    { phase: "verify", prompt: "Does your screen start dark and slowly fade toward blue? Can you point to the ONE line that makes the number change each frame? Say it: 'a loop on its own is not motion — motion is a number changing between frames.' Mark done. Next (0c) fixes the crash with a single guard line." },
+  ] },
+
+  { id: "warmup-0c", title: "Keep it looping", steps: [
+    { phase: "concept", text: "Last time the fade CRASHED: blue kept climbing past 255, but a colour channel is only allowed 0–255. The new tool: when a value crosses a limit, correct it. Every frame we ask ONE question — has blue gone past 255? — and if yes, put it back to 0. One question, one fix. That turns the one-shot fade into a fade that repeats forever (a sawtooth)." },
+    { phase: "demo", file: "demo_0c.py", instruction: "Press Start. The screen brightens to blue, snaps back to black, and brightens again — forever, never crashing. That snap-back is the guard firing the instant blue passed 255. Use End to stop.",
+      source: `import pygame
+
+pygame.init()
+WINDOW_SIZE = (800, 600)
+screen = pygame.display.set_mode(WINDOW_SIZE)
+clock = pygame.time.Clock()
+FPS = 60
+
+blue = 0
+while True:
+    blue += 1
+    if blue > 255:        # has the value crossed the limit?
+        blue = 0          # yes -> correct it
+    screen.fill((0, 0, blue))
+    pygame.display.flip()
+    clock.tick(FPS)
+` },
+    { phase: "tweak", instruction: "Change the reset value: make the guard's blue = 0 into blue = 200. Predict where the fade falls back TO, then Start.",
+      predict: { mode: "choices", prompt: "With the guard resetting to 200 instead of 0…",
+        choices: ["It fades between a dim blue and full blue — never reaching black", "Exactly the same as before", "It crashes — 200 isn't allowed", "It freezes on solid blue"] } },
+    { phase: "recreate", referenceFile: "demo_0c.py", instruction: "Only the GUARD is missing. Write the two lines: the question (is blue past 255?) and the fix (put blue back to 0) indented under it. Say the shape: 'when a value crosses a limit, correct it.' 'Show the demo' keeps your work safe while you peek.",
+      scaffold: `import pygame
+
+pygame.init()
+WINDOW_SIZE = (800, 600)
+screen = pygame.display.set_mode(WINDOW_SIZE)
+clock = pygame.time.Clock()
+FPS = 60
+
+blue = 0
+while True:
+    blue += 1
+    # the guard: when a value crosses a limit, correct it (one question, one fix)
+    # 1) the question: has blue crossed the limit 255?
+    ___
+    # 2) the fix (indented under the question): put blue back to 0
+    ___
+    screen.fill((0, 0, blue))
+    pygame.display.flip()
+    clock.tick(FPS)
+` },
+    { phase: "verify", prompt: "Does the screen brighten, snap to black, and brighten again — forever, without ever crashing? Can you point to the two lines that ARE the guard? You now own a tool you'll reuse — correcting a value when it crosses a limit (later it stops a falling player at the floor). Mark done." },
+  ] },
+];
+// Friendly-error map (declarative): a known runtime error is rewritten in the instructor's
+// encouraging voice — framed as "the computer telling us the exact rule we crossed," never failure.
+// The original traceback is ALWAYS preserved and the line number is ALWAYS re-attached (locating the
+// line is part of the skill). First matching entry wins; unmapped errors fall through untouched.
+window.FRIENDLY_ERRORS = [
+  { match: /size must be two numbers/,
+    say: "set_mode wants ONE thing: a (width, height) pair in parentheses — like set_mode((800, 600)). It looks like you passed two separate numbers." },
+  { match: /NameError: name '([^']+)' is not defined/,
+    say: "Python doesn't recognize that name yet. Check the spelling, or make sure it's defined (with =) above the line that uses it." },
+  { match: /(SyntaxError|IndentationError)/,
+    say: "Python couldn't read this line as a valid instruction — look for a typo, a missing ':' '(' ')' or quote, or indentation that doesn't line up." },
+];
+// Append a friendly explanation after the raw traceback (never replaces it). The line number is
+// pulled from the `<your code>` frame (the engine labels user code that way), else the last frame.
+function showFriendlyError(stderr) {
+  if (!stderr) return;
+  const entry = (window.FRIENDLY_ERRORS || []).find(e => e.match.test(stderr));
+  if (!entry) return;   // unmapped → the raw message (with its line number) already stands on its own
+  const mine = [...stderr.matchAll(/File "<your code>", line (\d+)/g)];
+  const any = [...stderr.matchAll(/line (\d+)/g)];
+  const lineNo = mine.length ? mine[mine.length - 1][1] : (any.length ? any[any.length - 1][1] : null);
+  logLine("💡 " + entry.say + (lineNo ? ` (look at line ${lineNo})` : ""), "sys");
+}
+const lessonListEl = document.getElementById("lessonList");
+// Stepper state: null = the lesson LIST is shown; {lessonId, stepIndex} = a lesson is OPEN and we
+// show ONE phase at a time (Concept→Demo→Tweak→Recreate→Verify) with Next/Back. Pure DOM render; the
+// engine is driven only when the student asks (e.g. "show the demo") — never on first paint.
+let lessonState = null;
+const PHASE_LABEL = { concept: "Concept", demo: "Demo", tweak: "Tweak", recreate: "Recreate", verify: "Verify" };
+
+function renderLessonPanel() { if (lessonState) renderStepper(); else renderLessons(); }
+function renderLessons() {
+  if (!lessonListEl) return;
+  const done = progressGet().done;
+  lessonListEl.innerHTML = window.LESSONS.map(l => {
+    const isDone = done.includes(l.id), locked = !lessonUnlocked(l.id);
+    const cls = "lesson-row" + (isDone ? " done" : "") + (locked ? " locked" : "");
+    const marker = isDone ? `<span class="lesson-done" aria-hidden="true">✓</span>`
+      : locked ? `<span class="lesson-lock" aria-hidden="true">🔒</span>`
+      : `<span class="lesson-bullet" aria-hidden="true">•</span>`;
+    return `<button class="${cls}" data-lesson-id="${escTab(l.id)}" type="button"${locked ? ' aria-disabled="true"' : ""}>` +
+      marker + `<span class="lesson-title">${escTab(l.title)}</span>` +
+    `</button>`;
+  }).join("");
+}
+function lessonOpen(id) {
+  const lesson = window.LESSONS.find(l => l.id === id);
+  if (!lesson || !lesson.steps.length) return;   // L1 stubs (no steps) aren't openable until L6 content
+  if (!lessonUnlocked(id)) return;               // locked lessons can't be opened (unlock in order)
+  lessonState = { lessonId: id, stepIndex: 0, predict: {} };   // predict: per-step prediction state
+  renderStepper();
+}
+function lessonClose() { lessonState = null; renderLessons(); updateRunGate(); }
+window.lessonClose = lessonClose;          // test seam
+window.renderLessons = renderLessons;      // test seam (re-render the list)
+function lessonStep(delta) {
+  if (!lessonState) return;
+  const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+  if (!lesson) { lessonClose(); return; }
+  lessonState.stepIndex = Math.max(0, Math.min(lesson.steps.length - 1, lessonState.stepIndex + delta));
+  renderStepper();
+  // entering a recreate phase loads the student's scaffold doc into the editor (engine-driven).
+  const step = lesson.steps[lessonState.stepIndex];
+  if (step && step.phase === "recreate") loadRecreateDoc();
+}
+// Render the ONE current phase + Next/Back + reference aids + (on verify) the self-confirm.
+function renderStepper() {
+  if (!lessonListEl || !lessonState) return;
+  const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+  if (!lesson || !lesson.steps.length) { lessonClose(); return; }
+  const i = lessonState.stepIndex, total = lesson.steps.length, step = lesson.steps[i];
+  const hasDemo = lesson.steps.some(s => s.phase === "demo");
+  const showRef = hasDemo && ["demo", "tweak", "recreate"].includes(step.phase);
+  lessonListEl.innerHTML =
+    `<div class="stepper" data-lesson-id="${escTab(lesson.id)}">` +
+      `<div class="stepper-head">` +
+        `<button class="lesson-back-to-list ghost" type="button" aria-label="Back to lessons">‹ Lessons</button>` +
+        `<span class="stepper-title">${escTab(lesson.title)}</span>` +
+      `</div>` +
+      `<div class="stepper-progress">Step ${i + 1} of ${total} · ${escTab(PHASE_LABEL[step.phase] || step.phase)}</div>` +
+      renderPhase(step) +
+      (step.phase === "verify" ? renderVerify(lesson) : "") +
+      ((showRef || step.phase === "recreate")
+        ? `<div class="lesson-refs">` +
+            (showRef ? `<button class="lesson-show-demo ghost" type="button">↺ Show the demo</button>` : "") +
+            (step.phase === "recreate" ? `<button class="lesson-my-code ghost" type="button">↩ Back to my code</button>` : "") +
+          `</div>`
+        : "") +
+      `<div class="stepper-nav">` +
+        `<button class="lesson-back btn" type="button"${i === 0 ? " disabled" : ""}>Back</button>` +
+        `<button class="lesson-next btn primary" type="button"${i === total - 1 ? " disabled" : ""}>Next</button>` +
+      `</div>` +
+    `</div>`;
+  updateRunGate();
+}
+// Per-phase content. Concept = plain text; Demo = instruction + a Start hint. Tweak/Recreate/Verify
+// renderers gain their interactive bodies in L3/L4 — here they show their instruction/prompt text.
+function renderPhase(step) {
+  let body = (() => {
+    if (step.phase === "concept") return `<p class="lesson-text">${escTab(step.text || "")}</p>`;
+    if (step.phase === "demo")
+      return `<p class="lesson-text">${escTab(step.instruction || "Press Start and watch.")}</p>` +
+             `<p class="lesson-hint">Click “Show the demo”, then press ▶ Start above to run it.</p>`;
+    return `<p class="lesson-text">${escTab(step.instruction || step.prompt || "")}</p>`;
+  })();
+  // Predict-before-Run (§4): a demo/tweak step with a `predict` config locks Start until committed.
+  if (step.predict && ["demo", "tweak"].includes(step.phase)) body += renderPredict(step, lessonState.stepIndex);
+  return `<div class="lesson-phase" data-phase="${escTab(step.phase)}">${body}</div>`;
+}
+// Quick-choices predict UI. Before commit: prompt + selectable choices + a (disabled-until-selected)
+// "Lock in" button. After commit: "You predicted: X"; once the student Starts the run, a calm
+// matched/surprised reconcile self-check (no grading — the gap between prediction and reality is the
+// lesson). State lives per-step on lessonState.predict[i].
+function predictState(i) {
+  if (!lessonState.predict[i]) lessonState.predict[i] = { selected: null, committed: false, showResult: false, reconcile: null };
+  return lessonState.predict[i];
+}
+function renderPredict(step, i) {
+  const p = step.predict; if (!p) return "";
+  const st = predictState(i);
+  const choices = p.choices || [];
+  const promptHtml = `<p class="predict-prompt">${escTab(p.prompt || "What will happen?")}</p>`;
+  if (!st.committed) {
+    return `<div class="predict">` + promptHtml +
+      `<div class="predict-choices">` +
+        choices.map((c, ci) => `<button class="predict-choice${st.selected === ci ? " selected" : ""}" type="button" data-i="${ci}">${escTab(c)}</button>`).join("") +
+      `</div>` +
+      `<button class="predict-commit btn" type="button"${st.selected == null ? " disabled" : ""}>Lock in my prediction</button>` +
+    `</div>`;
+  }
+  let out = `<div class="predict committed">` + promptHtml +
+    `<p class="predict-you">You predicted: <strong>${escTab(choices[st.selected] ?? "")}</strong></p>`;
+  if (st.showResult) {
+    out += `<div class="predict-result">` +
+      `<p class="predict-reconcile-q">Now run it and watch. Did it match your prediction?</p>` +
+      `<div class="predict-reconcile">` +
+        `<button class="predict-matched btn${st.reconcile === "matched" ? " selected" : ""}" type="button">It matched</button>` +
+        `<button class="predict-surprised btn${st.reconcile === "surprised" ? " selected" : ""}" type="button">It surprised me</button>` +
+      `</div>` +
+    `</div>`;
+  }
+  return out + `</div>`;
+}
+// The run-gate: while a demo/tweak step with a predict config is active and uncommitted, Start is
+// locked (disabled). Cleared (enabled) on any other phase or when no lesson is open — so the regular
+// playground Start is never affected.
+function predictGateBlocks() {
+  if (!lessonState) return false;
+  // Gate ONLY while the Lessons panel is the visible view — so navigating away (rail switch or
+  // collapse) never leaves the playground Start stuck disabled; it re-engages on return.
+  if (activeView !== "lessons" || (sideEl && sideEl.classList.contains("collapsed"))) return false;
+  const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+  const step = lesson && lesson.steps[lessonState.stepIndex];
+  if (!step || !step.predict || !["demo", "tweak"].includes(step.phase)) return false;
+  const st = lessonState.predict[lessonState.stepIndex];
+  return !(st && st.committed);
+}
+function updateRunGate() { runBtnEl.disabled = predictGateBlocks(); }
+// Start click, gated: a committed predict phase reveals the reconcile self-check as the run starts.
+function onRunClick() {
+  if (predictGateBlocks()) return;   // belt-and-suspenders (the button is also disabled)
+  if (lessonState) {
+    const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
+    const step = lesson && lesson.steps[lessonState.stepIndex];
+    const st = lessonState.predict[lessonState.stepIndex];
+    if (step && step.predict && st && st.committed && !st.showResult) { st.showResult = true; renderStepper(); }
+  }
+  run();
+}
+// Progress (localStorage) + ordered unlock. lessonProgress = {done:[lessonId,…]} — a lesson's Verify
+// self-confirm marks it done; the NEXT lesson unlocks (in LESSONS order). LOCAL-only, like emptyDirs.
+function progressGet() {
+  try { const r = JSON.parse(localStorage.getItem("lessonProgress") || "{}"); return { done: Array.isArray(r.done) ? r.done.filter(x => typeof x === "string") : [] }; }
+  catch { return { done: [] }; }
+}
+function progressSet(p) { try { localStorage.setItem("lessonProgress", JSON.stringify(p)); } catch {} }
+function lessonMarkDone(id) { const p = progressGet(); if (!p.done.includes(id)) { p.done.push(id); progressSet(p); } }
+function lessonUnlocked(id) {
+  const idx = window.LESSONS.findIndex(l => l.id === id);
+  if (idx <= 0) return true;                                      // the first lesson is always open
+  return progressGet().done.includes(window.LESSONS[idx - 1].id); // else: previous lesson must be done
+}
+// Recreate: the student's OWN doc (a scaffold they complete), kept alongside the demo reference so
+// "Show the demo" / "Back to my code" toggle between two live Docs without clobbering either.
+function recreateDocName(lesson) { return "recreate_" + lesson.id.replace(/[^a-z0-9]+/gi, "_") + ".py"; }
+function loadRecreateDoc() {
+  const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+  const step = lesson && lesson.steps[lessonState.stepIndex];
+  if (!lesson || !step || step.phase !== "recreate") return;
+  const name = recreateDocName(lesson);
+  if (!project.files[name]) project.adoptDoc(name, new CodeMirror.Doc(step.scaffold || "", "python"));
+  project.setActive(name);   // adoptDoc only moves the model pointer; setActive swaps the editor's Doc
+  renderViewer(name);
+}
+function backToMyCode() {
+  const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+  const name = lesson && recreateDocName(lesson);
+  if (name && project.files[name]) { project.setActive(name); renderViewer(name); }
+}
+// Verify: a manual self-confirm (no auto-check in v1). Once done, a quiet, consistent "✓ Done".
+function renderVerify(lesson) {
+  if (progressGet().done.includes(lesson.id))
+    return `<div class="lesson-verify done"><span class="lesson-done">✓</span> Done — nice work.</div>`;
+  return `<div class="lesson-verify"><button class="lesson-confirm btn primary" type="button">Mark done</button></div>`;
+}
+// Load the lesson's demo source into the editor VIA THE ENGINE — adoptDoc (a real, runnable project
+// file) then renderViewer→setActive→swapDoc. NEVER editor.setValue (arms lint / breaks laziness).
+// Re-showing just re-selects the existing demo doc (the "show the demo again" path).
+function showCurrentDemo() {
+  const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+  const demo = lesson && lesson.steps.find(s => s.phase === "demo");
+  if (!demo) return;
+  const name = demo.file || "demo.py";
+  if (!project.files[name]) project.adoptDoc(name, new CodeMirror.Doc(demo.source || "", "python"));
+  project.setActive(name);   // adoptDoc only moves the model pointer; setActive swaps the editor's Doc
+  renderViewer(name);        // viewer chrome (filename + ▶ Start)
+}
+// Delegated clicks for the lessons panel (list rows + stepper controls).
+lessonListEl?.addEventListener("click", (e) => {
+  const row = e.target.closest(".lesson-row");
+  if (row) { lessonOpen(row.dataset.lessonId); return; }
+  if (e.target.closest(".lesson-back-to-list")) { lessonClose(); return; }
+  if (e.target.closest(".lesson-next")) { lessonStep(1); return; }
+  if (e.target.closest(".lesson-back")) { lessonStep(-1); return; }
+  if (e.target.closest(".lesson-show-demo")) { showCurrentDemo(); return; }
+  if (e.target.closest(".lesson-my-code")) { backToMyCode(); return; }
+  if (e.target.closest(".lesson-confirm")) {
+    const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+    if (lesson) { lessonMarkDone(lesson.id); renderStepper(); }
+    return;
+  }
+  // predict-before-Run interactions
+  const choice = e.target.closest(".predict-choice");
+  if (choice) { const i = +choice.dataset.i; if (Number.isInteger(i) && i >= 0) predictState(lessonState.stepIndex).selected = i; renderStepper(); return; }
+  if (e.target.closest(".predict-commit")) {
+    const st = predictState(lessonState.stepIndex);
+    if (st.selected != null) { st.committed = true; renderStepper(); }
+    return;
+  }
+  const matched = e.target.closest(".predict-matched"), surprised = e.target.closest(".predict-surprised");
+  if (matched || surprised) { predictState(lessonState.stepIndex).reconcile = matched ? "matched" : "surprised"; renderStepper(); return; }
+});
+
 const railEl = document.querySelector("nav.rail");
 const acttabs = [...railEl.querySelectorAll('[role="tab"]')];
 const panelviews = [...document.querySelectorAll(".panelview")];
@@ -2888,6 +3355,7 @@ function onViewOpened(v) {
   else { historyOpen = false; }
   if (v === "examples") renderExamplesPanel();
   if (v === "explorer") { renderTabs(); updateStorageReadout(); }
+  if (v === "lessons") renderLessonPanel();
 }
 function showView(v) {
   activeView = v;
@@ -2901,11 +3369,13 @@ function showView(v) {
   });
   panelviews.forEach(p => { p.hidden = (p.dataset.panel !== v); });
   onViewOpened(v);
+  updateRunGate();   // re-sync the lesson predict-gate to the now-active view (never strand Start disabled)
 }
 function collapsePanel() {
   sideEl.classList.add("collapsed");
   sideSplitEl.style.display = "none";
   acttabs.forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected", "false"); });
+  updateRunGate();   // collapsing the Lessons panel releases the predict-gate (Start usable again)
 }
 acttabs.forEach((b, i) => {
   b.addEventListener("click", () => {
@@ -3030,6 +3500,7 @@ updateStorageReadout();   // seed the tree-footer browser-storage metric
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/";
 let pyodide = null;
 let runTask = null;
+let runStderr = "";   // L5: buffered stderr of the current run, for the friendly-error rewrite on settle
 let engine = null;   // cooperative-engine wrapper (vendor/engine.mjs createEngine); set during boot()
 
 // Engine module (cooperative pygame engine) — lazily imported on a cached promise, the
@@ -3101,7 +3572,7 @@ async function boot() {
                                                  // BEFORE hydrate/_memfs/lazy-loaders read it
     canvas: canvasEl,
     setStatus,                                                    // host owns the exact #status tokens
-    logSink: { out: (s) => logLine(s, "out"), err: (s) => logLine(s, "err") },
+    logSink: { out: (s) => logLine(s, "out"), err: (s) => { runStderr += s + "\n"; logLine(s, "err"); } },
     hydrateAssets: () => assetFS.hydrateAll(),
   });
   return pyodide;
@@ -3122,6 +3593,7 @@ async function run() {
   // there are never two concurrent loops and a restart-from-paused clears the pause. NO disabled-Start
   // guard here — #runBtn stays enabled while live.
   clearConsole();
+  runStderr = "";   // L5: fresh stderr buffer for this run's friendly-error rewrite
   captureSnapshot();   // fire-and-forget: save this version to history
   canvasEl.focus();
   resumeAudio();
@@ -3145,7 +3617,7 @@ async function run() {
   task.then((kind) => {
     if (runTask !== task) return;
     runFile = null; syncRunControls(); renderTabs();
-    if (kind === "error") return setStatus("error", "error — see console");
+    if (kind === "error") { setStatus("error", "error — see console"); showFriendlyError(runStderr); return; }
     setStatus("ready", kind === "stopped" ? "stopped" : "finished");
     logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {
@@ -3175,7 +3647,7 @@ function resumeAudio() {
 }
 canvasEl.addEventListener("click", resumeAudio);
 
-document.getElementById("runBtn").addEventListener("click", run);
+document.getElementById("runBtn").addEventListener("click", onRunClick);   // gated for lesson predict-phases; plain run() otherwise
 document.getElementById("stopBtn").addEventListener("click", () => {
   if (engine) engine.stop();   // End — task settle clears runFile + syncs controls
 });

@@ -43,21 +43,21 @@ await page.waitForFunction(
   null, { timeout: 120_000 }).catch(() => fail('never booted'));
 
 // ----------------------------------------------------------------------------
-// 1. Rail present + 4 views (Explorer · History · Examples · Collaboration).
+// 1. Rail present + 5 views (Explorer · History · Examples · Collaboration · Lessons).
 // ----------------------------------------------------------------------------
 const rail = await page.evaluate(() => {
   const tabs = Array.from(document.querySelectorAll('nav.rail [role="tab"]'));
   return { count: tabs.length, order: tabs.map(t => t.dataset.view) };
 });
-if (rail.count === 4 && JSON.stringify(rail.order) === JSON.stringify(['explorer', 'history', 'examples', 'collab']))
-  ok('rail present with 4 views in order explorer/history/examples/collab');
+if (rail.count === 5 && JSON.stringify(rail.order) === JSON.stringify(['explorer', 'history', 'examples', 'collab', 'lessons']))
+  ok('rail present with 5 views in order explorer/history/examples/collab/lessons');
 else fail('rail wrong: ' + JSON.stringify(rail));
 
 // ----------------------------------------------------------------------------
 // 2. View switching: clicking each rail icon shows its panelview, hides the other
 //    three, sets aria-selected="true" on exactly one tab.
 // ----------------------------------------------------------------------------
-const views = ['explorer', 'history', 'examples', 'collab'];
+const views = ['explorer', 'history', 'examples', 'collab', 'lessons'];
 // Start from a non-Explorer active view so the first loop click (Explorer) is a genuine view SWITCH,
 // not a re-click on the boot-active Explorer (which the clean toggle (§3.1) would collapse). With the
 // active view != the clicked view on every iteration, each click is a switch that shows its panel.
@@ -66,7 +66,7 @@ let switchOk = true;
 for (const v of views) {
   await click(`nav.rail [data-view="${v}"]`);
   const state = await page.evaluate((active) => {
-    const panels = ['explorer', 'history', 'examples', 'collab'].map(name => {
+    const panels = ['explorer', 'history', 'examples', 'collab', 'lessons'].map(name => {
       const p = document.getElementById('panel-' + name);
       // "visible" = exists and not hidden and laid out.
       const visible = !!p && !p.hidden && p.offsetParent !== null;

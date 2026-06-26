@@ -257,6 +257,20 @@
   .lesson-row:hover { background: var(--color-row-hover); }
   .lesson-row.current { border-left-color: var(--accent); }
   .lesson-row .lesson-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lesson-row .lesson-done, .lesson-row .lesson-lock, .lesson-row .lesson-bullet { width: 16px; flex: 0 0 16px; text-align: center; font-size: 12px; }
+  .lesson-row .lesson-done { color: var(--ok, #4caf50); }
+  .lesson-row.done .lesson-title { color: var(--dim); }
+  .lesson-row.locked { opacity: .5; cursor: default; }
+  .lesson-row.locked:hover { background: none; }
+  .lesson-row.locked .lesson-bullet { display: none; }
+  /* recreate/verify reference + confirm controls */
+  .lesson-refs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lesson-my-code { align-self: flex-start; background: none; border: 1px solid var(--color-border-hover); color: var(--dim); cursor: pointer; font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px; }
+  .lesson-my-code:hover { color: var(--text); border-color: var(--accent); }
+  .lesson-verify { margin-top: 4px; }
+  .lesson-verify.done { color: var(--text); font-size: 13px; }
+  .lesson-verify.done .lesson-done { color: var(--ok, #4caf50); font-weight: 700; }
+  .lesson-confirm { justify-content: center; }
   /* the stepper (one phase at a time) */
   .stepper { display: flex; flex-direction: column; gap: 10px; padding: 4px 6px 8px; }
   .stepper-head { display: flex; align-items: center; gap: 8px; }
@@ -2937,15 +2951,22 @@ const PHASE_LABEL = { concept: "Concept", demo: "Demo", tweak: "Tweak", recreate
 function renderLessonPanel() { if (lessonState) renderStepper(); else renderLessons(); }
 function renderLessons() {
   if (!lessonListEl) return;
-  lessonListEl.innerHTML = window.LESSONS.map(l =>
-    `<button class="lesson-row" data-lesson-id="${escTab(l.id)}" type="button">` +
-      `<span class="lesson-title">${escTab(l.title)}</span>` +
-    `</button>`
-  ).join("");
+  const done = progressGet().done;
+  lessonListEl.innerHTML = window.LESSONS.map(l => {
+    const isDone = done.includes(l.id), locked = !lessonUnlocked(l.id);
+    const cls = "lesson-row" + (isDone ? " done" : "") + (locked ? " locked" : "");
+    const marker = isDone ? `<span class="lesson-done" aria-hidden="true">✓</span>`
+      : locked ? `<span class="lesson-lock" aria-hidden="true">🔒</span>`
+      : `<span class="lesson-bullet" aria-hidden="true">•</span>`;
+    return `<button class="${cls}" data-lesson-id="${escTab(l.id)}" type="button"${locked ? ' aria-disabled="true"' : ""}>` +
+      marker + `<span class="lesson-title">${escTab(l.title)}</span>` +
+    `</button>`;
+  }).join("");
 }
 function lessonOpen(id) {
   const lesson = window.LESSONS.find(l => l.id === id);
   if (!lesson || !lesson.steps.length) return;   // L1 stubs (no steps) aren't openable until L6 content
+  if (!lessonUnlocked(id)) return;               // locked lessons can't be opened (unlock in order)
   lessonState = { lessonId: id, stepIndex: 0, predict: {} };   // predict: per-step prediction state
   renderStepper();
 }
@@ -2958,8 +2979,11 @@ function lessonStep(delta) {
   if (!lesson) { lessonClose(); return; }
   lessonState.stepIndex = Math.max(0, Math.min(lesson.steps.length - 1, lessonState.stepIndex + delta));
   renderStepper();
+  // entering a recreate phase loads the student's scaffold doc into the editor (engine-driven).
+  const step = lesson.steps[lessonState.stepIndex];
+  if (step && step.phase === "recreate") loadRecreateDoc();
 }
-// Render the ONE current phase + Next/Back + (on demo/tweak/recreate) a "show the demo" reference.
+// Render the ONE current phase + Next/Back + reference aids + (on verify) the self-confirm.
 function renderStepper() {
   if (!lessonListEl || !lessonState) return;
   const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
@@ -2975,7 +2999,13 @@ function renderStepper() {
       `</div>` +
       `<div class="stepper-progress">Step ${i + 1} of ${total} · ${escTab(PHASE_LABEL[step.phase] || step.phase)}</div>` +
       renderPhase(step) +
-      (showRef ? `<button class="lesson-show-demo ghost" type="button">↺ Show the demo</button>` : "") +
+      (step.phase === "verify" ? renderVerify(lesson) : "") +
+      ((showRef || step.phase === "recreate")
+        ? `<div class="lesson-refs">` +
+            (showRef ? `<button class="lesson-show-demo ghost" type="button">↺ Show the demo</button>` : "") +
+            (step.phase === "recreate" ? `<button class="lesson-my-code ghost" type="button">↩ Back to my code</button>` : "") +
+          `</div>`
+        : "") +
       `<div class="stepper-nav">` +
         `<button class="lesson-back btn" type="button"${i === 0 ? " disabled" : ""}>Back</button>` +
         `<button class="lesson-next btn primary" type="button"${i === total - 1 ? " disabled" : ""}>Next</button>` +
@@ -3054,6 +3084,42 @@ function onRunClick() {
   }
   run();
 }
+// Progress (localStorage) + ordered unlock. lessonProgress = {done:[lessonId,…]} — a lesson's Verify
+// self-confirm marks it done; the NEXT lesson unlocks (in LESSONS order). LOCAL-only, like emptyDirs.
+function progressGet() {
+  try { const r = JSON.parse(localStorage.getItem("lessonProgress") || "{}"); return { done: Array.isArray(r.done) ? r.done : [] }; }
+  catch { return { done: [] }; }
+}
+function progressSet(p) { try { localStorage.setItem("lessonProgress", JSON.stringify(p)); } catch {} }
+function lessonMarkDone(id) { const p = progressGet(); if (!p.done.includes(id)) { p.done.push(id); progressSet(p); } }
+function lessonUnlocked(id) {
+  const idx = window.LESSONS.findIndex(l => l.id === id);
+  if (idx <= 0) return true;                                      // the first lesson is always open
+  return progressGet().done.includes(window.LESSONS[idx - 1].id); // else: previous lesson must be done
+}
+// Recreate: the student's OWN doc (a scaffold they complete), kept alongside the demo reference so
+// "Show the demo" / "Back to my code" toggle between two live Docs without clobbering either.
+function recreateDocName(lesson) { return "recreate_" + lesson.id.replace(/[^a-z0-9]+/gi, "_") + ".py"; }
+function loadRecreateDoc() {
+  const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+  const step = lesson && lesson.steps[lessonState.stepIndex];
+  if (!lesson || !step || step.phase !== "recreate") return;
+  const name = recreateDocName(lesson);
+  if (!project.files[name]) project.adoptDoc(name, new CodeMirror.Doc(step.scaffold || "", "python"));
+  project.setActive(name);   // adoptDoc only moves the model pointer; setActive swaps the editor's Doc
+  renderViewer(name);
+}
+function backToMyCode() {
+  const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+  const name = lesson && recreateDocName(lesson);
+  if (name && project.files[name]) { project.setActive(name); renderViewer(name); }
+}
+// Verify: a manual self-confirm (no auto-check in v1). Once done, a quiet, consistent "✓ Done".
+function renderVerify(lesson) {
+  if (progressGet().done.includes(lesson.id))
+    return `<div class="lesson-verify done"><span class="lesson-done">✓</span> Done — nice work.</div>`;
+  return `<div class="lesson-verify"><button class="lesson-confirm btn primary" type="button">Mark done</button></div>`;
+}
 // Load the lesson's demo source into the editor VIA THE ENGINE — adoptDoc (a real, runnable project
 // file) then renderViewer→setActive→swapDoc. NEVER editor.setValue (arms lint / breaks laziness).
 // Re-showing just re-selects the existing demo doc (the "show the demo again" path).
@@ -3074,6 +3140,12 @@ lessonListEl?.addEventListener("click", (e) => {
   if (e.target.closest(".lesson-next")) { lessonStep(1); return; }
   if (e.target.closest(".lesson-back")) { lessonStep(-1); return; }
   if (e.target.closest(".lesson-show-demo")) { showCurrentDemo(); return; }
+  if (e.target.closest(".lesson-my-code")) { backToMyCode(); return; }
+  if (e.target.closest(".lesson-confirm")) {
+    const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
+    if (lesson) { lessonMarkDone(lesson.id); renderStepper(); }
+    return;
+  }
   // predict-before-Run interactions
   const choice = e.target.closest(".predict-choice");
   if (choice) { predictState(lessonState.stepIndex).selected = +choice.dataset.i; renderStepper(); return; }

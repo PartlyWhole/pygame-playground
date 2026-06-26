@@ -164,15 +164,23 @@ await booted().catch(() => fail('never booted'));
 const FIXTURE_DEMO_SRC = 'WINDOW_SIZE = (320, 240)\nprint("demo", WINDOW_SIZE)\n';
 async function installFixture() {
   await page.evaluate((src) => {
-    window.LESSONS = [{
-      id: 'fix-lesson', title: 'Fixture lesson', steps: [
+    localStorage.removeItem('lessonProgress');   // deterministic lock/done state
+    window.LESSONS = [
+      { id: 'fix-lesson', title: 'Fixture lesson', steps: [
         { phase: 'concept', text: 'A short concept explanation.' },
         { phase: 'demo', file: 'demo_fixture.py', source: src, instruction: 'Press Start and watch.' },
         { phase: 'tweak', instruction: 'Change a value.',
           predict: { mode: 'choices', prompt: 'What will happen?', choices: ['Bigger window', 'Smaller window', 'An error'] } },
-      ],
-    }];
-    // reset to a clean project + the lesson LIST (fixture row visible).
+        { phase: 'recreate', scaffold: 'WIDTH = 0\n# write it yourself\n', referenceFile: 'demo_fixture.py',
+          instruction: 'Write it yourself. Use “Show the demo” if stuck.' },
+        { phase: 'verify', prompt: 'Did the window open and fill? Mark done when it matches.' },
+      ] },
+      { id: 'fix-lesson-2', title: 'Second fixture', steps: [
+        { phase: 'concept', text: 'Second lesson concept.' },
+        { phase: 'verify', prompt: 'Done?' },
+      ] },
+    ];
+    // reset to a clean project + the lesson LIST (fixture rows visible).
     window.project.load({ files: { 'main.py': 'a=1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
     if (window.lessonClose) window.lessonClose(); else window.renderLessons();
   }, FIXTURE_DEMO_SRC);
@@ -374,6 +382,135 @@ async function goToPhase(phase) {
   else fail('L3.4 concept phase wrongly gated Start: ' + JSON.stringify(onConcept));
   if (closedEnabled) ok('L3.4  ...closing the lesson leaves Start enabled (gate cleared)');
   else fail('L3.4 closing the lesson left Start disabled');
+}
+
+// ================================================================================================
+// L4 — RECREATE (manual) + VERIFY + progress persistence. Recreate loads a scaffold doc the student
+// writes themselves (engine-driven); "Show the demo" / "Back to my code" toggle the reference and
+// their work WITHOUT clobbering edits. No auto-check (v1 is manual). Verify self-confirm marks the
+// lesson done in localStorage and unlocks the next; progress survives reload.
+// ================================================================================================
+
+// helper: the name of the active editor doc (its key in project.files).
+const activeDocName = () => page.evaluate(() => {
+  const cm = document.querySelector('.CodeMirror').CodeMirror, doc = cm.getDoc();
+  return Object.keys(window.project.files).find(k => window.project.files[k] === doc) || null;
+});
+
+// L4.1 — the recreate phase loads the scaffold into the editor via the engine (no setValue).
+let recreateName = null;
+{
+  await ensureLessonsOpen();
+  await installFixture();
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-row[data-lesson-id="fix-lesson"]')?.click());
+  await page.waitForTimeout(80);
+  // arm a setValue spy.
+  await page.evaluate(() => {
+    window.__svCalls = 0;
+    const cm = document.querySelector('.CodeMirror').CodeMirror;
+    if (cm && !cm.__svWrap) { const o = cm.setValue.bind(cm); cm.setValue = (...a) => { window.__svCalls++; return o(...a); }; cm.__svWrap = true; }
+  });
+  await goToPhase('recreate');
+  recreateName = await activeDocName();
+  const r = await page.evaluate((rn) => ({
+    inProject: !!window.project.files[rn],
+    text: rn ? window.project.files[rn].getValue() : '',
+    sv: window.__svCalls,
+    lint: !!document.querySelector('.CodeMirror').CodeMirror.getOption('lint'),
+  }), recreateName);
+  if (recreateName && r.inProject && r.text.includes('write it yourself') && r.sv === 0 && !r.lint)
+    ok('L4.1 recreate loads the scaffold into the editor via the engine (project.files gains it, no setValue, lint off)');
+  else fail('L4.1 recreate scaffold load wrong: ' + JSON.stringify({ recreateName, ...r }));
+}
+
+// L4.2 — "Show the demo" / "Back to my code" toggle reference vs the student's work WITHOUT clobbering.
+{
+  // simulate a student edit on the recreate doc (replaceRange — not setValue).
+  await page.evaluate((rn) => window.project.files[rn].replaceRange('STUDENT_EDIT\n', { line: 0, ch: 0 }), recreateName);
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-show-demo')?.click());
+  await page.waitForTimeout(80);
+  const onDemo = await page.evaluate((rn) => {
+    const cm = document.querySelector('.CodeMirror').CodeMirror;
+    const active = Object.keys(window.project.files).find(k => window.project.files[k] === cm.getDoc());
+    return { activeIsDemo: active === 'demo_fixture.py', recreateExists: !!window.project.files[rn], recreateKeepsEdit: !!window.project.files[rn] && window.project.files[rn].getValue().includes('STUDENT_EDIT') };
+  }, recreateName);
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-my-code')?.click());
+  await page.waitForTimeout(80);
+  const back = await page.evaluate((rn) => {
+    const cm = document.querySelector('.CodeMirror').CodeMirror;
+    const active = Object.keys(window.project.files).find(k => window.project.files[k] === cm.getDoc());
+    return { activeIsRecreate: active === rn, keepsEdit: cm.getValue().includes('STUDENT_EDIT') };
+  }, recreateName);
+  if (onDemo.activeIsDemo && onDemo.recreateExists && onDemo.recreateKeepsEdit)
+    ok('L4.2 "Show the demo" swaps to the reference; the recreate doc + its edits persist in project.files');
+  else fail('L4.2 show-demo did not preserve recreate doc: ' + JSON.stringify(onDemo));
+  if (back.activeIsRecreate && back.keepsEdit)
+    ok('L4.2  ..."Back to my code" returns to the student\'s doc with edits intact (no clobber)');
+  else fail('L4.2 back-to-my-code lost edits/doc: ' + JSON.stringify(back));
+}
+
+// L4.3 — NO auto-check on recreate (v1 manual): no pass/fail verdict element; only manual aids.
+{
+  const r = await page.evaluate(() => {
+    // re-select the recreate phase (back to my code already did). Check the recreate phase DOM.
+    const phase = document.querySelector('#panel-lessons .lesson-phase[data-phase="recreate"]');
+    return {
+      onRecreate: !!phase,
+      hasShowDemo: !!document.querySelector('#panel-lessons .lesson-show-demo'),
+      hasMyCode: !!document.querySelector('#panel-lessons .lesson-my-code'),
+      hasAutoCheck: !!document.querySelector('#panel-lessons .lesson-check, #panel-lessons .check-pass, #panel-lessons .check-fail'),
+      hasConfirm: !!document.querySelector('#panel-lessons .lesson-confirm'),   // confirm belongs to VERIFY, not recreate
+    };
+  });
+  if (r.onRecreate && r.hasShowDemo && r.hasMyCode && !r.hasAutoCheck && !r.hasConfirm)
+    ok('L4.3 recreate is manual: reference aids present, NO auto-check verdict, no pass/fail gate (self-confirm is on Verify)');
+  else fail('L4.3 recreate auto-check expectations wrong: ' + JSON.stringify(r));
+}
+
+// L4.4 — Verify self-confirm marks the lesson done in localStorage + unlocks the next lesson.
+{
+  // fix-lesson-2 should be LOCKED before fix-lesson is verified.
+  const beforeLocked = await page.evaluate(() => {
+    if (window.lessonClose) window.lessonClose();
+    return document.querySelector('.lesson-row[data-lesson-id="fix-lesson-2"]')?.classList.contains('locked');
+  });
+  // re-open fix-lesson, go to verify, confirm.
+  await page.evaluate(() => document.querySelector('.lesson-row[data-lesson-id="fix-lesson"]')?.click());
+  await page.waitForTimeout(80);
+  await goToPhase('verify');
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-confirm')?.click());
+  await page.waitForTimeout(80);
+  const after = await page.evaluate(() => {
+    const prog = JSON.parse(localStorage.getItem('lessonProgress') || '{}');
+    if (window.lessonClose) window.lessonClose();
+    return {
+      progressHasLesson: Array.isArray(prog.done) && prog.done.includes('fix-lesson'),
+      l1done: document.querySelector('.lesson-row[data-lesson-id="fix-lesson"]')?.classList.contains('done'),
+      l2locked: document.querySelector('.lesson-row[data-lesson-id="fix-lesson-2"]')?.classList.contains('locked'),
+    };
+  });
+  if (beforeLocked === true) ok('L4.4 the next lesson (fix-lesson-2) is LOCKED until the first is verified');
+  else fail('L4.4 next lesson was not locked initially: ' + JSON.stringify({ beforeLocked }));
+  if (after.progressHasLesson && after.l1done && after.l2locked === false)
+    ok('L4.4  ...Verify self-confirm writes lessonProgress (fix-lesson done) + unlocks the next lesson');
+  else fail('L4.4 verify confirm/unlock wrong: ' + JSON.stringify(after));
+}
+
+// L4.5 — progress persists across reload (real lessons): a done lesson stays done; next unlocked; rest locked.
+{
+  await page.evaluate(() => localStorage.setItem('lessonProgress', JSON.stringify({ done: ['lesson-0'] })));
+  await page.goto(URL, { waitUntil: 'load' });
+  await booted().catch(() => fail('never rebooted (L4.5)'));
+  await ensureLessonsOpen();
+  const r = await page.evaluate(() => ({
+    l0done: document.querySelector('.lesson-row[data-lesson-id="lesson-0"]')?.classList.contains('done'),
+    aUnlocked: document.querySelector('.lesson-row[data-lesson-id="warmup-0a"]')?.classList.contains('locked') === false,
+    bLocked: document.querySelector('.lesson-row[data-lesson-id="warmup-0b"]')?.classList.contains('locked'),
+  }));
+  if (r.l0done && r.aUnlocked && r.bLocked)
+    ok('L4.5 progress survives reload: lesson-0 stays done, warmup-0a unlocked, warmup-0b locked');
+  else fail('L4.5 reload persistence/lock wrong: ' + JSON.stringify(r));
+  await page.evaluate(() => localStorage.removeItem('lessonProgress'));   // cleanup
 }
 
 // ================================================================================================

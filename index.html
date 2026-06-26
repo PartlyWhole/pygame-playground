@@ -251,6 +251,12 @@
   #examplesPanel .exrow .reset { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 13px; padding: 0 3px; border-radius: 3px; flex: 0 0 auto; opacity: 0; }
   #examplesPanel .exrow:hover .reset { opacity: 1; }
   #examplesPanel .exrow .reset:hover { color: var(--accent); background: var(--color-border-hover); }
+  /* lessons (curriculum Phase 1): a calm list, consistent with the examples rows. */
+  .lesson-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; }
+  .lesson-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 6px; border: 0; border-left: 2px solid transparent; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  .lesson-row:hover { background: var(--color-row-hover); }
+  .lesson-row.current { border-left-color: var(--accent); }
+  .lesson-row .lesson-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ---------- history rail panel (#historyPanel — in-flow) ---------- */
   #historyPanel { font-size: 12.5px; }
@@ -391,6 +397,7 @@
     <button class="acttab" data-view="history" role="tab" aria-selected="false" aria-controls="panel-history" id="tab-history" tabindex="-1" aria-label="History" data-tip="History" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
     <button class="acttab" data-view="examples" role="tab" aria-selected="false" aria-controls="panel-examples" id="tab-examples" tabindex="-1" aria-label="Examples" data-tip="Examples" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 18h5"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 3.6 10.8c-.6.5-1.1 1.2-1.1 2H9.5c0-.8-.5-1.5-1.1-2A6 6 0 0 1 12 3z"/></svg></button>
     <button class="acttab" data-view="collab" role="tab" aria-selected="false" aria-controls="panel-collab" id="tab-collab" tabindex="-1" aria-label="Collaboration" data-tip="Collaboration" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/></svg></button>
+    <button class="acttab" data-view="lessons" role="tab" aria-selected="false" aria-controls="panel-lessons" id="tab-lessons" tabindex="-1" aria-label="Lessons" data-tip="Lessons" data-tip-side="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5 2 9l10 4 10-4z"/><path d="M6 11v4c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-4"/></svg></button>
   </nav>
 
   <!-- side panel (one section per view; only the active one is visible) -->
@@ -437,6 +444,13 @@
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
         <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
       </div></div>
+    </section>
+
+    <!-- LESSONS (curriculum Phase 1: the five-phase lesson loop; list is declarative window.LESSONS) -->
+    <section class="panelview" id="panel-lessons" data-panel="lessons" role="tabpanel" aria-labelledby="tab-lessons" hidden>
+      <div class="side-head"><span>Lessons</span></div>
+      <div class="panel-note">Short, guided steps. Work at your own pace.</div>
+      <div class="side-body"><div id="lessonList" class="lesson-list"></div></div>
     </section>
   </aside>
 
@@ -2872,6 +2886,27 @@ document.getElementById("examplesPanel").addEventListener("click", (e) => {
 });
 
 // ---------------------------------------------------------------- activity rail (§3) + roving tabindex (§8.1)
+// ---------------------------------------------------------------- lessons (curriculum Phase 1)
+// Declarative lesson content (data, not code) so non-engineers can author lessons by editing this.
+// L1 seeds id/title stubs (steps:[]); the five-phase step content (Concept→Demo→Tweak→Recreate→
+// Verify) arrives in L6. Rendered as a calm list in the Lessons rail view — pure DOM, so opening the
+// panel costs nothing at first paint (no Pyodide/ruff/Automerge).
+window.LESSONS = [
+  { id: "lesson-0",  title: "Welcome",         steps: [] },
+  { id: "warmup-0a", title: "Draw once",       steps: [] },
+  { id: "warmup-0b", title: "Make it move",    steps: [] },
+  { id: "warmup-0c", title: "Keep it looping", steps: [] },
+];
+const lessonListEl = document.getElementById("lessonList");
+function renderLessons() {
+  if (!lessonListEl) return;
+  lessonListEl.innerHTML = window.LESSONS.map(l =>
+    `<button class="lesson-row" data-lesson-id="${escTab(l.id)}" type="button">` +
+      `<span class="lesson-title">${escTab(l.title)}</span>` +
+    `</button>`
+  ).join("");
+}
+
 const railEl = document.querySelector("nav.rail");
 const acttabs = [...railEl.querySelectorAll('[role="tab"]')];
 const panelviews = [...document.querySelectorAll(".panelview")];
@@ -2888,6 +2923,7 @@ function onViewOpened(v) {
   else { historyOpen = false; }
   if (v === "examples") renderExamplesPanel();
   if (v === "explorer") { renderTabs(); updateStorageReadout(); }
+  if (v === "lessons") renderLessons();
 }
 function showView(v) {
   activeView = v;

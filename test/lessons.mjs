@@ -562,6 +562,73 @@ async function runCodeExpectError(src) {
 }
 
 // ================================================================================================
+// L6 — CONTENT: Lesson 0 + warm-up 0a/0b/0c (condensed). The real declarative content replaces the
+// L1 stubs: each lesson is the full five-phase loop with a runnable demo, a quick-choices predict, a
+// recreate scaffold + reference, and a verify prompt. (The mechanism is already covered by L1-L5 via
+// the fixture; here we smoke-test the shipped content.)
+// ================================================================================================
+const LESSON_IDS = ['lesson-0', 'warmup-0a', 'warmup-0b', 'warmup-0c'];
+
+// L6.1 — structural completeness: every lesson has the 5 canonical phases with non-empty content.
+{
+  const r = await page.evaluate((ids) => ids.map(id => {
+    const lesson = window.LESSONS.find(l => l.id === id);
+    if (!lesson) return { id, missing: true };
+    const by = p => lesson.steps.find(s => s.phase === p);
+    const concept = by('concept'), demo = by('demo'), tweak = by('tweak'), recreate = by('recreate'), verify = by('verify');
+    return {
+      id,
+      concept: !!concept && !!concept.text && concept.text.length > 20,
+      demo: !!demo && !!demo.source && demo.source.includes('import pygame') && !!demo.file,
+      tweak: !!tweak && !!tweak.predict && Array.isArray(tweak.predict.choices) && tweak.predict.choices.length >= 2,
+      recreate: !!recreate && !!recreate.scaffold && !!recreate.referenceFile,
+      verify: !!verify && !!verify.prompt,
+    };
+  }), LESSON_IDS);
+  const allOk = r.every(x => !x.missing && x.concept && x.demo && x.tweak && x.recreate && x.verify);
+  if (allOk) ok('L6.1 all 4 lessons have the 5 canonical phases with non-empty content (concept/demo/predict/scaffold+ref/verify)');
+  else fail('L6.1 content structure incomplete: ' + JSON.stringify(r));
+}
+
+// L6.2 — each lesson's primary demo RUNS through the engine (reaches running/finished, no error).
+{
+  const results = [];
+  for (const id of LESSON_IDS) {
+    const src = await page.evaluate((lid) => {
+      const lesson = window.LESSONS.find(l => l.id === lid);
+      const demo = lesson && lesson.steps.find(s => s.phase === 'demo');
+      return demo ? demo.source : null;
+    }, id);
+    if (!src) { results.push({ id, okRun: false, reason: 'no demo source' }); continue; }
+    await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });
+    await page.evaluate((s) => { window.project.load({ files: { 'main.py': s }, order: ['main.py'], entry: 'main.py', active: 'main.py' }); window.project.setActive('main.py'); }, src);
+    await page.evaluate(() => document.getElementById('runBtn').click());
+    const okRun = await page.waitForFunction(() => ['running', 'finished'].includes(document.getElementById('status').textContent), null, { timeout: 25_000 }).then(() => true).catch(() => false);
+    await page.waitForTimeout(200);
+    const status = await page.evaluate(() => document.getElementById('status').textContent);
+    results.push({ id, okRun, status, noError: !/error/.test(status) });
+    await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} });
+    await page.waitForTimeout(200);
+  }
+  if (results.every(r => r.okRun && r.noError))
+    ok('L6.2 every lesson\'s primary demo runs through the engine (reaches running/finished, no immediate error)');
+  else fail('L6.2 a demo did not run cleanly: ' + JSON.stringify(results));
+}
+
+// L6.3 — 0a teaches the two-arg set_mode mis-step, and running it fires L5's friendly error.
+{
+  const present = await page.evaluate(() => {
+    const lesson = window.LESSONS.find(l => l.id === 'warmup-0a');
+    return JSON.stringify(lesson).includes('set_mode(WIDTH, HEIGHT)') || /two loose numbers/.test(JSON.stringify(lesson));
+  });
+  const out = await runCodeExpectError('import pygame\npygame.init()\nWIDTH, HEIGHT = 800, 600\nscreen = pygame.display.set_mode(WIDTH, HEIGHT)\n');
+  const friendly = /set_mode wants ONE/i.test(out);
+  if (present && friendly)
+    ok('L6.3 0a teaches the two-arg set_mode mis-step, and running it fires the friendly tuple-lesson error');
+  else fail('L6.3 0a set_mode mis-step / friendly error wrong: ' + JSON.stringify({ present, friendly, out: out.slice(0, 200) }));
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) console.log('info - JS console errors observed: ' + realErrors.join(' | '));
 else ok('no JS console errors');

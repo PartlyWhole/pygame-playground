@@ -3244,6 +3244,9 @@ function renderPredict(step, i) {
 // playground Start is never affected.
 function predictGateBlocks() {
   if (!lessonState) return false;
+  // Gate ONLY while the Lessons panel is the visible view — so navigating away (rail switch or
+  // collapse) never leaves the playground Start stuck disabled; it re-engages on return.
+  if (activeView !== "lessons" || (sideEl && sideEl.classList.contains("collapsed"))) return false;
   const lesson = window.LESSONS.find(l => l.id === lessonState.lessonId);
   const step = lesson && lesson.steps[lessonState.stepIndex];
   if (!step || !step.predict || !["demo", "tweak"].includes(step.phase)) return false;
@@ -3265,7 +3268,7 @@ function onRunClick() {
 // Progress (localStorage) + ordered unlock. lessonProgress = {done:[lessonId,…]} — a lesson's Verify
 // self-confirm marks it done; the NEXT lesson unlocks (in LESSONS order). LOCAL-only, like emptyDirs.
 function progressGet() {
-  try { const r = JSON.parse(localStorage.getItem("lessonProgress") || "{}"); return { done: Array.isArray(r.done) ? r.done : [] }; }
+  try { const r = JSON.parse(localStorage.getItem("lessonProgress") || "{}"); return { done: Array.isArray(r.done) ? r.done.filter(x => typeof x === "string") : [] }; }
   catch { return { done: [] }; }
 }
 function progressSet(p) { try { localStorage.setItem("lessonProgress", JSON.stringify(p)); } catch {} }
@@ -3326,7 +3329,7 @@ lessonListEl?.addEventListener("click", (e) => {
   }
   // predict-before-Run interactions
   const choice = e.target.closest(".predict-choice");
-  if (choice) { predictState(lessonState.stepIndex).selected = +choice.dataset.i; renderStepper(); return; }
+  if (choice) { const i = +choice.dataset.i; if (Number.isInteger(i) && i >= 0) predictState(lessonState.stepIndex).selected = i; renderStepper(); return; }
   if (e.target.closest(".predict-commit")) {
     const st = predictState(lessonState.stepIndex);
     if (st.selected != null) { st.committed = true; renderStepper(); }
@@ -3366,11 +3369,13 @@ function showView(v) {
   });
   panelviews.forEach(p => { p.hidden = (p.dataset.panel !== v); });
   onViewOpened(v);
+  updateRunGate();   // re-sync the lesson predict-gate to the now-active view (never strand Start disabled)
 }
 function collapsePanel() {
   sideEl.classList.add("collapsed");
   sideSplitEl.style.display = "none";
   acttabs.forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected", "false"); });
+  updateRunGate();   // collapsing the Lessons panel releases the predict-gate (Start usable again)
 }
 acttabs.forEach((b, i) => {
   b.addEventListener("click", () => {

@@ -384,6 +384,38 @@ async function goToPhase(phase) {
   else fail('L3.4 closing the lesson left Start disabled');
 }
 
+// L3.5 — REGRESSION (review): the gate must RELEASE Start when the student navigates AWAY from a
+// gated lesson phase (switches rail view OR collapses the panel) — otherwise #runBtn is stuck
+// disabled in the main playground. It must RE-ENGAGE when they return to the still-gated phase.
+{
+  await ensureLessonsOpen();
+  await installFixture();
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-row[data-lesson-id="fix-lesson"]')?.click());
+  await page.waitForTimeout(80);
+  await goToPhase('tweak');   // gated, uncommitted → Start disabled
+  const gated = await page.evaluate(() => document.getElementById('runBtn').disabled);
+  await page.evaluate(() => document.querySelector('nav.rail [data-view="explorer"]')?.click());   // switch away
+  await page.waitForTimeout(80);
+  const onExplorer = await page.evaluate(() => document.getElementById('runBtn').disabled);
+  await page.evaluate(() => document.querySelector('nav.rail [data-view="lessons"]')?.click());     // back, still gated
+  await page.waitForTimeout(80);
+  const backOnLessons = await page.evaluate(() => document.getElementById('runBtn').disabled);
+  if (gated === true && onExplorer === false && backOnLessons === true)
+    ok('L3.5 gate RELEASES Start when switching away from a gated phase, RE-ENGAGES on return');
+  else fail('L3.5 gate view-switch wrong: ' + JSON.stringify({ gated, onExplorer, backOnLessons }));
+  // collapse the Lessons panel (click the active Lessons tab) → Start released too.
+  await page.evaluate(() => document.querySelector('nav.rail [data-view="lessons"]')?.click());
+  await page.waitForTimeout(80);
+  const collapsed = await page.evaluate(() => ({
+    sideCollapsed: document.getElementById('side').classList.contains('collapsed'),
+    runDisabled: document.getElementById('runBtn').disabled,
+  }));
+  if (collapsed.sideCollapsed && collapsed.runDisabled === false)
+    ok('L3.5  ...collapsing the Lessons panel also releases Start');
+  else fail('L3.5 gate collapse wrong: ' + JSON.stringify(collapsed));
+  await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });
+}
+
 // ================================================================================================
 // L4 — RECREATE (manual) + VERIFY + progress persistence. Recreate loads a scaffold doc the student
 // writes themselves (engine-driven); "Show the demo" / "Back to my code" toggle the reference and
@@ -511,6 +543,23 @@ let recreateName = null;
     ok('L4.5 progress survives reload: lesson-0 stays done, warmup-0a unlocked, warmup-0b locked');
   else fail('L4.5 reload persistence/lock wrong: ' + JSON.stringify(r));
   await page.evaluate(() => localStorage.removeItem('lessonProgress'));   // cleanup
+}
+
+// L4.6 — REGRESSION (review): corrupt lessonProgress (non-string done items) must not break the
+// list render or the unlock chain — progressGet sanitizes it to an empty done set.
+{
+  await page.evaluate(() => localStorage.setItem('lessonProgress', JSON.stringify({ done: [123, null, { id: 'x' }] })));
+  await page.goto(URL, { waitUntil: 'load' });
+  await booted().catch(() => fail('never rebooted (L4.6)'));
+  await ensureLessonsOpen();
+  const r = await page.evaluate(() => ({
+    rows: document.querySelectorAll('#panel-lessons .lesson-row').length,
+    firstUnlocked: document.querySelector('.lesson-row[data-lesson-id="lesson-0"]')?.classList.contains('locked') === false,
+  }));
+  if (r.rows === 4 && r.firstUnlocked)
+    ok('L4.6 corrupt lessonProgress is sanitized: list still renders 4 rows, first lesson unlocked (no crash)');
+  else fail('L4.6 corrupt-progress resilience wrong: ' + JSON.stringify(r));
+  await page.evaluate(() => localStorage.removeItem('lessonProgress'));
 }
 
 // ================================================================================================

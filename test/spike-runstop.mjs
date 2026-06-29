@@ -66,14 +66,17 @@ await page.waitForFunction(() => document.getElementById('status').textContent =
   null, { timeout: 5000 }).catch(() => fail('stop did not transition to "stopped"'));
 ok('Stop cancels the run (status="stopped")');
 
-// (2) Last frame persists after the cancel — sample now and again after a delay
-// to prove it is both intact and frozen (not cleared, not animating).
+// (2) #15: when a run ends (here via Stop / End), the host blanks the stage to BLACK so the
+// last frame does not linger — mirroring how a local pygame window goes away on exit. Sample
+// now and again after a delay to prove it is cleared to opaque black and stays cleared (the
+// engine still doesn't touch the canvas; the host clears it once on settle, not per-frame).
 const afterStop = await px();
 await page.waitForTimeout(700);
 const laterStop = await px();
-if (isRed(afterStop) && JSON.stringify(afterStop) === JSON.stringify(laterStop))
-  ok('last frame STAYS on canvas after Stop (cancel does not clear it; frozen): ' + afterStop);
-else fail(`frame not preserved/frozen after stop: after=${afterStop} later=${laterStop}`);
+const isBlack = (p) => p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 255;
+if (isBlack(afterStop) && JSON.stringify(afterStop) === JSON.stringify(laterStop))
+  ok('canvas CLEARS to black after Stop (#15: last frame removed, stays cleared): ' + afterStop);
+else fail(`canvas not cleared to black after stop: after=${afterStop} later=${laterStop}`);
 
 // (3) Console intact across Stop — the printed marker survives, and the "stopped"
 // note was appended (clearConsole only runs on Run, never on Stop).

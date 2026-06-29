@@ -3584,6 +3584,46 @@ const booted = boot().catch((e) => {
 });
 
 // ---------------------------------------------------------------- run / stop
+// ---------------------------------------------------------------- stall watchdog + diagnostics (#14)
+// The cooperative engine keeps the tab alive, but a program can still "freeze the stage": stay running
+// yet stop drawing frames (a flip-less inner loop, a swallowed exception, an accidental wait). We poll
+// the engine frame counter (_state['flips']) once a second while a program is live; if the stage WAS
+// drawing and then makes no new frame for several seconds (and isn't paused), we surface a calm notice
+// + log a diagnostic. (A HARD whole-tab freeze blocks this timer too — that's the heavy for/while-loop
+// case the engine yield-injection prevents; this watchdog is for the soft stage stall.)
+let watchdogTimer = null, wdLastFlips = -1, wdLastChangeAt = 0, wdNotified = false;
+const wdStallMs = () => (window.__engineStallMs || 5000);   // tunable (tests lower it)
+function engineDiag() {
+  let flips = null, paused = null;
+  try { flips = pyodide.runPython("_state['flips']"); paused = pyodide.runPython("_state['paused']"); } catch {}
+  return { status: statusEl.textContent, running: !!runFile, runFile, flips, paused,
+           noFrameMs: runFile ? Math.round(performance.now() - wdLastChangeAt) : 0 };
+}
+window.__engineDiag = engineDiag;   // on-demand snapshot of internal run state (call from the console)
+function startWatchdog() {
+  stopWatchdog();
+  wdLastFlips = -1; wdLastChangeAt = performance.now(); wdNotified = false;
+  watchdogTimer = setInterval(checkStall, 1000);
+}
+function stopWatchdog() { if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; } }
+function checkStall() {
+  if (!runFile) { stopWatchdog(); return; }
+  let flips, paused;
+  try { flips = pyodide.runPython("_state['flips']"); paused = pyodide.runPython("_state['paused']"); }
+  catch { return; }   // interpreter busy this tick — try again next second
+  const now = performance.now();
+  if (paused) { wdLastChangeAt = now; return; }                       // paused isn't a stall
+  if (flips !== wdLastFlips) { wdLastFlips = flips; wdLastChangeAt = now; wdNotified = false; return; }
+  // Only warn for a STAGE stall: the program drew at least one frame (flips > 0) then stopped — not a
+  // pure-compute program that legitimately never draws.
+  if (!wdNotified && flips > 0 && now - wdLastChangeAt > wdStallMs()) {
+    wdNotified = true;
+    logLine("⏳ Your program is still running but hasn't drawn a new frame for a few seconds — it may be stuck in a loop. Press End (✕) to stop it.", "sys");
+    if (typeof toast === "function") toast("Stage stopped updating — press End to stop.");
+    console.warn("[engine watchdog] no frame for >" + wdStallMs() + "ms while running", engineDiag());
+  }
+}
+
 async function run() {
   try { await booted; } catch { return; }
   // USER DECISION (design §0.1 Q0): Start RESTARTS while a program is live — clicking ▶ Start while a
@@ -3613,16 +3653,17 @@ async function run() {
   runFile = project.active;   // #9: the running file is the OPEN (active) file in both paths
   setStatus("running", "running");
   syncRunControls();
+  startWatchdog();          // #14: watch for a stage stall (running but no new frame)
   renderTabs();             // light up the running file's explorer row
   task.then((kind) => {
     if (runTask !== task) return;
-    runFile = null; syncRunControls(); renderTabs();
+    runFile = null; stopWatchdog(); syncRunControls(); renderTabs();
     if (kind === "error") { setStatus("error", "error — see console"); showFriendlyError(runStderr); return; }
     setStatus("ready", kind === "stopped" ? "stopped" : "finished");
     logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {
     if (runTask !== task) return;
-    runFile = null; syncRunControls(); renderTabs();
+    runFile = null; stopWatchdog(); syncRunControls(); renderTabs();
     setStatus("ready", "stopped");
   });
 }

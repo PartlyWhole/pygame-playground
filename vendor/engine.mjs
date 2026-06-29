@@ -17,7 +17,7 @@ import os, ast, asyncio, traceback, copy, time as _time
 
 import pygame
 
-_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0, "via_project": False}
+_state = {"task": None, "delay": 0.0, "flipped": False, "ticked": False, "n": 0, "via_project": False, "flips": 0}
 
 # +PAUSE (S3): a gate the cooperative loop awaits at the top of every frame.
 # set() == running, clear() == paused. Created already-set so the un-paused path
@@ -30,6 +30,7 @@ _state["paused"] = False
 def _flag_flip(fn):
     def wrapper(*a, **k):
         _state["flipped"] = True
+        _state["flips"] += 1          # frame counter the host watchdog reads to detect a stage stall
         return fn(*a, **k)
     return wrapper
 
@@ -179,8 +180,15 @@ class _Awaiter(_SyncBarrier):
         return node
 
 class _InjectYield(_SyncBarrier):
-    """Append 'await __yield__()' to every while-body in async contexts."""
+    """Append 'await __yield__()' to every while- AND for-body in async contexts, so a heavy/infinite
+    loop yields to the browser instead of freezing the tab. __yield__ is throttled (it only round-trips
+    the browser every 256th plain iteration), so tight loops stay fast. _SyncBarrier stops us from
+    descending into sync def/class bodies, where an inserted await would be a syntax error."""
     def visit_While(self, node):
+        self.generic_visit(node)
+        node.body.append(copy.deepcopy(_YIELD))
+        return node
+    def visit_For(self, node):
         self.generic_visit(node)
         node.body.append(copy.deepcopy(_YIELD))
         return node
@@ -221,7 +229,7 @@ async def _run(src):
 
 def _start(src):
     _stop()
-    _state.update(delay=0.0, flipped=False, ticked=False, n=0, paused=False)
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, paused=False, flips=0)
     _pause_gate.set()                     # +PAUSE (S3): clear any leftover pause from a prior run
     _state["task"] = asyncio.ensure_future(_run(src))
     return _state["task"]
@@ -555,7 +563,7 @@ async def _run_project(files, entry):
 
 def _start_project(files, entry):
     _stop()
-    _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True, paused=False)
+    _state.update(delay=0.0, flipped=False, ticked=False, n=0, via_project=True, paused=False, flips=0)
     _pause_gate.set()                     # +PAUSE (S3): clear any leftover pause from a prior run
     _state['task'] = asyncio.ensure_future(_run_project(dict(files), str(entry)))
     return _state['task']

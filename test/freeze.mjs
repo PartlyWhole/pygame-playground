@@ -72,6 +72,26 @@ await expectResponsive('F2 heavy for-loop inside the game-loop function stays re
   'main()',
 ].join('\n') + '\n');
 
+// F3 — a gameloop that uses `continue` (start / pause / game-over screens — VERY common) must NOT
+// freeze. The injected `await __yield__()` sits at the START of the loop body, so `continue`/`break`
+// can't skip it. (Regression for #18: the program starts in `state=="start"`, whose branch always
+// `continue`s; an end-of-body yield would be skipped every iteration → freeze.)
+await expectResponsive('F3 gameloop using `continue` stays responsive (yield at loop-body start)', [
+  'import pygame', 'pygame.init()', 'screen = pygame.display.set_mode((120, 90))',
+  'clock = pygame.time.Clock()', 'state = "start"',
+  'while True:',
+  '    for e in pygame.event.get():',
+  '        pass',
+  '    if state == "start":',
+  '        screen.fill((0, 0, 0))',
+  '        pygame.display.flip()',
+  '        clock.tick(60)',
+  '        continue',
+  '    screen.fill((50, 50, 50))',
+  '    pygame.display.flip()',
+  '    clock.tick(60)',
+].join('\n') + '\n');
+
 // KNOWN DESIGN BOUNDARY (NOT a bug we force-fix here): a heavy COMPUTE loop inside an ordinary helper
 // function that is NOT a game loop — e.g. `def work(): for i in range(10**10): ...; x = work()` — can
 // still block the thread. The engine DELIBERATELY keeps pure helpers synchronous (engine.mjs

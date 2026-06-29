@@ -180,17 +180,20 @@ class _Awaiter(_SyncBarrier):
         return node
 
 class _InjectYield(_SyncBarrier):
-    """Append 'await __yield__()' to every while- AND for-body in async contexts, so a heavy/infinite
-    loop yields to the browser instead of freezing the tab. __yield__ is throttled (it only round-trips
-    the browser every 256th plain iteration), so tight loops stay fast. _SyncBarrier stops us from
-    descending into sync def/class bodies, where an inserted await would be a syntax error."""
+    """Insert 'await __yield__()' at the START of every while- AND for-body in async contexts, so a
+    heavy/infinite loop yields to the browser instead of freezing the tab. START (not end) is load-
+    bearing: a continue or break statement jumps past the rest of the body, so an END-of-body yield
+    would be SKIPPED — a gameloop using 'continue' (start/pause/game-over screens) would never yield
+    and freeze. A start-of-body yield runs on every iteration regardless of control flow. __yield__ is
+    throttled (it only round-trips the browser every 256th plain iteration), so tight loops stay fast.
+    _SyncBarrier stops us descending into sync def/class bodies, where an inserted await is a syntax error."""
     def visit_While(self, node):
         self.generic_visit(node)
-        node.body.append(copy.deepcopy(_YIELD))
+        node.body.insert(0, copy.deepcopy(_YIELD))
         return node
     def visit_For(self, node):
         self.generic_visit(node)
-        node.body.append(copy.deepcopy(_YIELD))
+        node.body.insert(0, copy.deepcopy(_YIELD))
         return node
 
 def _transform(src):

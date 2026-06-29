@@ -179,8 +179,15 @@ class _Awaiter(_SyncBarrier):
         return node
 
 class _InjectYield(_SyncBarrier):
-    """Append 'await __yield__()' to every while-body in async contexts."""
+    """Append 'await __yield__()' to every while- AND for-body in async contexts, so a heavy/infinite
+    loop yields to the browser instead of freezing the tab. __yield__ is throttled (it only round-trips
+    the browser every 256th plain iteration), so tight loops stay fast. _SyncBarrier stops us from
+    descending into sync def/class bodies, where an inserted await would be a syntax error."""
     def visit_While(self, node):
+        self.generic_visit(node)
+        node.body.append(copy.deepcopy(_YIELD))
+        return node
+    def visit_For(self, node):
         self.generic_visit(node)
         node.body.append(copy.deepcopy(_YIELD))
         return node

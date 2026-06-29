@@ -112,6 +112,29 @@ await expectResponsive('F2 heavy for-loop inside the game-loop function stays re
   await page.close().catch(() => {});
 }
 
+// W1 — STALL WATCHDOG: a program that drew a frame then stops drawing (a flip-less but yielding loop)
+// surfaces a calm "hasn't drawn a new frame" notice — the soft stage-freeze the watchdog targets —
+// and window.__engineDiag() exposes the internal run state for diagnosis.
+{
+  const page = await freshPage();
+  await page.evaluate(() => { window.__engineStallMs = 1500; });   // shorten the threshold for the test
+  await runSrc(page, [
+    'import pygame', 'pygame.init()', 'screen = pygame.display.set_mode((100, 80))',
+    'screen.fill((0, 0, 40))', 'pygame.display.flip()',   // ONE frame...
+    'while True:', '    x = 1',                            // ...then a flip-less (but yielding) loop
+  ].join('\n') + '\n');
+  const noticed = await page.waitForFunction(
+    () => /hasn't drawn a new frame/.test(document.getElementById('console')?.innerText || ''),
+    null, { timeout: 12_000 }).then(() => true).catch(() => false);
+  const diag = await page.evaluate(() => window.__engineDiag && window.__engineDiag());
+  if (noticed) ok('W1 stall watchdog surfaces a calm "no new frame" notice when the stage stops updating');
+  else fail('W1 watchdog did not surface the stall notice: ' + JSON.stringify(diag));
+  if (diag && diag.flips >= 1 && diag.running) ok('W1  ...window.__engineDiag() reports internal run state (flips>=1, running) for diagnosis');
+  else fail('W1 __engineDiag wrong: ' + JSON.stringify(diag));
+  await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} }).catch(() => {});
+  await page.close().catch(() => {});
+}
+
 clearTimeout(failsafe);
 await browser.close().catch(() => {});
 console.log(process.exitCode ? 'FREEZE BATTERY FAILED' : 'FREEZE BATTERY OK');

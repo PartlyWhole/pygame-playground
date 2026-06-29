@@ -3289,11 +3289,12 @@ function loadRecreateDoc() {
   if (!project.files[name]) project.adoptDoc(name, new CodeMirror.Doc(step.scaffold || "", "python"));
   project.setActive(name);   // adoptDoc only moves the model pointer; setActive swaps the editor's Doc
   renderViewer(name);
+  renderTabs();              // #16: keep the explorer tree in sync with the adopted scaffold file
 }
 function backToMyCode() {
   const lesson = window.LESSONS.find(l => l.id === lessonState?.lessonId);
   const name = lesson && recreateDocName(lesson);
-  if (name && project.files[name]) { project.setActive(name); renderViewer(name); }
+  if (name && project.files[name]) { project.setActive(name); renderViewer(name); renderTabs(); }
 }
 // Verify: a manual self-confirm (no auto-check in v1). Once done, a quiet, consistent "✓ Done".
 function renderVerify(lesson) {
@@ -3312,6 +3313,8 @@ function showCurrentDemo() {
   if (!project.files[name]) project.adoptDoc(name, new CodeMirror.Doc(demo.source || "", "python"));
   project.setActive(name);   // adoptDoc only moves the model pointer; setActive swaps the editor's Doc
   renderViewer(name);        // viewer chrome (filename + ▶ Start)
+  renderTabs();              // #16: the demo is a real project file now — show it in the explorer tree
+                             // immediately (don't wait for a later run/explorer visit to "generate" it).
 }
 // Delegated clicks for the lessons panel (list rows + stepper controls).
 lessonListEl?.addEventListener("click", (e) => {
@@ -3624,6 +3627,21 @@ function checkStall() {
   }
 }
 
+// #15: when a program ends (finished / stopped / error), blank the stage to black so the last frame
+// doesn't linger — mirroring how a local pygame window goes away when the program exits in a terminal.
+// The stage SDL renders into is a 2D canvas (engine.boot → pyodide.canvas.setCanvas2D), so a 2D fill
+// is the correct, context-safe clear. Never probe getContext('webgl…') here — that wouldn't match
+// SDL's 2D context and could strand the canvas in the wrong context mode for the next run.
+function clearCanvasBlack() {
+  try {
+    const g = canvasEl.getContext("2d");
+    if (!g) return;
+    g.setTransform(1, 0, 0, 1, 0, 0);   // drop any transform SDL left on the context
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, canvasEl.width, canvasEl.height);
+  } catch (_) { /* canvas isn't a 2D surface yet (program never drew) — nothing to clear */ }
+}
+
 async function run() {
   try { await booted; } catch { return; }
   // USER DECISION (design §0.1 Q0): Start RESTARTS while a program is live — clicking ▶ Start while a
@@ -3658,12 +3676,14 @@ async function run() {
   task.then((kind) => {
     if (runTask !== task) return;
     runFile = null; stopWatchdog(); syncRunControls(); renderTabs();
+    clearCanvasBlack();       // #15: the program ended — blank the stage to black (last frame gone)
     if (kind === "error") { setStatus("error", "error — see console"); showFriendlyError(runStderr); return; }
     setStatus("ready", kind === "stopped" ? "stopped" : "finished");
     logLine(kind === "stopped" ? "— stopped —" : "— program finished —", "sys");
   }).catch(() => {
     if (runTask !== task) return;
     runFile = null; stopWatchdog(); syncRunControls(); renderTabs();
+    clearCanvasBlack();       // #15: same on the rejection path
     setStatus("ready", "stopped");
   });
 }
@@ -4039,8 +4059,11 @@ document.getElementById("collabStartBtn").addEventListener("click", () => docume
 addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });
 addEventListener("online",  () => { if (collab.active) setLive("", document.getElementById("peerCount").textContent); });
 
-// Run the default example as soon as Python is up.
-booted.then(run).catch(() => {});
+// #17: never auto-run on load/refresh. We only boot Python (engine.boot leaves #status at "ready",
+// so the first Start is instant) — nothing runs until the student presses Start. The .catch swallows
+// a boot-failure rejection (already surfaced as "boot failed" above) so it isn't an unhandled reject.
+// (Previously: booted.then(run) auto-ran the default example, surprising the learner on every refresh.)
+booted.catch(() => {});
 </script>
 </body>
 </html>

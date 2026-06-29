@@ -19,14 +19,23 @@ const fail = (msg) => { console.error('FAIL:', msg); process.exitCode = 1; };
 
 await page.goto(process.argv[2] || 'http://localhost:8923/', { waitUntil: 'load' });
 
-// 1. Boot: status reaches "running" (auto-run of default example) within 90s.
+// 1. Boot: #17 — the page NEVER auto-runs on load; status settles at "ready" within 90s.
+await page.waitForFunction(
+  () => document.getElementById('status').textContent === 'ready',
+  null, { timeout: 90_000 },
+).catch(() => fail('status never reached "ready" (boot): see console'));
+console.log('boot status (no auto-run):', await page.textContent('#status'));
+// #17 regression guard: nothing ran on load.
+if (await page.evaluate(() => document.getElementById('status').textContent === 'running'))
+  fail('#17: page auto-ran a program on load (expected idle "ready")');
+// Now Start the open default example explicitly — the rest of this script verifies it animates,
+// stays responsive, and stops.
+await page.click('#runBtn');
 await page.waitForFunction(
   () => document.getElementById('status').textContent === 'running',
-  null, { timeout: 90_000 },
-).catch(() => fail('status never reached "running": ' +
-  // eslint-disable-next-line no-undef
-  'see console'));
-console.log('boot+autorun status:', await page.textContent('#status'));
+  null, { timeout: 20_000 },
+).catch(() => fail('default example did not start on Start'));
+console.log('after Start status:', await page.textContent('#status'));
 
 // 2. Canvas is actually animating: two frames differ.
 const frame = () => page.evaluate(() => document.getElementById('canvas').toDataURL());

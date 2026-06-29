@@ -678,6 +678,40 @@ const LESSON_IDS = ['lesson-0', 'warmup-0a', 'warmup-0b', 'warmup-0c'];
 }
 
 // ================================================================================================
+// #16 — Showing a lesson demo makes its .py file appear in the explorer tree IMMEDIATELY, without
+// having to visit the explorer (where it used to first "appear"). Regression for showCurrentDemo
+// calling renderTabs. (Run mechanics already worked; this locks the tree-sync the user reported.)
+{
+  await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });
+  await page.evaluate(() => window.project.load({ files: { 'main.py': '# main\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' }));
+  await ensureLessonsOpen();
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-row[data-lesson-id="lesson-0"]')?.click());
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-next')?.click());   // concept -> demo
+  await page.evaluate(() => document.querySelector('#panel-lessons .lesson-show-demo')?.click());
+  const r = await page.evaluate(() => ({
+    inProject: window.project.order.includes('demo_lesson0.py'),
+    inTree: [...document.querySelectorAll('#tabs .tab.py')].some(n => n.dataset.name === 'demo_lesson0.py'),
+  }));
+  if (r.inProject && r.inTree)
+    ok('#16 Show-the-demo adds the demo to the explorer tree immediately (no explorer visit needed)');
+  else fail('#16 demo file not in tree right after show-demo: ' + JSON.stringify(r));
+}
+
+// #15 — when a program ENDS, the stage is blanked to black (the last frame is removed, mirroring a
+// local pygame window closing). Run a draw-once blue fill, let it finish, sample the centre pixel.
+{
+  await page.evaluate(() => { if (window.lessonClose) window.lessonClose(); });
+  await page.evaluate(() => window.project.load({ files: { 'main.py': 'import pygame\npygame.init()\ns=pygame.display.set_mode((200,150))\ns.fill((0,0,255))\npygame.display.flip()\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' }));
+  await page.evaluate(() => window.project.setActive('main.py'));
+  await page.evaluate(() => document.getElementById('runBtn').click());
+  await page.waitForFunction(() => ['finished', 'stopped', 'ready'].includes(document.getElementById('status').textContent), null, { timeout: 20_000 }).catch(() => {});
+  const px = await page.evaluate(() => { const c = document.getElementById('canvas'); return Array.from(c.getContext('2d').getImageData(c.width >> 1, c.height >> 1, 1, 1).data); });
+  if (px[0] === 0 && px[1] === 0 && px[2] === 0 && px[3] === 255)
+    ok('#15 canvas clears to opaque black when a program finishes (last frame removed): ' + px);
+  else fail('#15 canvas not black after the program finished: ' + px);
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) console.log('info - JS console errors observed: ' + realErrors.join(' | '));
 else ok('no JS console errors');

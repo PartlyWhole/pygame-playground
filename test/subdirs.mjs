@@ -252,12 +252,18 @@ await stop();
         'sprite = pygame.image.load("sounds/sprite.png").convert_alpha()',
         'screen.blit(sprite, (50, 50))',
         'pygame.display.flip()',
+        // #15: the host blanks the canvas when a program ENDS — hold the frame and sample while
+        // it is still running (we stop() right after).
+        'clock = pygame.time.Clock()',
+        'while True:',
+        '    clock.tick(30)',
       ].join('\n') + '\n',
     } });
   });
   await page.click('#runBtn');
-  await page.waitForFunction(() => /finished|error/.test(document.getElementById('status').textContent),
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'running',
     null, { timeout: 20_000 }).catch(() => {});
+  await page.waitForTimeout(150);   // let the first frame paint
   const px = await page.evaluate(() => {
     const g = document.getElementById('canvas').getContext('2d');
     return Array.from(g.getImageData(58, 58, 1, 1).data);  // inside the blit; fixture is magenta

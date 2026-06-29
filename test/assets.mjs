@@ -123,17 +123,27 @@ await page.evaluate(() => {
     'sprite = pygame.image.load("dot.png").convert_alpha()',
     'screen.blit(sprite, (50, 50))',
     'pygame.display.flip()',
+    // #15: the host now blanks the canvas to black when a program ENDS, so a draw-once program
+    // would be cleared before we could sample it. Hold the painted frame with a tiny loop and
+    // sample while it is still running; we End it right after.
+    'clock = pygame.time.Clock()',
+    'while True:',
+    '    clock.tick(30)',
   ].join('\n'));
 });
 await page.click('#runBtn');
-await page.waitForFunction(() => /finished|error/.test(document.getElementById('status').textContent),
-  null, { timeout: 20_000 }).catch(() => {});
+await page.waitForFunction(() => document.getElementById('status').textContent === 'running',
+  null, { timeout: 20_000 }).catch(() => fail('sprite-blit program did not start'));
+await page.waitForTimeout(150);   // let the first frame paint
 const spritePx = await page.evaluate(() => {
   const g = document.getElementById('canvas').getContext('2d');
   return Array.from(g.getImageData(58, 58, 1, 1).data);  // inside the blit, magenta
 });
 if (spritePx[0] > 150 && spritePx[1] < 100 && spritePx[2] > 150) ok('uploaded sprite blits to canvas: ' + spritePx);
 else fail('sprite pixel wrong: ' + spritePx);
+await page.click('#stopBtn');   // End the hold-loop (canvas clears to black on settle — #15)
+await page.waitForFunction(() => document.getElementById('status').textContent !== 'running',
+  null, { timeout: 5000 }).catch(() => {});
 
 // ================================================================================================
 // CHECK (kept) 4: Sound API path — upload WAV, play it, assert no exception + AudioContext exists.

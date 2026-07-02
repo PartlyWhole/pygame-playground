@@ -164,11 +164,12 @@ await browser.close();
 process.exit(process.exitCode || 0);
 ```
 
-- [ ] **Step 3: Run it — expect exactly TWO failures (the seams that only work by classic-script accident)**
+- [ ] **Step 3: Run it — expect exactly THREE failures from TWO root causes**
 
 Run: `node test/seams.mjs`
 Expected output includes:
 - `FAIL: missing window objects: editor` — `editor` is a top-level `const` (index.html:972); consts do NOT become window props.
+- `FAIL: CodeMirror invariant: {"count":1,"identity":false}` — a DOWNSTREAM consequence of the same root cause: check 5's identity assertion reads `window.editor`, which doesn't exist yet. (The underlying identity is actually intact; the check turns meaningful after Task 3.)
 - `FAIL: selectedFolder: window.selectedFolder is not a string` — `selectedFolder` is a top-level `let` (index.html:1877).
 - Every OTHER check `ok -` (the function-seam check passes today because classic-script function *declarations* do create window props — the explicit block in Task 3 exists so they survive Task 5's function-wrapping, which destroys that implicit behavior).
 Exit code 1.

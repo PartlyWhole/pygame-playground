@@ -8,6 +8,9 @@ import { launch } from './_harness.mjs';
 const URL = process.argv[2] || 'http://localhost:8923/';
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+const jsErrors = [];
+page.on('console', m => { if (m.type() === 'error') jsErrors.push(m.text()); });
+page.on('pageerror', e => jsErrors.push(String(e)));
 const fail = (m) => { console.error('FAIL:', m); process.exitCode = 1; };
 const ok = (m) => console.log('ok -', m);
 
@@ -24,7 +27,7 @@ bare ? ok('bare pyodide reachable + booted') : fail('bare pyodide missing/unboot
 // 2. window.* FUNCTION seams (tests call these via window or bare-name-resolving-to-window).
 const fns = ['setStatus', 'run', 'tabMenu', 'newFilePrompt', 'renderHistory', 'restoreSnapshot',
   'renderTabs', 'confirmModal', 'toast', '__closePopMenu', 'uploadFiles', 'openExample',
-  'renderLessons', 'lessonClose', '__flushSave', 'runFile'];
+  'renderLessons', 'lessonClose', '__flushSave', 'runFile', '__engineDiag'];
 const missingFns = await page.evaluate(
   (names) => names.filter(n => typeof window[n] !== 'function'), fns);
 missingFns.length === 0
@@ -58,13 +61,15 @@ const proj = await page.evaluate(() => {
 // 5. ONE CodeMirror + the identity invariant files[active] === editor.getDoc().
 const cm = await page.evaluate(() => ({
   count: document.querySelectorAll('.CodeMirror').length,
-  identity: !!window.editor && window.project.files[window.project.active] === window.editor.getDoc(),
+  identity: !!window.project && !!window.editor && window.project.files[window.project.active] === window.editor.getDoc(),
 }));
 (cm.count === 1 && cm.identity)
   ? ok('ONE CodeMirror; files[active] === editor.getDoc()')
   : fail('CodeMirror invariant: ' + JSON.stringify(cm));
 
 // 6. selectedFolder must LIVE on window and accept BARE writes (upload.mjs:140 assigns it bare).
+// Proves residency + writability, NOT that modules read it live — upload.mjs checks 4/4b are the
+// behavioral backstop for the live-read half of spec §4.2.
 const sf = await page.evaluate(() => {
   if (typeof window.selectedFolder !== 'string') return 'window.selectedFolder is not a string';
   const prev = window.selectedFolder;
@@ -76,12 +81,19 @@ const sf = await page.evaluate(() => {
 sf === true ? ok('selectedFolder lives on window and accepts bare writes')
             : fail('selectedFolder: ' + sf);
 
+// closedFolders: bare Set consumed typeof-guarded by upload.mjs/save.mjs. (__engineStallMs
+// is a write-seam checked by freeze.mjs; not asserted here — it's undefined until a test sets it.)
+const cf = await page.evaluate(() => typeof closedFolders !== 'undefined' && closedFolders instanceof Set);
+cf ? ok('closedFolders bare Set present') : fail('closedFolders bare seam missing');
+
 // 7. Laziness sentinels: heavy libs must NOT be loaded at boot; engine IS (eager boot kick).
 const lazy = await page.evaluate(() => ({
   jszip: typeof window.JSZip, diff: typeof window.Diff,
   am: typeof window.__amLoaded, engine: window.__engineLoaded === true,
+  eager: performance.getEntriesByType('resource').map(r => r.name)
+    .filter(n => /automerge-collab\.mjs|jszip|jsdiff|ruff|addon\/lint\//i.test(n)),
 }));
-(lazy.jszip === 'undefined' && lazy.diff === 'undefined' && lazy.am === 'undefined' && lazy.engine)
+(lazy.jszip === 'undefined' && lazy.diff === 'undefined' && lazy.am === 'undefined' && lazy.engine && lazy.eager.length === 0)
   ? ok('lazy gates intact (JSZip/Diff/Automerge unloaded; engine loaded at boot)')
   : fail('laziness: ' + JSON.stringify(lazy));
 
@@ -91,5 +103,10 @@ const tok = await page.evaluate(() => document.getElementById('status').textCont
   ? ok(`status token '${tok}' in vocabulary`)
   : fail('unexpected status token: ' + tok);
 
+// 9. No JS errors during boot — the cheapest detector of "boots to ready but a moved
+// module threw or 404'd after boot" during the module split.
+jsErrors.length === 0 ? ok('no JS console errors during boot')
+                      : fail('JS errors: ' + JSON.stringify(jsErrors.slice(0, 5)));
+
 await browser.close();
-process.exit(process.exitCode || 0);
+console.log(process.exitCode ? 'SEAMS VERIFY FAILED' : 'SEAMS VERIFY OK');

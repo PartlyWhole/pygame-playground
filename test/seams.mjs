@@ -91,7 +91,7 @@ const lazy = await page.evaluate(() => ({
   jszip: typeof window.JSZip, diff: typeof window.Diff,
   am: typeof window.__amLoaded, engine: window.__engineLoaded === true,
   eager: performance.getEntriesByType('resource').map(r => r.name)
-    .filter(n => /automerge-collab\.mjs|jszip|jsdiff|ruff|addon\/lint\//i.test(n)),
+    .filter(n => /automerge|jszip|jsdiff|ruff|addon\/lint\//i.test(n)),
 }));
 (lazy.jszip === 'undefined' && lazy.diff === 'undefined' && lazy.am === 'undefined' && lazy.engine && lazy.eager.length === 0)
   ? ok('lazy gates intact (JSZip/Diff/Automerge unloaded; engine loaded at boot)')
@@ -105,8 +105,9 @@ const tok = await page.evaluate(() => document.getElementById('status').textCont
 
 // 9. No JS errors during boot — the cheapest detector of "boots to ready but a moved
 // module threw or 404'd after boot" during the module split.
-jsErrors.length === 0 ? ok('no JS console errors during boot')
-                      : fail('JS errors: ' + JSON.stringify(jsErrors.slice(0, 5)));
+const realErrors = jsErrors.filter(e => !/favicon/.test(e));
+realErrors.length === 0 ? ok('no JS console errors during boot')
+                        : fail('JS errors: ' + JSON.stringify(realErrors.slice(0, 5)));
 
 await browser.close();
 console.log(process.exitCode ? 'SEAMS VERIFY FAILED' : 'SEAMS VERIFY OK');

@@ -1530,7 +1530,7 @@ const isCodeUpload = (file) =>
 
 // Route ONE file into the SELECTED folder (root default), warning + auto-suffixing on a
 // same-path clash via the unified helper.
-async function routeUpload(file, destFolder = selectedFolder) {
+async function routeUpload(file, destFolder = window.selectedFolder) {
   const folder = destFolder ? destFolder.replace(/\/$/, "") : "";
   const target = folder ? folder + "/" + file.name : file.name;
   const isCode = isCodeUpload(file);
@@ -1567,7 +1567,7 @@ async function routeUpload(file, destFolder = selectedFolder) {
 
 // The router both live entry points call. Sequential so collisions resolve against the
 // growing project (two same-name uploads in one drop suffix the second).
-async function uploadFiles(files, destFolder = selectedFolder) {
+async function uploadFiles(files, destFolder = window.selectedFolder) {
   for (const f of files) await routeUpload(f, destFolder);
 }
 window.uploadFiles = uploadFiles;   // test seam
@@ -1612,7 +1612,7 @@ async function updateStorageReadout() {
 }
 
 document.getElementById('assetInput').addEventListener('change', (e) => {
-  uploadFiles([...e.target.files], selectedFolder); e.target.value = '';
+  uploadFiles([...e.target.files], window.selectedFolder); e.target.value = '';
 });
 
 // Drop files anywhere on the page to add them as assets.
@@ -1626,7 +1626,7 @@ addEventListener('drop', (e) => {
   e.preventDefault(); dragDepth = 0; dropOverlayEl.classList.remove('show');
   // Route by extension into the CURRENT selected folder (root default); code -> project,
   // assets -> assetFS. Same router as #assetInput so drop-anywhere stays consistent.
-  uploadFiles([...e.dataTransfer.files], selectedFolder);
+  uploadFiles([...e.dataTransfer.files], window.selectedFolder);
 });
 
 // ---------------------------------------------------------------- history UI
@@ -1874,7 +1874,10 @@ const closedFolders = new Set();   // collapsed folder paths (render-only)
 const isFolderOpen = (path) => !closedFolders.has(path);
 // The folder a new file/folder is created relative to (the selected file's dir, or a
 // selected folder). Cleared to ROOT on a folder toggle/delete.
-let selectedFolder = "";
+// selectedFolder LIVES on window (not a local): test/upload.mjs writes it BARE from
+// page.evaluate, and the ES-module split (spec §4.2) needs the state reachable after the
+// explorer moves out of this script. Every read below is a live window lookup.
+window.selectedFolder = "";
 
 // Build a nested display tree: { name, path, dirs:Map<seg,node>, files:[{path,kind,asset,warn,entry,active}] }
 function buildTree() {
@@ -1907,8 +1910,8 @@ function buildTree() {
 function renderTabs() {
   // Drop a stale selected-folder (e.g. after a project.load swapped the file set) so a
   // new file/folder isn't created under a directory that no longer exists.
-  if (selectedFolder && !project._fileDirs().has(selectedFolder) && !project.emptyDirs.has(selectedFolder))
-    selectedFolder = "";
+  if (window.selectedFolder && !project._fileDirs().has(window.selectedFolder) && !project.emptyDirs.has(window.selectedFolder))
+    window.selectedFolder = "";
   const tree = buildTree();
   const out = [];
   const emit = (node, depth) => {
@@ -1970,7 +1973,7 @@ tabsEl.addEventListener("click", (e) => {
     const menuBtn = e.target.closest(".tab-menu");
     if (menuBtn) { folderMenu(path); return; }
     // caret / folder row → render-only toggle (no model mutation, no setValue).
-    selectedFolder = path;
+    window.selectedFolder = path;
     if (closedFolders.has(path)) closedFolders.delete(path); else closedFolders.add(path);
     renderTabs();
     return;
@@ -1982,7 +1985,7 @@ tabsEl.addEventListener("click", (e) => {
   // Slice C follow-up A: route the ⋯ menu by the CLICKED ROW'S TYPE, not a project.files[name] path
   // lookup — so a code file and an asset sharing the same data-name each open their own menu.
   if (menuBtn) { if (tab.classList.contains("asset")) assetMenu(name); else tabMenu(name); return; }
-  selectedFolder = dirname(name);
+  window.selectedFolder = dirname(name);
   renderViewer(name);   // .py -> CM swapDoc via setActive; asset -> media surface
   renderTabs();
 });
@@ -2203,9 +2206,9 @@ function newFolderPrompt() { startInlineCreate("folder"); }
 function createFile(raw, hint) {
   const leaf = raw.endsWith(".py") ? raw : raw + ".py";
   // Create relative to the selected folder unless the typed name already carries a path.
-  const name = (selectedFolder && !leaf.includes("/")) ? selectedFolder + "/" + leaf : leaf;
+  const name = (window.selectedFolder && !leaf.includes("/")) ? window.selectedFolder + "/" + leaf : leaf;
   if (!project.add(name)) { hint("a valid, unique name ending in .py"); return false; }
-  if (selectedFolder) project.emptyDirs.delete(selectedFolder);   // folder now occupied
+  if (window.selectedFolder) project.emptyDirs.delete(window.selectedFolder);   // folder now occupied
   if (dirname(name)) closedFolders.delete(dirname(name));
   project.setActive(name);
   renderViewer(name);
@@ -2220,7 +2223,7 @@ function createFile(raw, hint) {
 function createFolder(raw, hint) {
   const seg = raw.trim();
   if (!isFolderSegment(seg)) { hint("letters, digits, _ (no leading digit)"); return false; }
-  const path = selectedFolder ? selectedFolder + "/" + seg : seg;
+  const path = window.selectedFolder ? window.selectedFolder + "/" + seg : seg;
   if (!project.addFolder(path)) { hint("that folder already exists or is invalid"); return false; }
   closedFolders.delete(path);
   renderTabs(); flushSave();
@@ -2233,9 +2236,9 @@ function startInlineCreate(kind) {
   // Guard BEFORE any renderTabs: if a create row is already open, keep it (don't repaint it away
   // or stack a second one). (#9-review: the old guard ran AFTER renderTabs and never fired.)
   if (tabsEl.querySelector(".tab.creating")) return;
-  if (selectedFolder) closedFolders.delete(selectedFolder);   // ensure the destination is visible
+  if (window.selectedFolder) closedFolders.delete(window.selectedFolder);   // ensure the destination is visible
   renderTabs();
-  const depth = selectedFolder ? selectedFolder.split("/").length : 0;
+  const depth = window.selectedFolder ? window.selectedFolder.split("/").length : 0;
   const pad = 6 + depth * 14 + (kind === "folder" ? 0 : 12);
   const row = document.createElement("div");
   row.className = `tab ${kind === "folder" ? "folder" : "py"} creating`;
@@ -2537,7 +2540,7 @@ function folderRenameInline(path) {
       if (p === path || p.startsWith(prefix)) { closedFolders.delete(p); closedFolders.add(target + p.slice(path.length)); }
     }
     if (viewerSel.startsWith(prefix)) viewerSel = target + viewerSel.slice(path.length);
-    selectedFolder = "";
+    window.selectedFolder = "";
     // Warn-don't-rewrite: a folder re-key can't fix `import sprites.enemy` references; surface a
     // calm console note (same house surface as the asset warn-on-move) — never rewrite student code.
     assetMsg(`Renamed folder to "${target}". 'import ${path.replace(/\//g, ".")}' references in other files are NOT updated — fix them manually. (Your code was not changed.)`);
@@ -2557,7 +2560,7 @@ async function folderDelete(path) {
   project._dropDirOrder(path);   // #11: drop the deleted folder (+ descendants) from dirOrder
   for (const p of [...closedFolders]) if (p === path || p.startsWith(prefix)) closedFolders.delete(p);
   if (viewerSel === path || viewerSel.startsWith(prefix)) renderViewer(project.active);
-  selectedFolder = "";
+  window.selectedFolder = "";
   renderTabs(); flushSave();
 }
 function tabMenu(name) {

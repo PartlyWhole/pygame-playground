@@ -249,7 +249,7 @@ Expected: no output (the only hits for `selectedFolder` are `window.selectedFold
 - [ ] **Step 4: Run the directly-affected suites, then seams**
 
 Run: `node test/upload.mjs && node test/explorer-tree.mjs && node test/explorer-actions.mjs && node test/explorer-dnd.mjs && node test/seams.mjs`
-Expected: upload/explorer suites GREEN. `seams.mjs` now fails ONLY on `missing window objects: editor`.
+Expected: upload/explorer suites GREEN. `seams.mjs` down to TWO failures, both from the `editor` root cause (`missing window objects: editor` + `CodeMirror invariant: {"count":1,"identity":false}`); the selectedFolder check now passes.
 
 - [ ] **Step 5: Commit**
 

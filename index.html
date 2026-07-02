@@ -1876,7 +1876,11 @@ const isFolderOpen = (path) => !closedFolders.has(path);
 // selected folder). Cleared to ROOT on a folder toggle/delete.
 // selectedFolder LIVES on window (not a local): test/upload.mjs writes it BARE from
 // page.evaluate, and the ES-module split (spec §4.2) needs the state reachable after the
-// explorer moves out of this script. Every read below is a live window lookup.
+// explorer moves out of this script. Every use — including the upload-routing cluster
+// ABOVE this line — is a live window lookup. Deliberate semantic delta vs the old `let`:
+// a pre-init read yields undefined (not a TDZ ReferenceError); every read site
+// truthiness-guards, so undefined degrades to root exactly like "". Keep it a window
+// property — a `let` would reintroduce TDZ coupling the module split can't have.
 window.selectedFolder = "";
 
 // Build a nested display tree: { name, path, dirs:Map<seg,node>, files:[{path,kind,asset,warn,entry,active}] }
@@ -4066,6 +4070,20 @@ addEventListener("online",  () => { if (collab.active) setLive("", document.getE
 // so the first Start is instant) — nothing runs until the student presses Start. The .catch swallows
 // a boot-failure rejection (already surfaced as "boot failed" above) so it isn't an unhandled reject.
 // (Previously: booted.then(run) auto-ran the default example, surprising the learner on every refresh.)
+// ---------------------------------------------------------------- explicit window seams (spec §4.1)
+// Every name below is reached by tests via window.* or a bare name that resolves through
+// window. Today most resolve implicitly (classic-script function declarations become window
+// props). The ES-module split wraps this body in a function (killing that implicit behavior)
+// and then moves each definition into src/*.mjs — so the contract is made EXPLICIT here first.
+// When a definition moves to a module, DELETE its line here; src/main.mjs assigns it instead.
+window.run = run;                        // spike-assets.mjs
+window.tabMenu = tabMenu;                // collab-multifile-b.mjs
+window.newFilePrompt = newFilePrompt;    // collab-multifile-b.mjs
+window.renderHistory = renderHistory;    // collab-multifile-b.mjs
+window.restoreSnapshot = restoreSnapshot;// collab-multifile-b.mjs
+window.editor = editor;                  // explorer-actions.mjs (bare `editor.getDoc()`)
+window.setStatus = setStatus;            // shell.mjs, examples.mjs (bare calls)
+
 booted.catch(() => {});
 </script>
 </body>

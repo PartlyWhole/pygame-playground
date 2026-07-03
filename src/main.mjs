@@ -1,0 +1,15 @@
+// src/main.mjs — the orchestrator (spec §3.2 #19). During the incremental extraction it:
+//   1. eagerly imports the extracted modules (pure dependency-free text: one cached fetch
+//      each, no network waits — the first-paint invariant, spec §2),
+//   2. publishes their window seams / transitional mirrors,
+//   3. hands control to the legacy app body still living in index.html (window.__appMain).
+// Each extraction moves code out of __appMain into a module imported here. Final shape
+// (Plan 4): __appMain is gone and init() owns the boot order outright.
+import "./examples-data.mjs";   // self-publishes window.EXAMPLES (+ transitional mirrors)
+
+export async function init(host) {
+  // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
+  // src/run.mjs (Plan 4) will publish the booted interpreter through pySeam.set.
+  window.__pySeam = host.pySeam;   // transitional handle until run.mjs exists — Plan 4 retires
+  await window.__appMain();
+}

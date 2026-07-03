@@ -808,6 +808,37 @@ else fail('  Tab landed focus on an unrelated page control / the editor: ' + JSO
 }
 
 // ================================================================================================
+// 14. RENAME (FILE) — ext-appending NO-OP must cancel cleanly (regression guard: stuck input).
+//     Renaming "main.py" to "main" (no extension): the commit handler appends ".py", making the
+//     target equal the current name. That no-op must behave exactly like the raw===base no-op —
+//     input removed, name span restored, file untouched — NOT leave a dead .rename-input in the
+//     row (the pre-fix bug: the handler returned true without repainting, the shared inline-edit
+//     core marked the edit done, and Escape/blur were inert forever after).
+// ================================================================================================
+{
+  await ensureExplorerOpen();
+  await page.evaluate(() => {
+    window.project.load({ files: { 'main.py': 'a = 1\n' }, order: ['main.py'], entry: 'main.py', active: 'main.py' });
+    window.renderTabs();
+  });
+  const menuOpened = await clickRowMenu('#tabs .tab.py[data-name="main.py"]');
+  await page.waitForTimeout(150);
+  const chose = await activateMenuItem('Rename');
+  await page.waitForTimeout(60);
+  const typed = await inlineRename('#tabs .tab.py[data-name="main.py"]', 'main', 'Enter');
+  await page.waitForTimeout(120);
+  const after = await page.evaluate(() => ({
+    inputLeft: !!document.querySelector('#tabs .rename-input'),
+    renamingLeft: !!document.querySelector('#tabs .tab.renaming'),
+    nameSpanBack: !!document.querySelector('#tabs .tab.py[data-name="main.py"] .tab-name'),
+    filePresent: !!window.project.files['main.py'],
+  }));
+  if (menuOpened && chose && typed.inputFound && !after.inputLeft && !after.renamingLeft && after.nameSpanBack && after.filePresent)
+    ok('#14: ext-appending no-op rename (main.py -> "main") cancels cleanly — no stuck input');
+  else fail('#14: ext-appending no-op rename left a stuck input / broke the row: ' + JSON.stringify({ menuOpened, chose, typed, after }));
+}
+
+// ================================================================================================
 const realErrors = jsErrors.filter(e => !/favicon/.test(e));
 if (realErrors.length) info('JS console errors observed (informational during RED): ' + realErrors.join(' | '));
 else ok('no JS console errors');

@@ -1805,7 +1805,7 @@ function startInlineRename(rowSel, fullPath, commit) {
       if (!raw || raw === base) { cancel(); return false; }   // no-op / empty -> cancel cleanly
       const dir = dirname(fullPath);
       const next = dir ? dir + "/" + raw : raw;
-      const res = commit(next, raw, hint);
+      const res = commit(next, raw, hint, cancel);   // cancel threaded down: handlers route late-detected no-ops through it
       // Async path (asset rename): the shared core freezes the input; on success we still
       // owe the caller-side cleanup if no repaint replaced the row.
       if (res && typeof res.then === "function") return res.then((okd) => { if (okd) cleanup(); return okd; });
@@ -1834,12 +1834,12 @@ function folderMenu(path) {
   ]);
 }
 function folderRenameInline(path) {
-  startInlineRename(`#tabs .tab.folder[data-path="${cssAttr(path)}"]`, path, (newPath, leaf, hint) => {
+  startInlineRename(`#tabs .tab.folder[data-path="${cssAttr(path)}"]`, path, (newPath, leaf, hint, cancel) => {
     const next = (leaf || "").trim();
     if (!isFolderSegment(next)) { hint("letters, digits, _"); return false; }
     const parent = dirname(path);
     const target = parent ? parent + "/" + next : next;
-    if (target === path) return true;   // no-op
+    if (target === path) { cancel(); return false; }   // no-op -> cancel cleanly (see #14)
     const prefix = path + "/";
     const kids = project.order.filter(p => p.startsWith(prefix));
     if (project.files[target] || project.order.some(p => p.startsWith(target + "/")) || project.emptyDirs.has(target)) { hint("already exists"); return false; }
@@ -1891,9 +1891,9 @@ function tabMenu(name) {
 function fileRenameInline(name) {
   // Qualify to the .py row (Slice C: a same-path asset row may share this data-name; renderTabs emits
   // assets and .py files interleaved, so an unqualified selector could land the input on the asset row).
-  startInlineRename(`#tabs .tab.py[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
+  startInlineRename(`#tabs .tab.py[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint, cancel) => {
     if (!next.endsWith(".py")) next += ".py";
-    if (next === name) return true;   // no-op
+    if (next === name) { cancel(); return false; }   // no-op (".py" auto-append) -> cancel cleanly; returning true here stranded the input (#14)
     if (!project.rename(name, next)) { hint("invalid or in use"); return false; }
     // project.rename preserves the SAME live Doc (files[next] = files[name]); the editor stays
     // bound to it without any setValue. Carry the viewer selection across the re-key.
@@ -1922,8 +1922,8 @@ function assetMenu(name) {
   ]);
 }
 function assetRenameInline(name) {
-  startInlineRename(`#tabs .tab.asset[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint) => {
-    if (next === name) return true;   // no-op
+  startInlineRename(`#tabs .tab.asset[data-name="${cssAttr(name)}"]`, name, (next, leaf, hint, cancel) => {
+    if (next === name) { cancel(); return false; }   // no-op -> cancel cleanly (see #14)
     // assetFS.rename is async (IndexedDB + MEMFS + list re-key in lock-step) and validates +
     // surfaces its own calm notice on collision / bad path / unreadable / storage-full, resolving
     // false on those paths. RETURN the Promise so startInlineRename awaits it: on success the

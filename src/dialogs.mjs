@@ -176,6 +176,8 @@ export { confirmModal, closeModal, toast };   // closeModal: exported for Plan-4
 //     repaint doesn't race the blur).
 //   - commit(raw, hint, cancel) returns: true/undefined = success (row was re-rendered by
 //     the handler), false = stay open (hint already shown), Promise<boolean> = async commit.
+//   - To cancel from INSIDE commit (a no-op detected after normalization), call the `cancel`
+//     argument then return false — never return true without a repaint.
 //   - During an async commit the input is FROZEN via readOnly — NOT disabled: disabling a
 //     focused input fires blur, which would race the pending guard.
 //   - On async false the calm hint keeps the row in edit; on rejection likewise.

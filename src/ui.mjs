@@ -21,7 +21,7 @@ export function clearConsole() { consoleEl.textContent = ""; }
 // Byte-identical to the original. Never add a second writer.
 export function setStatus(cls, text) { statusEl.className = "pill" + (cls ? " " + cls : ""); statusEl.textContent = text; }
 
-// ---------------------------------------------------------------- Shared hover/focus tooltip (ran as an IIFE in the host; module scope now provides the closure). Installed at module eval — same effective timing (before any interaction).
+// ---------------------------------------------------------------- Shared hover/focus tooltip (ran as an IIFE in the host; module scope now provides the closure). Installed at module eval — same effective timing (before any interaction). Registers before all __appMain listeners; safe — no same-phase document peers, and stopImmediatePropagation appears nowhere in the codebase.
 const tip = document.createElement("div");
 tip.className = "tooltip"; tip.setAttribute("role", "tooltip");
 document.body.appendChild(tip);

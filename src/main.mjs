@@ -16,7 +16,8 @@ import * as editorMod from "./editor.mjs";   // LAST: creates THE CodeMirror at 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
   // src/run.mjs (Plan 4) will publish the booted interpreter through pySeam.set.
-  window.__pySeam = host.pySeam;   // transitional handle until run.mjs exists — Plan 4 retires
+  window.__pySeam = host.pySeam;   // Plan 2 is the FIRST consumer (pySeam.get() for project's
+                                   // FS unlinks + assets' MEMFS writes); run.mjs (Plan 4) owns set()
 
   // Transitional mirrors: the legacy __appMain body references these bare. Each line is
   // deleted in Plan 4 when the last bare consumer has moved into a module. NONE are pinned except lines marked PINNED.

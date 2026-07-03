@@ -779,7 +779,9 @@ const project = {
 window.project = project;   // test seam
 
 // auto-lint moved to src/lint.mjs; the arming hook stays HERE so the editor.on('change')
-// registration order (lint -> autosave -> promote) stays byte-order-identical to before.
+// registration order (lint -> autosave -> promote; collab's bindEditor joins 4th on room
+// join) stays byte-order-identical to before. Proven NOT load-bearing (Task-10 review) —
+// preserved defensively.
 editor.on("change", () => window.armLint());
 
 // Tolerant deserialize for saved-project / migration seed.

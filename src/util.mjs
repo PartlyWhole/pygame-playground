@@ -17,14 +17,6 @@ export const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" 
 export const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(0) + ' KB'
   : n < 1073741824 ? (n/1048576).toFixed(1) + ' MB' : (n/1073741824).toFixed(2) + ' GB';
 
-// URL-safe base64 (verbatim). Deliberately NOT modernized to TextEncoder:
-// old #project=/#code= share links must keep decoding byte-identically (share-removed.mjs
-// hand-produces the legacy encoding), and 2 working lines don't earn churn.
-export const b64url = {
-  enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
-  dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))),
-};
-
 // Path-shape validators (verbatim, WITH their explanatory comments — copy those too).
 // S2: a code path is a relative POSIX path of identifier segments ending in a
 // `.py` leaf (e.g. `main.py`, `sprites/enemy.py`). The regex forbids `..`, leading
@@ -50,7 +42,8 @@ export const isAssetPath = (path) =>
 export const pickFrom = (a) => a[Math.floor(Math.random() * a.length)];
 export const before = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);   // a <= b in doc order
 
-// One-shot cached dynamic import — the loadEngine() pattern, shared.
+// One-shot cached dynamic import — the loadEngine() pattern, shared. Forward-provisioned
+// for Plan 4 (loadEngine, and collab loading with its caveat below); no consumers yet by design.
 // NO retry-on-failure, which matches loadEngine ONLY. NOTE for Plan 4: loadAutomerge
 // caches its module only on SUCCESS, so a failed first click retries on the next click —
 // do NOT recompose it on importOnce as-is (add reset-on-rejection or keep its own cache).

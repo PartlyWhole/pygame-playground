@@ -27,7 +27,7 @@ bare ? ok('bare pyodide reachable + booted') : fail('bare pyodide missing/unboot
 // 2. window.* FUNCTION seams (tests call these via window or bare-name-resolving-to-window).
 const fns = ['setStatus', 'run', 'tabMenu', 'newFilePrompt', 'renderHistory', 'restoreSnapshot',
   'renderTabs', 'confirmModal', 'toast', '__closePopMenu', 'uploadFiles', 'openExample',
-  'renderLessons', 'lessonClose', '__flushSave', 'runFile', '__engineDiag'];
+  'renderLessons', 'lessonClose', '__flushSave', 'runFile', '__engineDiag', 'showView'];
 const missingFns = await page.evaluate(
   (names) => names.filter(n => typeof window[n] !== 'function'), fns);
 missingFns.length === 0

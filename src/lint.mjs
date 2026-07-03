@@ -42,7 +42,8 @@ export function armLint() {
   if (lintArmed) return;
   lintArmed = true;
   loadLinter().then((workspace) => {
-    // window.editor: transitional until src/editor.mjs (next task) — after that this module still reads the same instance through the same seam; Plan 4 converts it to an import.
+    // window.editor: the src/editor.mjs instance, read through the transitional seam at
+    // use time; Plan 4 converts this to a direct import.
     const ed = window.editor;
     ed.setOption("gutters", ["CodeMirror-linenumbers", "CodeMirror-lint-markers"]);
     ed.setOption("lint", { getAnnotations: (text) => lintAnnotations(workspace, text), delay: 350 });

@@ -167,7 +167,7 @@ function toast(message, { ms = 3200 } = {}) {
   _toastHost.appendChild(el);
   setTimeout(() => { el.classList.add("leaving"); setTimeout(() => el.remove(), 220); }, Math.max(300, ms));
 }
-export { confirmModal, closeModal, toast };
+export { confirmModal, closeModal, toast };   // closeModal: exported for Plan-4 consumers + testability (not yet imported elsewhere)
 
 // ============================================================== shared inline-edit machinery
 // Distilled from the formerly-duplicated create/rename rows. Contract (all preserved

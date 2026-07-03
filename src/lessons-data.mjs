@@ -4,6 +4,8 @@
 // would clobber the test's array (spec red-flag §3.2 #5). The renderer re-reads
 // window.LESSONS on every call; nothing may capture this module's binding.
 // NOT frozen: the whole-array replacement contract implies callers own the value.
+// Assigns window BARE (no typeof-window guard, unlike examples-data): this module has no
+// exports, so it is never node-imported — browser-only by construction.
 
 // Declarative lesson content (data, not code) so non-engineers can author lessons by editing this.
 // L1 seeds id/title stubs (steps:[]); the five-phase step content (Concept→Demo→Tweak→Recreate→

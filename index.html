@@ -626,10 +626,6 @@ for (const name of Object.keys(EXAMPLES)) {
   opt.value = opt.textContent = name;
   exampleSel.appendChild(opt);
 }
-const b64url = {
-  enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
-  dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))),
-};
 // Persist the editor to localStorage. Precedence on load: saved > default.
 const STORAGE_KEY = "pygame-playground:code";
 const storage = {
@@ -640,25 +636,6 @@ const storage = {
 // One source of truth for the set of .py files + which is the entry. Text lives
 // in per-file CodeMirror.Doc objects (per-file undo). Zero pyodide dependency.
 const PROJECT_KEY = "pygame-playground:project";
-// S2: a code path is a relative POSIX path of identifier segments ending in a
-// `.py` leaf (e.g. `main.py`, `sprites/enemy.py`). The regex forbids `..`, leading
-// `/`, empty segments and a non-identifier leading digit; the defensive split-check
-// rejects `..` segments belonging to odd encodings the regex might admit.
-const isModuleName = (name) =>
-  typeof name === "string" &&
-  /^([A-Za-z_]\w*\/)*[A-Za-z_]\w*\.py$/.test(name) &&
-  !name.split("/").includes("..");
-// A single folder segment: Python-identifier-safe so `import folder.x` works.
-const isFolderSegment = (seg) => /^[A-Za-z_]\w*$/.test(seg);
-// An asset path: same path shape as a module but the leaf needn't be an identifier
-// stem (`sounds/jump-1.wav` is fine); still relative, no `..`, no leading `/`, no
-// empty segment, non-empty leaf.
-const isAssetPath = (path) =>
-  typeof path === "string" &&
-  /^([^/]+\/)*[^/]+$/.test(path) &&
-  !path.startsWith("/") &&
-  !path.split("/").includes("..") &&
-  !path.split("/").includes("");
 const project = {
   files: {}, order: [], entry: "main.py", active: "main.py",
   // Created-but-empty folders persist here until a file lands in them (POSIX paths).
@@ -1206,11 +1183,6 @@ function renderAssets() {
   if (typeof renderTabs === 'function') renderTabs();   // assets appear as #tabs rows (tree-only since Slice A)
   updateStorageReadout();                               // keep the tree-footer storage metric fresh
 }
-const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(0) + ' KB'
-  : n < 1073741824 ? (n/1048576).toFixed(1) + ' MB' : (n/1073741824).toFixed(2) + ' GB';
-// Escape filenames before interpolating into innerHTML: a name with " or < would
-// otherwise break the data-name attribute (and thus remove) or the markup.
-const esc = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Real browser storage usage/quota via the Storage API; null if unavailable.
 async function storageEstimate() {
   try {
@@ -1384,7 +1356,6 @@ let _amCache = null;
 // viewer; .py rows swapDoc into the ONE CodeMirror (never setValue), asset rows render an
 // image/audio/other surface. window.renderTabs stays a zero-arg hook.
 const tabsEl = document.getElementById("tabs");
-const escTab = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const viewerBodyEl = document.getElementById("viewerBody");
 const vNameEl = document.getElementById("vName");
 const vMetaEl = document.getElementById("vMeta");
@@ -1592,8 +1563,6 @@ function renderTabs() {
   editor.refresh();
 }
 window.renderTabs = renderTabs;   // test seam
-const basename = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
-const dirname = (p) => { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); };
 // #7: per-row download moved into the ⋯ menu (file → downloadItem, folder → downloadFolder zip,
 // asset → downloadItem). The standalone .dl button + its click branch are retired.
 tabsEl.addEventListener("click", (e) => {
@@ -2257,9 +2226,6 @@ async function assetDelete(name) {
   if (!(await confirmModal({ title: "Delete asset", message: `Delete "${name}"? This can't be undone.`, confirmLabel: "Delete", danger: true }))) return;
   assetFS.remove(name);
 }
-// Build a CSS attribute-selector-safe value: escape backslash + double-quote (paths may carry
-// neither today, but renames are user-driven — keep the selector robust).
-function cssAttr(s) { return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
 // Explorer header actions
 document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
 document.getElementById("newFolderBtn").addEventListener("click", newFolderPrompt);
@@ -3384,8 +3350,6 @@ const NAME_ADJ = ["Swift", "Brave", "Clever", "Sly", "Jolly", "Witty", "Cosmic",
   "Plucky", "Zesty", "Nimble", "Cheery", "Snazzy", "Bouncy", "Dapper", "Breezy", "Sunny", "Funky"];
 const NAME_ANIMAL = ["Otter", "Panda", "Fox", "Heron", "Lynx", "Gecko", "Wombat", "Tapir",
   "Narwhal", "Puffin", "Koala", "Badger", "Quokka", "Axolotl", "Ferret", "Pangolin", "Manatee", "Stoat"];
-const pickFrom = (a) => a[Math.floor(Math.random() * a.length)];
-const before = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);   // a <= b in doc order
 
 function startPresence() {
   const me = { name: pickFrom(NAME_ADJ) + " " + pickFrom(NAME_ANIMAL),

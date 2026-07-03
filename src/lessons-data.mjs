@@ -13,7 +13,7 @@ window.LESSONS = [
   { id: "lesson-0", title: "Welcome", steps: [
     { phase: "concept", text: "This first lesson is about the workshop itself — not pygame yet. The rhythm never changes: change one small thing, say what you think will happen, press Start, then look at the canvas. Press End to stop and start over. Nothing here is timed, and nothing can break." },
     { phase: "demo", file: "demo_lesson0.py", instruction: "Press Start and watch — a small window fills with a near-black blue. That's your first run: you pressed Start, and the screen changed.",
-      source: `# The workshop. Read it top to bottom, then press Start.
+      source: String.raw`# The workshop. Read it top to bottom, then press Start.
 import pygame
 
 WIDTH, HEIGHT = 400, 300
@@ -28,7 +28,7 @@ pygame.display.flip()      # show what we painted
       predict: { mode: "choices", prompt: "After you raise blue to 255 and press Start, the canvas will be…",
         choices: ["A much brighter, fuller blue", "Exactly the same dark blue", "The window turns red", "An error — 255 is too big"] } },
     { phase: "recreate", referenceFile: "demo_lesson0.py", instruction: "Press End (watch the canvas clear — End is always safe), then set blue to a new number of your choice between 0 and 255, and Start again. You're practising the rhythm, not learning pygame yet.",
-      scaffold: `# Press End (the canvas clears), pick a NEW blue, predict, then Start again.
+      scaffold: String.raw`# Press End (the canvas clears), pick a NEW blue, predict, then Start again.
 import pygame
 
 WIDTH, HEIGHT = 400, 300
@@ -45,7 +45,7 @@ pygame.display.flip()
   { id: "warmup-0a", title: "Draw once", steps: [
     { phase: "concept", text: "Today we draw on the screen exactly once. The new idea hides in set_mode: a SIZE is not two loose numbers — it is ONE value made of two, a (width, height) pair. The COMMA makes the pair; the parentheses just keep it tidy. set_mode wants to be handed that ONE pair." },
     { phase: "demo", file: "demo_0a.py", instruction: "Press Start. The window opens, fills with dark blue, and almost instantly disappears. That's correct — the program drew once, reached the end, and stopped. Nothing told it to stay.",
-      source: `# Draw once, then stop. Watch the window flash open and disappear.
+      source: String.raw`# Draw once, then stop. Watch the window flash open and disappear.
 import pygame
 
 WIDTH, HEIGHT = 800, 600
@@ -59,7 +59,7 @@ pygame.display.flip()                          # show what we painted
       predict: { mode: "choices", prompt: "set_mode(WIDTH, HEIGHT) — two loose numbers instead of one pair. On Start…",
         choices: ["It crashes: 'size must be two numbers'", "A wider window opens — two numbers is fine", "It says 'too many arguments'", "A blank window, no error"] } },
     { phase: "recreate", referenceFile: "demo_0a.py", instruction: "Write it yourself: build the pair, hand set_mode ONE thing, fill, flip. Fill the blanks (___). 'Show the demo' puts the reference beside your work without erasing it. It should flash open and disappear, like the demo.",
-      scaffold: `import pygame
+      scaffold: String.raw`import pygame
 
 WIDTH, HEIGHT = 800, 600
 pygame.init()
@@ -82,7 +82,7 @@ pygame.display.___()
   { id: "warmup-0b", title: "Make it move", steps: [
     { phase: "concept", text: "Last time the window flashed and died. This time we keep it alive with a LOOP: 'while True:' runs the lines underneath, then goes back to the top — over and over. Each trip is one frame. The new trick: keep one number, blue, and make it one bigger every trip (blue = blue + 1). As blue climbs, the colour (0, 0, blue) gets stronger. A loop that repeats + one number that changes is the secret behind all motion." },
     { phase: "demo", file: "demo_0b.py", instruction: "Press Start and watch for a few seconds — there's nothing to press. The screen fades, slowly getting more blue: proof the loop is running and blue is climbing. After a while it crashes on purpose (we fix that in 0c). Use End to stop it any time.",
-      source: `import pygame
+      source: String.raw`import pygame
 
 WINDOW_SIZE = (800, 600)
 FPS = 60                       # paces the loop (we'll turn this knob in a minute)
@@ -101,7 +101,7 @@ while True:
       predict: { mode: "choices", prompt: "With FPS 60 → 10 (blue still +1 per frame), what changes on screen?",
         choices: ["The fade is SLOWER — it creeps up, and crashes later", "The fade is FASTER and crashes sooner", "Nothing changes — FPS doesn't affect the colour", "The colours come out different (red or green)"] } },
     { phase: "recreate", referenceFile: "demo_0b.py", instruction: "Write the four lines INSIDE the loop, in order: make blue one bigger; fill with (0, 0, blue); flip; tick the clock at FPS. The SHAPE is what matters. 'Show the demo' peeks without erasing your work.",
-      scaffold: `import pygame
+      scaffold: String.raw`import pygame
 
 WINDOW_SIZE = (800, 600)
 FPS = 60
@@ -126,7 +126,7 @@ while True:
   { id: "warmup-0c", title: "Keep it looping", steps: [
     { phase: "concept", text: "Last time the fade CRASHED: blue kept climbing past 255, but a colour channel is only allowed 0–255. The new tool: when a value crosses a limit, correct it. Every frame we ask ONE question — has blue gone past 255? — and if yes, put it back to 0. One question, one fix. That turns the one-shot fade into a fade that repeats forever (a sawtooth)." },
     { phase: "demo", file: "demo_0c.py", instruction: "Press Start. The screen brightens to blue, snaps back to black, and brightens again — forever, never crashing. That snap-back is the guard firing the instant blue passed 255. Use End to stop.",
-      source: `import pygame
+      source: String.raw`import pygame
 
 pygame.init()
 WINDOW_SIZE = (800, 600)
@@ -147,7 +147,7 @@ while True:
       predict: { mode: "choices", prompt: "With the guard resetting to 200 instead of 0…",
         choices: ["It fades between a dim blue and full blue — never reaching black", "Exactly the same as before", "It crashes — 200 isn't allowed", "It freezes on solid blue"] } },
     { phase: "recreate", referenceFile: "demo_0c.py", instruction: "Only the GUARD is missing. Write the two lines: the question (is blue past 255?) and the fix (put blue back to 0) indented under it. Say the shape: 'when a value crosses a limit, correct it.' 'Show the demo' keeps your work safe while you peek.",
-      scaffold: `import pygame
+      scaffold: String.raw`import pygame
 
 pygame.init()
 WINDOW_SIZE = (800, 600)
@@ -182,6 +182,3 @@ window.FRIENDLY_ERRORS = [
   { match: /(SyntaxError|IndentationError)/,
     say: "Python couldn't read this line as a valid instruction — look for a typo, a missing ':' '(' ')' or quote, or indentation that doesn't line up." },
 ];
-
-export const LESSONS = window.LESSONS;                 // module-side handles (same objects)
-export const FRIENDLY_ERRORS = window.FRIENDLY_ERRORS;

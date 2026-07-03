@@ -7,11 +7,23 @@
 // (Plan 4): __appMain is gone and init() owns the boot order outright.
 import "./examples-data.mjs";   // self-publishes window.EXAMPLES (+ transitional mirrors)
 import "./lessons-data.mjs";    // self-publishes window.LESSONS / window.FRIENDLY_ERRORS (assign-once)
+import * as util from "./util.mjs";
 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
   // src/run.mjs (Plan 4) will publish the booted interpreter through pySeam.set.
   window.__pySeam = host.pySeam;   // transitional handle until run.mjs exists — Plan 4 retires
+
+  // Transitional mirrors: the legacy __appMain body references these bare. Each line is
+  // deleted in Plan 4 when the last bare consumer has moved into a module. NONE are pinned.
+  Object.assign(window, {
+    esc: util.esc, escTab: util.esc,            // escTab was a byte-identical twin — one impl now
+    basename: util.basename, dirname: util.dirname,
+    fmtSize: util.fmtSize, cssAttr: util.cssAttr, b64url: util.b64url,
+    isModuleName: util.isModuleName, isFolderSegment: util.isFolderSegment, isAssetPath: util.isAssetPath,
+    pickFrom: util.pickFrom, before: util.before,
+  });
+
   if (typeof window.__appMain !== "function") throw new Error("__appMain missing — bootstrap order broken");
   await window.__appMain();
 }

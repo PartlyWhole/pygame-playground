@@ -585,27 +585,9 @@ window.__appMain = async function () {
 
 // consoleEl/statusEl/canvasEl + logLine/clearConsole/setStatus moved to src/ui.mjs.
 
-const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
-  mode: "python", theme: "material-darker", lineNumbers: true,
-  indentUnit: 4, indentWithTabs: false, viewportMargin: Infinity,
-  autoCloseBrackets: true, styleActiveLine: true,
-  extraKeys: {
-    // ⌘/Ctrl-Enter run shortcut dropped in S1 (no battery depends on it; hint removed).
-    "Tab": (cm) => cm.somethingSelected()
-      ? cm.indentSelection("add")
-      : cm.replaceSelection(" ".repeat(cm.getOption("indentUnit")), "end"),
-    "Shift-Tab": (cm) => cm.indentSelection("subtract"),
-    "Cmd-]": (cm) => cm.indentSelection("add"),
-    "Ctrl-]": (cm) => cm.indentSelection("add"),
-    "Cmd-[": (cm) => cm.indentSelection("subtract"),
-    "Ctrl-[": (cm) => cm.indentSelection("subtract"),
-    "Cmd-/": "toggleComment",
-    "Ctrl-/": "toggleComment",
-    "Cmd-S": () => { saveProject(); },
-    "Ctrl-S": () => { saveProject(); },
-    "Cmd-Backspace": "delGroupBefore",
-  },
-});
+// The CodeMirror instance moved to src/editor.mjs (window.editor). Its Cmd/Ctrl-S needs
+// the host's saveProject, injected here (setSaveHandler breaks the old forward reference).
+window.__editorMod.setSaveHandler(() => saveProject());
 
 const exampleSel = document.getElementById("examples");
 for (const name of Object.keys(EXAMPLES)) {
@@ -1319,13 +1301,6 @@ window.runFile = () => runFile;   // test seam (mirrors window.project / window.
 let previewExample = null;
 const exampleOf = Object.create(null);
 const modifiedExamples = new Set();
-// A hidden, off-screen holder for the ONE CodeMirror element while a non-.py file is shown.
-// Moving the wrapper element (never destroying it) keeps the single instance alive (identity
-// invariant) AND removes .CodeMirror from #viewerBody so the empty-state assertion holds.
-const cmStash = document.createElement("div");
-cmStash.id = "cmStash"; cmStash.style.display = "none";
-document.body.appendChild(cmStash);
-
 // Spike-viewer classifier (proven by test/spike-viewer.mjs).
 const IMG_EXT = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
 const AUD_EXT = ["wav", "ogg", "mp3", "m4a", "aac", "flac", "wma"];
@@ -3197,7 +3172,6 @@ window.tabMenu = tabMenu;                // collab-multifile-b.mjs
 window.newFilePrompt = newFilePrompt;    // collab-multifile-b.mjs
 window.renderHistory = renderHistory;    // collab-multifile-b.mjs
 window.restoreSnapshot = restoreSnapshot;// collab-multifile-b.mjs
-window.editor = editor;                  // explorer-actions.mjs (bare `editor.getDoc()`)
 window.showView = showView;              // history.mjs (bare showView('history'))
 window.closedFolders = closedFolders;    // seams.mjs; upload.mjs/save.mjs (bare typeof-guarded .clear() —
                                          // was a top-level lexical binding before the function wrap)

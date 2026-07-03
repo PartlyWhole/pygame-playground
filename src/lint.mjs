@@ -14,6 +14,7 @@ const CM_LINT_JS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/ad
 const CM_LINT_CSS = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.css";
 const LINT_ERROR = new Set(["invalid-syntax", "F821"]);   // undefined name + syntax = error; other F = warning
 let _linter = null;
+// exported for Plan-4 consumers + testability (not yet imported elsewhere)
 export function loadLinter() {
   return _linter ??= (async () => {
     await loadCssTag(CM_LINT_CSS);
@@ -21,9 +22,11 @@ export function loadLinter() {
     const mod = await import(RUFF_CDN);
     await mod.default();                                          // wasm init
     return new mod.Workspace({ lint: { select: ["F"] } });       // F-codes + syntax; no E/W style noise
+  })()
     // reset -> a later edit retries (do NOT replace with util.importOnce — it caches rejections)
-  })().catch((e) => { _linter = null; throw e; });
+    .catch((e) => { _linter = null; throw e; });
 }
+// exported for Plan-4 consumers + testability (not yet imported elsewhere)
 export function lintAnnotations(workspace, text) {
   let diags;
   try { diags = workspace.check(text); } catch { return []; }    // a linter hiccup must never block editing
@@ -36,11 +39,11 @@ export function lintAnnotations(workspace, text) {
 }
 let lintArmed = false, lintNoteShown = false;
 export function armLint() {
-  // window.editor: transitional until src/editor.mjs (next task) — after that this module still reads the same instance through the same seam; Plan 4 converts it to an import.
-  const ed = window.editor;
   if (lintArmed) return;
   lintArmed = true;
   loadLinter().then((workspace) => {
+    // window.editor: transitional until src/editor.mjs (next task) — after that this module still reads the same instance through the same seam; Plan 4 converts it to an import.
+    const ed = window.editor;
     ed.setOption("gutters", ["CodeMirror-linenumbers", "CodeMirror-lint-markers"]);
     ed.setOption("lint", { getAnnotations: (text) => lintAnnotations(workspace, text), delay: 350 });
     ed.performLint();

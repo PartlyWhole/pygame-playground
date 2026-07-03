@@ -10,6 +10,7 @@ import "./lessons-data.mjs";    // self-publishes window.LESSONS / window.FRIEND
 import * as util from "./util.mjs";
 import * as ui from "./ui.mjs";
 import * as dialogs from "./dialogs.mjs";
+import * as lint from "./lint.mjs";
 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
@@ -34,6 +35,7 @@ export async function init(host) {
     rowMenuBtn: dialogs.rowMenuBtn,       // transitional
     inlineInput: dialogs.inlineInput,     // transitional (host wrappers)
     wireInlineEdit: dialogs.wireInlineEdit,   // transitional
+    armLint: lint.armLint,                // transitional (host arming hook)
   });
 
   if (typeof window.__appMain !== "function") throw new Error("__appMain missing — bootstrap order broken");

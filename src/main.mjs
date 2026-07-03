@@ -11,6 +11,7 @@ import * as util from "./util.mjs";
 import * as ui from "./ui.mjs";
 import * as dialogs from "./dialogs.mjs";
 import * as lint from "./lint.mjs";
+import * as editorMod from "./editor.mjs";   // LAST: creates THE CodeMirror at module eval (listener-order continuity)
 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
@@ -36,6 +37,9 @@ export async function init(host) {
     inlineInput: dialogs.inlineInput,     // transitional (host wrappers)
     wireInlineEdit: dialogs.wireInlineEdit,   // transitional
     armLint: lint.armLint,                // transitional (host arming hook)
+    editor: editorMod.editor,          // PINNED (bare `editor` in explorer-actions.mjs)
+    cmStash: editorMod.cmStash,        // transitional (host wrapper-dance callsites)
+    __editorMod: editorMod,            // transitional (host injects saveProject)
   });
 
   if (typeof window.__appMain !== "function") throw new Error("__appMain missing — bootstrap order broken");

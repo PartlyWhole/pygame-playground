@@ -1822,10 +1822,10 @@ function createFolder(raw, hint) {
 // cancels. Reuses the .rename-input look + the calm inline-hint of startInlineRename. Created under
 // the selected folder (made visible) or at root. One create row at a time.
 function startInlineCreate(kind) {
-  // Guard BEFORE any renderTabs: if a create row is already open, keep it (don't repaint it away
-  // or stack a second one). (#9-review: the old guard ran AFTER renderTabs and never fired.)
+  // Guard BEFORE any renderTabs: if a create row is already open, keep it (don't repaint it
+  // away or stack a second one). (#9-review: the old guard ran AFTER renderTabs and never fired.)
   if (tabsEl.querySelector(".tab.creating")) return;
-  if (window.selectedFolder) closedFolders.delete(window.selectedFolder);   // ensure the destination is visible
+  if (window.selectedFolder) closedFolders.delete(window.selectedFolder);   // destination visible
   renderTabs();
   const depth = window.selectedFolder ? window.selectedFolder.split("/").length : 0;
   const pad = 6 + depth * 14 + (kind === "folder" ? 0 : 12);
@@ -1833,201 +1833,20 @@ function startInlineCreate(kind) {
   row.className = `tab ${kind === "folder" ? "folder" : "py"} creating`;
   row.style.paddingLeft = pad + "px";
   row.innerHTML = `<span class="ic" aria-hidden="true">${kind === "folder" ? "📁" : "🐍"}</span>`;
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "rename-input";
-  input.setAttribute("aria-label", kind === "folder" ? "New folder name" : "New file name");
+  const input = inlineInput({ ariaLabel: kind === "folder" ? "New folder name" : "New file name" });
   row.appendChild(input);
   tabsEl.appendChild(row);
-  let done = false;
-  const cancel = () => { if (done || !row.isConnected) return; done = true; renderTabs(); };   // #9-review: a stale deferred blur-cancel on a detached row must not repaint over a newer row
-  const hint = (msg) => {
-    input.classList.add("invalid");
-    let h = row.querySelector(".rename-hint");
-    if (!h) { h = document.createElement("span"); h.className = "rename-hint"; row.appendChild(h); }
-    h.textContent = msg; input.focus();
-  };
-  const tryCommit = () => {
-    if (done) return;
-    const raw = input.value.trim();
-    if (!raw) { cancel(); return; }                                  // empty -> cancel cleanly
-    const ok = kind === "folder" ? createFolder(raw, hint) : createFile(raw, hint);
-    if (ok === false) return;                                        // stay in edit; hint shown
-    done = true;                                                     // success -> create*() re-rendered (drops this row)
-  };
+  wireInlineEdit(input, row, {
+    // #9-review: a stale deferred blur-cancel on a detached row must not repaint over a newer row.
+    cancel: () => { if (row.isConnected) renderTabs(); },
+    commit: (raw, hint, cancel) => {
+      if (!raw) { cancel(); return false; }                       // empty -> cancel cleanly
+      return kind === "folder" ? createFolder(raw, hint) : createFile(raw, hint);
+    },
+  });
   input.focus();
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tryCommit(); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
-  });
-  input.addEventListener("input", () => { input.classList.remove("invalid"); const h = row.querySelector(".rename-hint"); if (h) h.remove(); });
-  input.addEventListener("blur", () => { setTimeout(() => { if (!done) cancel(); }, 0); });
 }
-// =============================================================== Slice B: popup action menu
-// ONE shared popup instance, anchored to the clicked row's ⋯. Opening it (via tabMenu /
-// folderMenu / assetMenu) replaces the typed prompt; selecting an item runs the existing
-// handler directly. role=menu / role=menuitem for a11y; arrow/Enter/Esc keyboard; focus
-// returns to the ⋯ on close; viewport-flip near an edge; outside-click / Esc / action dismiss.
-const popMenuEl = document.createElement("div");
-popMenuEl.className = "popmenu";
-popMenuEl.setAttribute("role", "menu");
-popMenuEl.tabIndex = -1;
-document.body.appendChild(popMenuEl);
-let popAnchor = null;   // the ⋯ button the menu is currently anchored to (focus returns here)
-
-function closePopMenu(restoreFocus = true) {
-  if (!popMenuEl.classList.contains("open")) return;
-  popMenuEl.classList.remove("open");
-  popMenuEl.innerHTML = "";
-  const anchor = popAnchor; popAnchor = null;
-  if (anchor) anchor.setAttribute("aria-expanded", "false");
-  if (restoreFocus && anchor && anchor.isConnected) anchor.focus();
-}
-window.__closePopMenu = closePopMenu;   // test/debug seam
-
-// #13: aesthetic modal (user CHOICES) + calm toast (non-choice notices) — replaces native browser
-// confirm()/alert() (no ugly OS dialogs). The modal is ASYNC (Promise<boolean>) because it can't block
-// the JS thread the way confirm() did, so callers `await` it. Single instance, focus-trapped, with
-// Escape / backdrop-click = cancel and focus returned to the opener. `danger` styles confirm delete-red.
-let _modalState = null;   // { backdrop, resolve, lastFocus } while a modal is open
-function confirmModal({ title = "", message = "", confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false } = {}) {
-  closeModal(false);   // single instance: a new modal supersedes the old (resolving it as cancel)
-  return new Promise((resolve) => {
-    const lastFocus = document.activeElement;
-    const backdrop = document.createElement("div");
-    backdrop.id = "modalBackdrop";
-    const card = document.createElement("div");
-    card.className = "modal";
-    card.setAttribute("role", "dialog");
-    card.setAttribute("aria-modal", "true");
-    card.innerHTML =
-      (title ? `<div class="modal-title"></div>` : "") +
-      `<div class="modal-msg"></div>` +
-      `<div class="modal-acts">` +
-        `<button type="button" class="modal-btn" data-act="cancel"></button>` +
-        `<button type="button" class="modal-btn confirm${danger ? " danger" : ""}" data-act="confirm"></button>` +
-      `</div>`;
-    if (title) card.querySelector(".modal-title").textContent = title;   // textContent: never inject markup
-    card.querySelector(".modal-msg").textContent = message;
-    card.querySelector('[data-act="cancel"]').textContent = cancelLabel;
-    card.querySelector('[data-act="confirm"]').textContent = confirmLabel;
-    backdrop.appendChild(card);
-    document.body.appendChild(backdrop);
-    _modalState = { backdrop, resolve, lastFocus };
-    card.querySelector('[data-act="confirm"]').addEventListener("click", () => closeModal(true));
-    card.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal(false));
-    backdrop.addEventListener("mousedown", (e) => { if (e.target === backdrop) closeModal(false); });   // click OUTSIDE the card
-    // Default focus = Cancel, so a stray Enter never confirms a destructive action.
-    card.querySelector('[data-act="cancel"]').focus();
-  });
-}
-function closeModal(result) {
-  const st = _modalState; _modalState = null;
-  if (!st) return;
-  st.backdrop.remove();
-  if (st.lastFocus && st.lastFocus.isConnected) try { st.lastFocus.focus(); } catch {}
-  st.resolve(!!result);
-}
-// Modal key handling (capture): Escape cancels; Tab is trapped within the dialog.
-document.addEventListener("keydown", (e) => {
-  if (!_modalState) return;
-  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeModal(false); return; }
-  if (e.key === "Tab") {
-    const f = [..._modalState.backdrop.querySelectorAll("button, [tabindex]:not([tabindex='-1'])")].filter(el => el.offsetParent !== null);
-    if (!f.length) return;
-    const first = f[0], last = f[f.length - 1], a = document.activeElement;
-    if (e.shiftKey && (a === first || !_modalState.backdrop.contains(a))) { e.preventDefault(); e.stopPropagation(); last.focus(); }
-    else if (!e.shiftKey && (a === last || !_modalState.backdrop.contains(a))) { e.preventDefault(); e.stopPropagation(); first.focus(); }
-  }
-}, true);
-window.confirmModal = confirmModal;   // test seam
-
-// Calm, non-blocking toast for NON-choice notices (e.g. "Can't delete the only file"). No backdrop;
-// fades in at the bottom, auto-dismisses, and stacks.
-let _toastHost = null;
-function toast(message, { ms = 3200 } = {}) {
-  if (!_toastHost) { _toastHost = document.createElement("div"); _toastHost.id = "toastHost"; document.body.appendChild(_toastHost); }
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.setAttribute("role", "status");
-  el.textContent = message;
-  _toastHost.appendChild(el);
-  setTimeout(() => { el.classList.add("leaving"); setTimeout(() => el.remove(), 220); }, Math.max(300, ms));
-}
-window.toast = toast;   // test seam
-
-// Open the popup for `anchorBtn` with a list of {label, icon, danger, run} items.
-function openPopMenu(anchorBtn, items) {
-  closePopMenu(false);
-  popAnchor = anchorBtn;
-  anchorBtn.setAttribute("aria-haspopup", "menu");
-  anchorBtn.setAttribute("aria-expanded", "true");
-  popMenuEl.innerHTML = "";
-  for (const it of items) {
-    const mi = document.createElement("button");
-    mi.type = "button";
-    mi.className = "mi" + (it.danger ? " danger" : "");
-    mi.setAttribute("role", "menuitem");
-    mi.tabIndex = -1;
-    mi.innerHTML = `<span class="mi-ic" aria-hidden="true">${it.icon || ""}</span><span class="mi-label">${escTab(it.label)}</span>`;
-    mi.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      closePopMenu(false);
-      it.run();
-    });
-    popMenuEl.appendChild(mi);
-  }
-  popMenuEl.classList.add("open");
-  // Position: anchored under the ⋯, flipped above / left if it would overflow the viewport.
-  // position:absolute (so offsetParent is the body, not null as it would be for fixed), so the
-  // menu reads as VISIBLE; coordinates are page-space (viewport rect + scroll offset).
-  const r = anchorBtn.getBoundingClientRect();
-  const mw = popMenuEl.offsetWidth, mh = popMenuEl.offsetHeight;
-  const sx = window.scrollX || 0, sy = window.scrollY || 0;
-  let top = r.bottom + 4, left = r.left;
-  if (left + mw > window.innerWidth - 6) left = Math.max(6, r.right - mw);
-  if (top + mh > window.innerHeight - 6) top = Math.max(6, r.top - mh - 4);
-  popMenuEl.style.top = (top + sy) + "px";
-  popMenuEl.style.left = (left + sx) + "px";
-  // Move keyboard focus into the first item so arrow/Enter work immediately.
-  const first = popMenuEl.querySelector(".mi");
-  if (first) first.focus();
-}
-
-// Keyboard nav within the menu: ArrowUp/Down move, Enter/Space activate, Esc/Tab close.
-popMenuEl.addEventListener("keydown", (e) => {
-  const its = [...popMenuEl.querySelectorAll(".mi")];
-  if (!its.length) return;
-  let i = its.indexOf(document.activeElement);
-  if (e.key === "ArrowDown") { e.preventDefault(); its[(i + 1 + its.length) % its.length].focus(); }
-  else if (e.key === "ArrowUp") { e.preventDefault(); its[(i - 1 + its.length) % its.length].focus(); }
-  else if (e.key === "Home") { e.preventDefault(); its[0].focus(); }
-  else if (e.key === "End") { e.preventDefault(); its[its.length - 1].focus(); }
-  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (document.activeElement.click ? document.activeElement : its[0]).click(); }
-  else if (e.key === "Escape") { e.preventDefault(); closePopMenu(); }
-  // Focus-trap: suppress the browser's native Tab so it can't leak focus to the next page control;
-  // close the menu and return focus to the ⋯ anchor (a11y — Slice C follow-up B).
-  else if (e.key === "Tab") { e.preventDefault(); closePopMenu(true); }
-});
-// Global Esc closes (test dispatches Escape on document/activeElement). Capture so it wins
-// even when focus is outside the menu.
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && popMenuEl.classList.contains("open")) { closePopMenu(); }
-}, true);
-// Outside-click / scroll / resize dismiss (don't steal focus on an outside click).
-document.addEventListener("mousedown", (e) => {
-  if (!popMenuEl.classList.contains("open")) return;
-  if (popMenuEl.contains(e.target) || (popAnchor && popAnchor.contains(e.target))) return;
-  closePopMenu(false);
-}, true);
-addEventListener("resize", () => closePopMenu(false));
-tabsEl.addEventListener("scroll", () => closePopMenu(false), true);
-
-// Find the ⋯ button for a row identified by its model key (data-name file/asset, data-path folder).
-function rowMenuBtn(rowSel) {
-  const row = document.querySelector(rowSel);
-  return row ? row.querySelector(".tab-menu") : null;
-}
+// popup menu + modal + toast + inline-edit core moved to src/dialogs.mjs.
 
 // =============================================================== Slice B: inline rename
 // Swap a row's name span for an <input> (basename prefilled, stem selected). Enter validates +
@@ -2042,60 +1861,28 @@ function startInlineRename(rowSel, fullPath, commit) {
   if (!nameSpan || row.querySelector(".rename-input")) return;
   const base = basename(fullPath);
   const dot = base.lastIndexOf(".");
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "rename-input";
-  input.value = base;
-  input.setAttribute("aria-label", `Rename ${base}`);
-  let done = false;
-  let pending = false;   // an async commit (asset rename) is in flight — block re-commit + blur-cancel
+  const input = inlineInput({ value: base, ariaLabel: `Rename ${base}` });
   const cleanup = () => { try { row.classList.remove("renaming"); } catch {} };
-  const cancel = () => { if (done || pending) return; done = true; cleanup(); renderTabs(); };
-  const tryCommit = () => {
-    if (done || pending) return;
-    const raw = input.value.trim();
-    if (!raw || raw === base) { cancel(); return; }   // no-op / empty -> cancel cleanly
-    // Reconstruct the full path: keep the row's directory, swap the basename.
-    const dir = dirname(fullPath);
-    const next = dir ? dir + "/" + raw : raw;
-    const hint = (msg) => {
-      input.classList.add("invalid");
-      let h = row.querySelector(".rename-hint");
-      if (!h) { h = document.createElement("span"); h.className = "rename-hint"; row.appendChild(h); }
-      h.textContent = msg;
-      input.focus();
-    };
-    const res = commit(next, raw, hint);
-    // Async commit (asset rename: IndexedDB + MEMFS re-key validates AFTER the call). Don't close
-    // the input until the real result is known — on rejection (collision / bad path / unreadable /
-    // storage-full) keep the row in edit with a calm inline hint, mirroring the sync file/folder path.
-    if (res && typeof res.then === "function") {
-      pending = true;            // block re-commit + the blur-cancel while the async re-key runs.
-      input.readOnly = true;     // visually freeze (readOnly, NOT disabled — disabling a focused
-                                 // input fires blur, which would race the pending guard).
-      res.then((ok) => {
-        pending = false;
-        if (done) return;        // a repaint (renderTabs) already replaced the input on success
-        input.readOnly = false;
-        if (ok) { done = true; cleanup(); }       // success but no repaint happened: close cleanly
-        else { hint("invalid or in use"); }       // failure: stay in edit, surface the hint
-      }, () => { pending = false; if (!done) { input.readOnly = false; hint("rename failed"); } });
-      return;
-    }
-    if (res === false) return;   // stay in edit; hint already shown
-    done = true; cleanup();      // success -> the handler re-rendered (renderTabs)
-  };
+  wireInlineEdit(input, row, {
+    cancel: () => { cleanup(); renderTabs(); },
+    commit: (raw, hint, cancel) => {
+      if (!raw || raw === base) { cancel(); return false; }   // no-op / empty -> cancel cleanly
+      const dir = dirname(fullPath);
+      const next = dir ? dir + "/" + raw : raw;
+      const res = commit(next, raw, hint);
+      // Async path (asset rename): the shared core freezes the input; on success we still
+      // owe the caller-side cleanup if no repaint replaced the row.
+      if (res && typeof res.then === "function") return res.then((okd) => { if (okd) cleanup(); return okd; });
+      if (res === false) return false;
+      cleanup();                     // success -> the handler re-rendered (renderTabs)
+      return true;
+    },
+  });
   nameSpan.replaceWith(input);
   row.classList.add("renaming");
   // select the stem (name without extension) so a quick retype keeps the ext.
   input.focus();
   if (dot > 0) input.setSelectionRange(0, dot); else input.select();
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tryCommit(); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
-  });
-  input.addEventListener("input", () => { input.classList.remove("invalid"); const h = row.querySelector(".rename-hint"); if (h) h.remove(); });
-  input.addEventListener("blur", () => { setTimeout(() => { if (!done) cancel(); }, 0); });
 }
 
 // S2: folder actions via the folder row's ⋯ menu. Slice B: a popup [role=menu] (Rename · Delete)

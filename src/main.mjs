@@ -9,6 +9,7 @@ import "./examples-data.mjs";   // self-publishes window.EXAMPLES (+ transitiona
 import "./lessons-data.mjs";    // self-publishes window.LESSONS / window.FRIENDLY_ERRORS (assign-once)
 import * as util from "./util.mjs";
 import * as ui from "./ui.mjs";
+import * as dialogs from "./dialogs.mjs";
 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
@@ -16,7 +17,7 @@ export async function init(host) {
   window.__pySeam = host.pySeam;   // transitional handle until run.mjs exists — Plan 4 retires
 
   // Transitional mirrors: the legacy __appMain body references these bare. Each line is
-  // deleted in Plan 4 when the last bare consumer has moved into a module. NONE are pinned.
+  // deleted in Plan 4 when the last bare consumer has moved into a module. NONE are pinned except lines marked PINNED.
   Object.assign(window, {
     esc: util.esc, escTab: util.esc,            // escTab was a behavior-identical twin — one impl now
     basename: util.basename, dirname: util.dirname,
@@ -26,6 +27,13 @@ export async function init(host) {
     consoleEl: ui.consoleEl, statusEl: ui.statusEl, canvasEl: ui.canvasEl,   // transitional
     logLine: ui.logLine, clearConsole: ui.clearConsole,                       // transitional
     setStatus: ui.setStatus,                                                  // PINNED (shell.mjs, examples.mjs bare calls)
+    confirmModal: dialogs.confirmModal,   // PINNED (modal.mjs + _harness acceptModal, ~9 suites)
+    toast: dialogs.toast,                 // PINNED (modal.mjs)
+    closePopMenu: dialogs.closePopMenu,   // transitional (host bare calls); __closePopMenu pinned in-module
+    openPopMenu: dialogs.openPopMenu,     // transitional
+    rowMenuBtn: dialogs.rowMenuBtn,       // transitional
+    inlineInput: dialogs.inlineInput,     // transitional (host wrappers)
+    wireInlineEdit: dialogs.wireInlineEdit,   // transitional
   });
 
   if (typeof window.__appMain !== "function") throw new Error("__appMain missing — bootstrap order broken");

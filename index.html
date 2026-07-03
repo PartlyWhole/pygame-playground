@@ -583,20 +583,7 @@ window.__appMain = async function () {
 // The cooperative engine Python source (BOOT_PY + PROJECT_PY) now lives in
 // vendor/engine.mjs, lazily imported via loadEngine() (see the pyodide-boot section).
 
-// ---------------------------------------------------------------- UI plumbing
-const consoleEl = document.getElementById("console");
-const statusEl = document.getElementById("status");
-const canvasEl = document.getElementById("canvas");
-
-function logLine(text, cls) {
-  const div = document.createElement("div");
-  if (cls) div.className = cls;
-  div.textContent = text;
-  consoleEl.appendChild(div);
-  consoleEl.scrollTop = consoleEl.scrollHeight;
-}
-function clearConsole() { consoleEl.textContent = ""; }
-function setStatus(cls, text) { statusEl.className = "pill" + (cls ? " " + cls : ""); statusEl.textContent = text; }
+// consoleEl/statusEl/canvasEl + logLine/clearConsole/setStatus moved to src/ui.mjs.
 
 const editor = CodeMirror.fromTextArea(document.getElementById("code"), {
   mode: "python", theme: "material-darker", lineNumbers: true,
@@ -2826,37 +2813,7 @@ acttabs.forEach((b, i) => {
   });
 });
 
-// ---------------------------------------------------------------- shared hover/focus tooltip (§3.3, §8.2)
-(function () {
-  const tip = document.createElement("div");
-  tip.className = "tooltip"; tip.setAttribute("role", "tooltip");
-  document.body.appendChild(tip);
-  let cur = null;
-  function show(el) {
-    const t = el.getAttribute("data-tip"); if (!t) { hide(); return; }
-    cur = el; tip.textContent = t;
-    const r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
-    let left, top;
-    if (el.getAttribute("data-tip-side") === "right") {
-      left = r.right + 8; top = r.top + r.height / 2 - th / 2;
-      if (left + tw > window.innerWidth - 6) left = r.left - tw - 8;
-      top = Math.max(6, Math.min(top, window.innerHeight - th - 6));
-    } else {
-      left = r.left + r.width / 2 - tw / 2; left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
-      top = r.bottom + 7; if (top + th > window.innerHeight - 6) top = r.top - th - 7;
-    }
-    tip.style.left = Math.round(left) + "px"; tip.style.top = Math.round(top) + "px";
-    tip.classList.add("show");
-  }
-  function hide() { cur = null; tip.classList.remove("show"); }
-  document.addEventListener("mouseover", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el && el !== cur) show(el); });
-  document.addEventListener("mouseout", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el && (!e.relatedTarget || !el.contains(e.relatedTarget))) hide(); });
-  document.addEventListener("focusin", e => { const el = e.target.closest && e.target.closest("[data-tip]"); if (el) show(el); });
-  document.addEventListener("focusout", hide);
-  document.addEventListener("mousedown", hide);
-  document.addEventListener("keydown", e => { if (e.key === "Escape") hide(); });
-  window.addEventListener("scroll", hide, true);
-})();
+// shared tooltip moved to src/ui.mjs.
 
 // ---------------------------------------------------------------- panes: resizable splitters (§6.1)
 const editorPaneEl = document.getElementById("editorPane");
@@ -3495,7 +3452,6 @@ window.newFilePrompt = newFilePrompt;    // collab-multifile-b.mjs
 window.renderHistory = renderHistory;    // collab-multifile-b.mjs
 window.restoreSnapshot = restoreSnapshot;// collab-multifile-b.mjs
 window.editor = editor;                  // explorer-actions.mjs (bare `editor.getDoc()`)
-window.setStatus = setStatus;            // shell.mjs, examples.mjs (bare calls)
 window.showView = showView;              // history.mjs (bare showView('history'))
 window.closedFolders = closedFolders;    // seams.mjs; upload.mjs/save.mjs (bare typeof-guarded .clear() —
                                          // was a top-level lexical binding before the function wrap)

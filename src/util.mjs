@@ -1,9 +1,9 @@
 // src/util.mjs — pure helpers + lazy-load primitives. Zero DOM-state, zero app-state:
-// everything here is importable from node (the smoke test below relies on it) except the
+// everything here is importable from node except the
 // two tag injectors, which touch document only when CALLED.
 
 // HTML-escape for interpolating names into innerHTML (verbatim; was `esc` and its
-// byte-identical twin `escTab` — one implementation now, two window mirrors).
+// behavior-identical twin `escTab` — one implementation now, two window mirrors).
 export const esc = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // CSS attribute-selector-safe value (verbatim).
@@ -50,13 +50,15 @@ export const isAssetPath = (path) =>
 export const pickFrom = (a) => a[Math.floor(Math.random() * a.length)];
 export const before = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);   // a <= b in doc order
 
-// One-shot cached dynamic import — the loadEngine()/loadAutomerge() pattern, shared.
-// NO retry-on-failure (matches both existing callers: a failed engine/collab load is
-// surfaced, not silently retried). onFirst runs once, for sentinel side-effects.
+// One-shot cached dynamic import — the loadEngine() pattern, shared.
+// NO retry-on-failure, which matches loadEngine ONLY. NOTE for Plan 4: loadAutomerge
+// caches its module only on SUCCESS, so a failed first click retries on the next click —
+// do NOT recompose it on importOnce as-is (add reset-on-rejection or keep its own cache).
+// onFirst runs once, awaited, for sentinel side-effects.
 const _importCache = new Map();
 export function importOnce(url, onFirst) {
   let p = _importCache.get(url);
-  if (!p) { p = import(url).then((m) => { onFirst?.(m); return m; }); _importCache.set(url, p); }
+  if (!p) { p = import(url).then(async (m) => { await onFirst?.(m); return m; }); _importCache.set(url, p); }
   return p;
 }
 

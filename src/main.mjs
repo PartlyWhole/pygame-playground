@@ -8,6 +8,7 @@
 import "./examples-data.mjs";   // self-publishes window.EXAMPLES (+ transitional mirrors)
 import "./lessons-data.mjs";    // self-publishes window.LESSONS / window.FRIENDLY_ERRORS (assign-once)
 import * as util from "./util.mjs";
+import * as ui from "./ui.mjs";
 
 export async function init(host) {
   // host = { pySeam: { get, set } } — the classic script owns the bare `pyodide` binding;
@@ -17,11 +18,14 @@ export async function init(host) {
   // Transitional mirrors: the legacy __appMain body references these bare. Each line is
   // deleted in Plan 4 when the last bare consumer has moved into a module. NONE are pinned.
   Object.assign(window, {
-    esc: util.esc, escTab: util.esc,            // escTab was a byte-identical twin — one impl now
+    esc: util.esc, escTab: util.esc,            // escTab was a behavior-identical twin — one impl now
     basename: util.basename, dirname: util.dirname,
-    fmtSize: util.fmtSize, cssAttr: util.cssAttr, b64url: util.b64url,
-    isModuleName: util.isModuleName, isFolderSegment: util.isFolderSegment, isAssetPath: util.isAssetPath,
+    fmtSize: util.fmtSize, cssAttr: util.cssAttr,
+    isModuleName: util.isModuleName, isFolderSegment: util.isFolderSegment,
     pickFrom: util.pickFrom, before: util.before,
+    consoleEl: ui.consoleEl, statusEl: ui.statusEl, canvasEl: ui.canvasEl,   // transitional
+    logLine: ui.logLine, clearConsole: ui.clearConsole,                       // transitional
+    setStatus: ui.setStatus,                                                  // PINNED (shell.mjs, examples.mjs bare calls)
   });
 
   if (typeof window.__appMain !== "function") throw new Error("__appMain missing — bootstrap order broken");

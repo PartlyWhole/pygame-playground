@@ -176,7 +176,10 @@ const CLASS_LOOP = [
 {
   const page = await freshPage();
   await runSrc(page, CLASS_LOOP);
-  await page.waitForTimeout(2500);   // give the run task its first turn
+  // Poll for the settled status (fast on green, robust on slow machines); a FROZEN page
+  // just times this out and falls through to respondsWithin's __FROZEN__ diagnosis.
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'error — see console',
+    null, { timeout: 15_000 }).catch(() => {});
   const resp = await respondsWithin(page, () => ({
     status: document.getElementById('status').textContent,
     friendly: /game loop inside a class method/.test(document.getElementById('console')?.innerText || ''),
@@ -197,7 +200,10 @@ const CLASS_LOOP = [
     window.project.setActive('main.py');
   }, CLASS_LOOP);
   await page.evaluate(() => document.getElementById('runBtn').click());
-  await page.waitForTimeout(2500);
+  // Poll for the settled status (fast on green, robust on slow machines); a FROZEN page
+  // just times this out and falls through to respondsWithin's __FROZEN__ diagnosis.
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'error — see console',
+    null, { timeout: 15_000 }).catch(() => {});
   const resp = await respondsWithin(page, () => ({
     status: document.getElementById('status').textContent,
     friendly: /game loop inside a class method/.test(document.getElementById('console')?.innerText || ''),

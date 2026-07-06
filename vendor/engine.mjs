@@ -131,8 +131,9 @@ def _check_class_gameloop(tree):
             for n in ast.walk(node):
                 if isinstance(n, ast.While) and _is_gameloop(n):
                     raise _PlacementError(
-                        "a game loop inside a class method isn't supported -- move it to a "
-                        "module-level function or the top level of your file.")
+                        "a game loop inside a class method isn't supported — move it to a "
+                        "module-level function or the top level of your file. "
+                        "(class '" + node.name + "', line " + str(n.lineno) + ")")
 
 def _time_names(tree):
     """Names the user's code binds to the time module / time.sleep."""

@@ -98,7 +98,9 @@ sprite slide across — that's the manual audio-output check headless tests can'
 
 Known limitation: an infinite loop inside a helper function that never touches
 `flip`/`tick`/`event.get` can't be auto-yielded and will freeze the tab — game loops and
-top-level loops are always safe, and the Stop button covers those.
+top-level loops are always safe, and the Stop button covers those. A game loop inside a
+**class method** (e.g. `def run(self): while ...`) is refused with a clear message in any
+mode — keep game loops at the top level of your file or in a module-level function.
 
 Uploaded assets are kept in your browser only (IndexedDB); clearing site data removes them,
 and they're never uploaded anywhere.

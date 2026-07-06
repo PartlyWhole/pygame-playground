@@ -22,7 +22,7 @@ const browser = await launch();
 const fail = (m) => { console.error('FAIL:', m); process.exitCode = 1; };
 const ok = (m) => console.log('ok -', m);
 // Hard failsafe: a regression that re-introduces a freeze must not hang the battery.
-const failsafe = setTimeout(() => { console.error('FREEZE BATTERY TIMED OUT (failsafe)'); process.exit(process.exitCode || 1); }, 150_000);
+const failsafe = setTimeout(() => { console.error('FREEZE BATTERY TIMED OUT (failsafe)'); process.exit(process.exitCode || 1); }, 210_000);   // headroom for F6/F7
 
 async function freshPage() {
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
@@ -152,6 +152,59 @@ await expectResponsive('F3 gameloop using `continue` stays responsive (yield at 
   if (diag && diag.flips >= 1 && diag.running) ok('W1  ...window.__engineDiag() reports internal run state (flips>=1, running) for diagnosis');
   else fail('W1 __engineDiag wrong: ' + JSON.stringify(diag));
   await page.evaluate(() => { try { pyodide.runPython('_stop()'); } catch {} }).catch(() => {});
+  await page.close().catch(() => {});
+}
+
+// F6 — a game loop inside a CLASS METHOD (single-file) must raise the friendly placement
+// error, NOT hard-freeze the tab. The transform can never make methods cooperative
+// (_SyncBarrier), so the engine must refuse with a clear message — same contract the
+// multi-file module path has had via _check_loop_placement. (Diagnosed + reproduced
+// 2026-07-03: pre-fix, Run wedged the main thread within the click.)
+const CLASS_LOOP = [
+  'import pygame', 'pygame.init()', 'screen = pygame.display.set_mode((120, 90))',
+  'clock = pygame.time.Clock()',
+  'class Game:',
+  '    def run(self):',
+  '        while True:',
+  '            for e in pygame.event.get():',
+  '                pass',
+  '            screen.fill((0, 0, 40))',
+  '            pygame.display.flip()',
+  '            clock.tick(60)',
+  'Game().run()',
+].join('\n') + '\n';
+{
+  const page = await freshPage();
+  await runSrc(page, CLASS_LOOP);
+  await page.waitForTimeout(2500);   // give the run task its first turn
+  const resp = await respondsWithin(page, () => ({
+    status: document.getElementById('status').textContent,
+    friendly: /game loop inside a class method/.test(document.getElementById('console')?.innerText || ''),
+  }), 6000);
+  if (resp !== '__FROZEN__' && resp !== '__ERR__' && resp.status === 'error — see console' && resp.friendly)
+    ok('F6 class-method game loop (single-file) raises the friendly placement error, tab responsive');
+  else fail('F6 class-method game loop: ' + (resp === '__FROZEN__' ? 'TAB FROZEN (main thread blocked)' : JSON.stringify(resp)));
+  await page.close().catch(() => {});
+}
+
+// F7 — same contract on the MULTI-FILE ENTRY path (_transform_entry): only imported modules
+// were placement-checked; the entry file must refuse a class-method game loop too.
+{
+  const page = await freshPage();
+  await page.evaluate((s) => {
+    window.project.load({ files: { 'main.py': s, 'helper.py': 'X = 1\n' },
+      order: ['main.py', 'helper.py'], entry: 'main.py', active: 'main.py' });
+    window.project.setActive('main.py');
+  }, CLASS_LOOP);
+  await page.evaluate(() => document.getElementById('runBtn').click());
+  await page.waitForTimeout(2500);
+  const resp = await respondsWithin(page, () => ({
+    status: document.getElementById('status').textContent,
+    friendly: /game loop inside a class method/.test(document.getElementById('console')?.innerText || ''),
+  }), 6000);
+  if (resp !== '__FROZEN__' && resp !== '__ERR__' && resp.status === 'error — see console' && resp.friendly)
+    ok('F7 class-method game loop in a multi-file ENTRY raises the friendly error, tab responsive');
+  else fail('F7 multi-file entry class-method loop: ' + (resp === '__FROZEN__' ? 'TAB FROZEN (main thread blocked)' : JSON.stringify(resp)));
   await page.close().catch(() => {});
 }
 

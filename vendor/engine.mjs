@@ -118,6 +118,22 @@ def _is_gameloop(loop):
                 return True
     return False
 
+class _PlacementError(Exception):
+    """Friendly, run-blocking message about WHERE a game loop may live (surfaced verbatim)."""
+
+def _check_class_gameloop(tree):
+    # Class bodies sit behind _SyncBarrier: a game-loop METHOD can never be made cooperative,
+    # and calling it synchronously hard-freezes the tab -- refuse with a clear message instead.
+    # Module-TOP-LEVEL loops are fine on the entry paths (PyCF_ALLOW_TOP_LEVEL_AWAIT covers
+    # them); imported modules additionally get _check_loop_placement in the project engine.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for n in ast.walk(node):
+                if isinstance(n, ast.While) and _is_gameloop(n):
+                    raise _PlacementError(
+                        "a game loop inside a class method isn't supported -- move it to a "
+                        "module-level function or the top level of your file.")
+
 def _time_names(tree):
     """Names the user's code binds to the time module / time.sleep."""
     mods, sleeps = set(), set()
@@ -198,6 +214,7 @@ class _InjectYield(_SyncBarrier):
 
 def _transform(src):
     tree = ast.parse(src)
+    _check_class_gameloop(tree)
     asyncify = _Asyncify()
     tree = asyncify.visit(tree)
     tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
@@ -214,6 +231,9 @@ async def _run(src):
         code = _transform(src)
     except SyntaxError:
         traceback.print_exc(limit=0)
+        return "error"
+    except _PlacementError as e:
+        print(str(e))
         return "error"
     try:
         if pygame.get_init():
@@ -500,6 +520,7 @@ def _prune_empty_dirs():
 
 def _transform_entry(src):
     tree = ast.parse(src)
+    _check_class_gameloop(tree)
     asyncify = _Asyncify()
     tree = asyncify.visit(tree)
     tree = _Awaiter(asyncify.converted, *_time_names(tree)).visit(tree)
@@ -548,6 +569,8 @@ async def _run_project(files, entry):
         code = _transform_entry(files[entry])
     except SyntaxError:
         traceback.print_exc(limit=0); return 'error'
+    except _PlacementError as e:
+        print(str(e)); return 'error'
     try:
         if pygame.get_init():
             pygame.event.clear()

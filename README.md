@@ -38,8 +38,8 @@ in a shared room. Your solo autosaved draft is left untouched while you're in a 
 ## Images & sounds (your own assets)
 
 Drop image or sound files anywhere on the page (or click the **📁** chip in the
-header to browse). Uploaded files are written into the runtime's filesystem, so
-ordinary pygame code loads them by name:
+header and choose **Files…** to browse). Uploaded files are written into the runtime's
+filesystem, so ordinary pygame code loads them by name:
 
 ```python
 sprite = pygame.image.load("ship.png").convert_alpha()
@@ -62,6 +62,16 @@ blip.play()                 # call from a key/mouse handler — see the autoplay
   fails you're told the file works for that session only. Assets are **local to
   your browser** — they do not travel with 🔗 Share links or collab rooms. Use the
   popover to remove or clear them.
+
+### Upload a whole folder
+
+Drop a **folder** anywhere on the page (or pick **📁 → Folder…**) and it arrives as a
+folder in the explorer, substructure intact — `.py` files become project modules, images
+and sounds become assets, side by side. Folder names are made Python-safe
+(`My Game/` → `My_Game/`), system junk (`.DS_Store`, `__pycache__/`, `.git/`,
+`node_modules/`, `*.pyc`) is skipped with a console note, dropping onto an existing
+folder merges (per-file `_2`/`-2` suffixes on clashes), and anything over 200 files asks
+first. `test/upload-folder.mjs` is the headless battery for this feature.
 
 `test/assets.mjs` is the headless asset test battery (upload → blit → pixel,
 persistence across reload, sound API path, drop-anywhere). Audio *output* can't be

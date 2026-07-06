@@ -463,6 +463,7 @@
         <div id="treeFoot"></div>
       </div>
       <input id="assetInput" type="file" multiple hidden>
+      <input id="folderInput" type="file" webkitdirectory hidden>
     </section>
 
     <!-- HISTORY -->
@@ -1064,11 +1065,72 @@ function uniquePath(path, exists, sep = "-") {
 const isCodeUpload = (file) =>
   /\.py$/i.test(file.name) && !/^(image|audio|video)\//.test(file.type || "");
 
+// ---- folder upload (spec 2026-07-06) --------------------------------------------------
+// Folder SEGMENTS are sanitized uniformly for BOTH lanes so code + assets share one tree
+// folder (a sanitized segment is a valid Python package name). File LEAVES keep the
+// existing per-lane machinery (uniquePath / isModuleName / asset_ zip-prefix) untouched.
+const sanitizeSegment = (seg) => {
+  const s = seg.trim().replace(/[^A-Za-z0-9_]/g, "_");
+  return s === "" ? "_" : (/^\d/.test(s) ? "_" + s : s);
+};
+// System junk, skipped on BOTH folder pipelines (drop traversal + folder picker), with
+// one console summary line at the call site. A deliberately-selected single file is
+// uploaded as-is (explicit choice wins).
+const isJunkName = (name) =>
+  name.startsWith(".") || name === "__pycache__" || name === "node_modules" ||
+  name === "Thumbs.db" || /\.pyc$/i.test(name);
+
+// Traverse duck-typed FileSystemEntry objects -> [{file, relPath}] (files only — empty
+// dirs vanish). PLATFORM TRAPS encoded here:
+//   - readEntries() must be DRAINED IN A LOOP (Chrome returns <= ~100 entries per call);
+//   - callers collect entries SYNCHRONOUSLY in the drop handler (the DataTransferItemList
+//     is neutered once the handler yields) — see the drop listener below.
+// The returned array carries `.skipped` (junk count — a junk DIRECTORY counts once, its
+// contents are never visited; an UNREADABLE file is skipped + counted, never fatal) and
+// `.renamed` ([[from, to]] folder-segment sanitizations) for the caller's summary lines.
+async function walkEntries(entries) {
+  const out = []; let skipped = 0; const renamed = [];
+  const readAll = (dir) => new Promise((res, rej) => {
+    const reader = dir.createReader(); const all = [];
+    const step = () => reader.readEntries((batch) => {
+      if (!batch.length) return res(all);
+      all.push(...batch); step();
+    }, rej);
+    step();
+  });
+  const fileOf = (entry) => new Promise((res, rej) => entry.file(res, rej));
+  async function walk(entry, prefix) {
+    if (isJunkName(entry.name)) { skipped++; return; }
+    if (entry.isFile) {
+      try { out.push({ file: await fileOf(entry), relPath: prefix + entry.name }); }
+      catch { skipped++; }               // unreadable (locked/network) — skip, don't kill the drop
+    } else if (entry.isDirectory) {
+      const seg = sanitizeSegment(entry.name);
+      if (seg !== entry.name) renamed.push([entry.name, seg]);
+      for (const child of await readAll(entry)) await walk(child, prefix + seg + "/");
+    }
+  }
+  for (const e of entries) if (e) await walk(e, "");
+  out.skipped = skipped; out.renamed = renamed;
+  return out;
+}
+window.__walkEntries = walkEntries;   // test seam — real directory DataTransfers can't be synthesized
+
+// One console note per folder pipeline for junk + sanitize outcomes.
+function noteFolderUpload(items) {
+  if (items.skipped) logLine(`${items.skipped} system file${items.skipped === 1 ? "" : "s"} skipped.`, "sys");
+  for (const [from, to] of items.renamed || [])
+    logLine(`Folder "${from}" arrives as "${to}" (Python-safe name).`, "sys");
+}
+
 // Route ONE file into the SELECTED folder (root default), warning + auto-suffixing on a
-// same-path clash via the unified helper.
-async function routeUpload(file, destFolder = window.selectedFolder) {
+// same-path clash via the unified helper. `relPath` (folder uploads) replaces the bare
+// leaf in the target; "" = today's behavior. Returns true when a CODE file was added
+// (uploadFiles batches ONE flushSave over the whole upload).
+async function routeUpload(file, destFolder = window.selectedFolder, relPath = "") {
   const folder = destFolder ? destFolder.replace(/\/$/, "") : "";
-  const target = folder ? folder + "/" + file.name : file.name;
+  const rel = relPath || file.name;
+  const target = folder ? folder + "/" + rel : rel;
   const isCode = isCodeUpload(file);
   // Code uses an underscore suffix (isModuleName-safe) and yields to ANY same-path file
   // (code or asset); an asset uses a hyphen (decision #6) and only yields to another asset
@@ -1093,18 +1155,32 @@ async function routeUpload(file, destFolder = window.selectedFolder) {
       roomOp(d => { d.files[encPath(final)] = text; if (!d.order.includes(encPath(final))) d.order.push(encPath(final)); });
       project.setActive(final);
       renderTabs();
+      return true;
     } else {
       logLine(`Couldn't add "${final}" — not a valid module path.`, "sys");
     }
   } else {
     await assetFS.add(file, final);   // name override lands the asset at `final`
   }
+  return false;
 }
 
-// The router both live entry points call. Sequential so collisions resolve against the
-// growing project (two same-name uploads in one drop suffix the second).
-async function uploadFiles(files, destFolder = window.selectedFolder) {
-  for (const f of files) await routeUpload(f, destFolder);
+// The router all live entry points call. Sequential so collisions resolve against the
+// growing project (two same-name uploads in one drop suffix the second). Items may be
+// plain Files (legacy callers + tests) or {file, relPath} (folder uploads).
+async function uploadFiles(items, destFolder = window.selectedFolder) {
+  const norm = [...items].map((it) => it instanceof File ? { file: it, relPath: "" } : it);
+  if (norm.length > 200 && !(await confirmModal({
+    title: "Upload files", message: `Upload ${norm.length} files?`, confirmLabel: "Upload" })))
+    return;   // cancel adds NOTHING
+  let addedCode = false;
+  for (const { file, relPath } of norm)
+    if (await routeUpload(file, destFolder, relPath)) addedCode = true;
+  // Persist ONCE per upload (house idiom for every mutating flow; batched — a 200-file
+  // folder must not serialize the project 200 times). Without this an uploaded .py
+  // existed only in memory until some other action flushed — reload lost it
+  // (pre-existing bug, exposed + pinned by upload-folder.mjs FU4b).
+  if (addedCode) flushSave();
 }
 window.uploadFiles = uploadFiles;   // test seam
 
@@ -1145,6 +1221,25 @@ async function updateStorageReadout() {
 document.getElementById('assetInput').addEventListener('change', (e) => {
   uploadFiles([...e.target.files], window.selectedFolder); e.target.value = '';
 });
+document.getElementById('folderInput').addEventListener('change', (e) => {
+  // webkitRelativePath includes the picked folder's own name as its first segment —
+  // exactly the keep-folder-as-folder mapping. Same junk + sanitize pipeline as drops.
+  let skipped = 0; const renamed = [];
+  const items = [...e.target.files].flatMap((f) => {
+    const segs = (f.webkitRelativePath || f.name).split("/");
+    if (segs.some(isJunkName)) { skipped++; return []; }
+    const leaf = segs.pop();
+    const clean = segs.map((s) => {
+      const c = sanitizeSegment(s);
+      if (c !== s && !renamed.some(([a]) => a === s)) renamed.push([s, c]);
+      return c;
+    });
+    return [{ file: f, relPath: [...clean, leaf].join("/") }];
+  });
+  noteFolderUpload(Object.assign(items, { skipped, renamed }));
+  uploadFiles(items, window.selectedFolder);
+  e.target.value = '';
+});
 
 // Drop files anywhere on the page to add them as assets.
 const dropOverlayEl = document.getElementById('dropOverlay');
@@ -1155,9 +1250,19 @@ addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dro
 addEventListener('drop', (e) => {
   if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
   e.preventDefault(); dragDepth = 0; dropOverlayEl.classList.remove('show');
-  // Route by extension into the CURRENT selected folder (root default); code -> project,
-  // assets -> assetFS. Same router as #assetInput so drop-anywhere stays consistent.
-  uploadFiles([...e.dataTransfer.files], window.selectedFolder);
+  // Entries MUST be collected synchronously — the DataTransferItemList is neutered once
+  // this handler yields. Folder-capable browsers expose webkitGetAsEntry; a drop with no
+  // directory (or no entry API — incl. synthesized test DataTransfers) keeps the proven
+  // legacy files path. Route into the CURRENT selected folder either way.
+  const entries = e.dataTransfer.items
+    ? [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean) : [];
+  if (entries.some((en) => en.isDirectory)) {
+    walkEntries(entries)
+      .then((items) => { noteFolderUpload(items); return uploadFiles(items, window.selectedFolder); })
+      .catch((err) => logLine(`Folder upload failed: ${err?.message || err}`, "sys"));
+  } else {
+    uploadFiles([...e.dataTransfer.files], window.selectedFolder);
+  }
 });
 
 // ---------------------------------------------------------------- history UI
@@ -1939,7 +2044,13 @@ async function assetDelete(name) {
 // Explorer header actions
 document.getElementById("newFileBtn").addEventListener("click", newFilePrompt);
 document.getElementById("newFolderBtn").addEventListener("click", newFolderPrompt);
-document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("assetInput").click());
+document.getElementById("uploadBtn").addEventListener("click", (e) => {
+  // Files… vs Folder… (an input can't offer both; webkitdirectory replaces file choice).
+  openPopMenu(e.currentTarget, [
+    { label: "Files…", icon: "📄", run: () => document.getElementById("assetInput").click() },
+    { label: "Folder…", icon: "📁", run: () => document.getElementById("folderInput").click() },
+  ]);
+});
 
 const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
 loadInitialProject();

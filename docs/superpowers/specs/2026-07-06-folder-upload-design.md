@@ -22,7 +22,10 @@
    zip-prefix rules) untouched.
 4. **Junk skiplist**, silently skipped with ONE console summary line (`N system files
    skipped`): any dot-prefixed name (`.DS_Store`, `.git`…), `__pycache__/`, `*.pyc`,
-   `node_modules/`, `Thumbs.db`. Applied on both the drop path and the picker path.
+   `node_modules/`, `Thumbs.db`. Applied on both FOLDER pipelines (drop traversal and the
+   folder picker); a deliberately-selected single file uploads as-is (explicit choice
+   wins). An unreadable file mid-walk is skipped + counted, never fatal. Sanitize-renamed
+   folders get a console note (`Folder "My Game" arrives as "My_Game"`).
 5. **Collisions.** Existing folder at the target: contents MERGE; per-file collisions use
    the existing rules (code `_N` underscore-suffix vs `existsAnywhere`; asset `-N` hyphen
    vs `assetExists`). No folder-suffix scheme.

@@ -139,9 +139,12 @@ const FAKES = `
   await page.waitForFunction(
     () => ['running', 'ready', 'finished'].includes(document.getElementById('status').textContent),
     null, { timeout: 120_000 }).catch(() => fail('FU4b never re-booted'));
-  const back = await page.evaluate(() => window.assetFS.list.some(a => a.name === 'mygame/sprites/ship.png'));
-  if (back) ok('FU4b folder-path asset persists across reload');
-  else fail('FU4b folder-path asset lost on reload');
+  const back = await page.evaluate(() => ({
+    asset: window.assetFS.list.some(a => a.name === 'mygame/sprites/ship.png'),
+    code: !!window.project.files['mygame/main.py'],   // pins the flushSave-on-upload fix
+  }));
+  if (back.asset && back.code) ok('FU4b folder-path asset AND uploaded code file persist across reload');
+  else fail('FU4b reload persistence: ' + JSON.stringify(back));
 }
 
 // ---- FU5: merging into an existing folder suffixes per-file (code _N, asset -N) ---------------
@@ -181,9 +184,6 @@ const FAKES = `
     if (after === before) ok('FU6 201-file upload asks first; cancel adds nothing');
     else fail('FU6 cancel still added files: ' + JSON.stringify({ before, after }));
   }
-  if (sawModal === false) {
-    await page.evaluate(() => {}).catch(() => {});
-  }
 }
 
 // ---- FU7: #uploadBtn opens the shared menu; "Folder…" reaches #folderInput (webkitdirectory) --
@@ -214,6 +214,21 @@ const FAKES = `
   if (wired.input && wired.dir && wired.clicked)
     ok('FU7b "Folder…" clicks #folderInput, which carries webkitdirectory');
   else fail('FU7b folder-input wiring: ' + JSON.stringify(wired));
+}
+
+// ---- FU9: one unreadable file skips + counts — never kills the drop ---------------------------
+{
+  const res = await page.evaluate(`(async () => { ${FAKES}
+    if (typeof window.__walkEntries !== 'function') return { missing: true };
+    const bad = { isFile: true, isDirectory: false, name: 'locked.png',
+                  file: (cb, err) => err(new Error('EACCES')) };
+    const out = await window.__walkEntries([fakeDir('game', [fakeFile('ok.py'), bad, fakeFile('ok2.png')])])
+      .catch((e) => ({ died: String(e) }));
+    return out.died ? out : { paths: out.map(o => o.relPath), skipped: out.skipped };
+  })()`);
+  if (!res.missing && !res.died && JSON.stringify(res.paths) === JSON.stringify(['game/ok.py', 'game/ok2.png']) && res.skipped === 1)
+    ok('FU9 unreadable file is skipped + counted; the rest of the drop survives');
+  else fail('FU9 unreadable-file handling: ' + JSON.stringify(res));
 }
 
 // ---- FU8: plain-File uploads still behave exactly as before (regression guard) -----------------

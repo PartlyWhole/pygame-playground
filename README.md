@@ -106,6 +106,13 @@ while True:
 Click the canvas, press a key, and confirm you **hear** the beep and **see** the
 sprite slide across — that's the manual audio-output check headless tests can't do.
 
+You don't even need a game loop: a straight-line script that `flip()`s several frames
+in a row shows **each** frame (the engine yields to the browser after every top-level
+`display.flip()`/`update()`), just like desktop pygame — so step-by-step teaching demos
+work without a `while` loop. (Keep such straight-line animations in the entry file or a
+function — the *top level of an imported module* runs synchronously and can't yield, so a
+loopless flip sequence there still shows only its last frame.)
+
 Known limitation: an infinite loop inside a helper function that never touches
 `flip`/`tick`/`event.get` can't be auto-yielded and will freeze the tab — game loops and
 top-level loops are always safe, and the Stop button covers those. A game loop inside a

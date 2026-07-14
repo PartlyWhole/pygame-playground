@@ -166,17 +166,48 @@ class _Awaiter(_SyncBarrier):
        main()                        -> await main()      (converted functions)
        asyncio.run(x)                -> await x
        time.sleep(s)                 -> await __sleep__(s)
-       pygame.time.wait|delay(ms)    -> await __sleep__(ms / 1000)"""
+       pygame.time.wait|delay(ms)    -> await __sleep__(ms / 1000)
+       display.flip|update()  (NOT inside a loop)  -> flip(); await __yield__()
+
+    The post-flip yield is what makes a LOOPLESS program animate: a straight-line
+    sequence of flips has no loop for _InjectYield to hang a yield on, so pre-fix every
+    flip ran in one JS turn and the browser only ever composited the LAST frame. Appending
+    a yield after each top-level flip hands control back so the browser paints between
+    them, exactly like desktop pygame shows each flipped frame. Guarded to loop_depth == 0:
+    a flip INSIDE a loop already gets paced by _InjectYield's loop-START yield, and adding
+    a second yield there would ~halve the frame rate (double-yield per iteration)."""
     def __init__(self, converted, time_mods, sleep_names):
         self.converted, self.time_mods, self.sleep_names = converted, time_mods, sleep_names
+        self._loop_depth = 0
     @staticmethod
     def _sleep(secs):
         return ast.Call(func=ast.Name("__sleep__", ast.Load()), args=[secs], keywords=[])
+    @staticmethod
+    def _is_flip(call):
+        f = call.func
+        if not (isinstance(f, ast.Attribute) and f.attr in ("flip", "update")):
+            return False
+        owner = f.value                         # pygame.display.flip()  OR  display.flip()
+        return (isinstance(owner, ast.Attribute) and owner.attr == "display") \
+            or (isinstance(owner, ast.Name) and owner.id == "display")
+    def visit_While(self, node):
+        self._loop_depth += 1
+        self.generic_visit(node)
+        self._loop_depth -= 1
+        return node
+    def visit_For(self, node):
+        self._loop_depth += 1
+        self.generic_visit(node)
+        self._loop_depth -= 1
+        return node
     def visit_Expr(self, node):
         self.generic_visit(node)
         v = node.value
         if not isinstance(v, ast.Call):
             return node
+        # Loopless (top-level control flow) flip -> paint it: keep the flip, then yield.
+        if self._loop_depth == 0 and self._is_flip(v):
+            return [node, copy.deepcopy(_YIELD)]
         f, simple = v.func, len(v.args) == 1 and not v.keywords
         target = None
         if isinstance(f, ast.Name):

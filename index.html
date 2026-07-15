@@ -2997,6 +2997,7 @@ function makeNetwork(lib, key) {
   // host candidates, so tests pass trystero's loopback fallback). Undefined in production.
   if (on.has("p2p") && key) { net.rtc = new lib.TrysteroNetworkAdapter({ roomId: key, config: window.__collabRtcTestConfig }); net.adapters.push(net.rtc); }
   if (on.has("tabs")) { net.bc  = new lib.BroadcastChannelNetworkAdapter();                   net.adapters.push(net.bc); }
+  window.__collabNet = net;   // debug/test seam: transport internals (peerCount, relayStatus, lastJoinError)
   return net;
 }
 

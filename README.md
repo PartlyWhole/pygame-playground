@@ -24,16 +24,43 @@ anyone who opens it edits the same code with you — live keystrokes and colored
 cursors, a "● Live (N)" peer count in the header. Each person still presses **Run** and
 executes pygame locally in their own browser; only the code and cursors are shared.
 
-Built on [Automerge](https://automerge.org/) (a CRDT) syncing over Automerge's free public
-sync server `wss://sync.automerge.org`. Because `automerge-repo` can't be loaded from a CDN
-with no build step, it ships as a committed, pre-built vendor bundle (`vendor/automerge-collab.mjs`,
-built by `build/build.mjs` with esbuild) that GitHub Pages serves statically — the deployed
-site stays 100% static, no backend. The bundle (~2.9 MB) loads lazily only when you start or
-join a room, so the solo playground is unaffected.
+Built on [Automerge](https://automerge.org/) (a CRDT). A room syncs over **three independent,
+free, account-less transports at once** — because Automerge is a CRDT, redundant delivery is
+idempotent, and whichever path works carries the room:
 
-Caveats: the sync server is a free community service — great for playing together,
-occasionally flaky, and **anyone with the room link can edit**. Don't put anything private
-in a shared room. Your solo autosaved draft is left untouched while you're in a room.
+1. **Sync server** — Automerge's free public `wss://sync.automerge.org` (also persists the
+   doc, so a room link still works when its creator is offline).
+2. **Direct peer-to-peer WebRTC** ([trystero](https://github.com/dmotz/trystero)) — browsers
+   find each other via free public Nostr relays (~a dozen, redundant; signaling payloads are
+   encrypted with a room-derived password), then all traffic flows browser-to-browser. This
+   keeps a room fully live even when the sync server is down or slow.
+3. **Same-browser tabs** (BroadcastChannel) — two tabs of one browser sync with zero network.
+
+Joining is patient: one long-lived repo listens on every transport for up to 45 s, adopting
+the project from whichever source answers first (the old behavior — 8 quick retries against
+the sync server alone — is what made joins feel flaky). Hover the "● Live (N)" pill to see
+per-transport status.
+
+**Choosing pathways:** the Collaboration panel's *Connection pathways* section has a checkbox
+per transport, persisted in the browser (localStorage); at least one always stays checked, and
+changes apply the next time you start or join a room. `?transports=ws,p2p,tabs` (any subset)
+overrides the checkboxes for that page load — a debugging/test seam that never persists.
+
+Because `automerge-repo` can't be loaded from a CDN with no build step, it ships as a
+committed, pre-built vendor bundle (`vendor/automerge-collab.mjs`, built by `build/build.mjs`
+with esbuild; the WebRTC adapter is `build/trystero-adapter.mjs`) that GitHub Pages serves
+statically — the deployed site stays 100% static, no backend, no accounts, no API keys. The
+bundle (~3 MB) loads lazily only when you start or join a room, so the solo playground is
+unaffected.
+
+Caveats: **anyone with the room link can edit** — don't put anything private in a shared
+room. Your solo autosaved draft is left untouched while you're in a room. Rare corner case:
+if both peers sit behind symmetric NATs (blocks direct WebRTC) *and* the sync server is down,
+live sync waits until either recovers.
+
+`test/collab.mjs` is the core battery; `test/collab-transports.mjs` proves rooms work with
+the sync server disabled (tabs-only and true P2P-over-WebRTC, asserting zero connections to
+`sync.automerge.org`).
 
 ## Images & sounds (your own assets)
 

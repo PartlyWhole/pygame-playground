@@ -329,8 +329,14 @@
   .sr-seam { position: fixed; left: 2px; bottom: 2px; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; opacity: .01; pointer-events: auto; z-index: 1; }
   #collabPanel { padding: 10px 12px; color: var(--dim); font-size: 13px; line-height: 1.5; }
   #liveDot { font-size: 12.5px; color: var(--accent); padding: 4px 8px; display: inline-block; margin-top: 8px; }
+  #liveDot[hidden] { display: none; }   /* display:inline-block above would otherwise defeat the hidden attribute */
   #liveDot.connecting { color: var(--warn); }
   #liveDot.offline { color: var(--bad); }
+  #transportPrefs { margin-top: 10px; }
+  #transportPrefs summary { cursor: pointer; user-select: none; }
+  #transportPrefs label { display: flex; gap: 7px; align-items: center; margin-top: 6px; cursor: pointer; }
+  #transportPrefs input { accent-color: var(--accent); }
+  #transportPrefs .hint { margin-top: 6px; font-size: 12px; opacity: .75; }
 
   /* ---------- splitters ---------- */
   .split { flex: 0 0 6px; background: var(--edge); cursor: col-resize; transition: background .12s; z-index: 5; }
@@ -488,6 +494,13 @@
         <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
         <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
+        <details id="transportPrefs">
+          <summary>Connection pathways</summary>
+          <label><input type="checkbox" data-transport="ws" checked> Sync server (automerge.org)</label>
+          <label><input type="checkbox" data-transport="p2p" checked> Direct peer-to-peer (WebRTC)</label>
+          <label><input type="checkbox" data-transport="tabs" checked> Same-browser tabs</label>
+          <div class="hint">A room uses every checked pathway; any one working keeps it live. Changes apply the next time you start or join a room.</div>
+        </details>
       </div></div>
     </section>
 
@@ -2943,9 +2956,45 @@ async function loadAutomerge() {
   const AM = await import(new URL("./vendor/automerge-collab.mjs", document.baseURI).href);
   if (AM.ensureReady) await AM.ensureReady();                 // no-op for current bundle; future-proof
   _amCache = { Repo: AM.Repo, Presence: AM.Presence,
-               WebSocketClientAdapter: AM.WebSocketClientAdapter, updateText: AM.updateText };
+               WebSocketClientAdapter: AM.WebSocketClientAdapter,
+               BroadcastChannelNetworkAdapter: AM.BroadcastChannelNetworkAdapter,
+               TrysteroNetworkAdapter: AM.TrysteroNetworkAdapter, updateText: AM.updateText };
   window.__amLoaded = true;   // sentinel for tests
   return _amCache;
+}
+
+// ---------------------------------------------------------------- collab transports
+// A room syncs over THREE independent, free, account-less transports at once — Automerge
+// is a CRDT, so redundant delivery is idempotent and whichever path works carries the room:
+//   ws   — Automerge's public sync server (also persists the doc while nobody's online)
+//   p2p  — direct WebRTC between browsers; peers meet via public Nostr relays (trystero)
+//   tabs — BroadcastChannel; two tabs of the same browser sync with zero network
+// Precedence: `?transports=p2p` (comma list of ws,p2p,tabs — a debugging/test seam that
+// never persists) > the Collaboration-panel checkboxes (localStorage) > all three.
+const TRANSPORTS_KEY = "pygame-playground:transports";
+const ALL_TRANSPORTS = ["ws", "p2p", "tabs"];
+function parseTransports(raw) {
+  if (!raw) return null;
+  const picked = new Set(raw.split(",").map(s => s.trim()).filter(s => ALL_TRANSPORTS.includes(s)));
+  return picked.size ? picked : null;
+}
+function storedTransports() {
+  try { return parseTransports(localStorage.getItem(TRANSPORTS_KEY)); } catch { return null; }
+}
+function collabTransports() {
+  return parseTransports(new URLSearchParams(location.search).get("transports"))
+      ?? storedTransports()
+      ?? new Set(ALL_TRANSPORTS);
+}
+const roomKey = (docUrl) => String(docUrl).replace(/^automerge:/, "");   // trystero room id
+function makeNetwork(lib, key) {
+  const on = collabTransports(), net = { adapters: [] };
+  if (on.has("ws"))   { net.ws  = new lib.WebSocketClientAdapter("wss://sync.automerge.org"); net.adapters.push(net.ws); }
+  // window.__collabRtcTestConfig: test-battery seam (headless Chromium can't resolve mDNS
+  // host candidates, so tests pass trystero's loopback fallback). Undefined in production.
+  if (on.has("p2p") && key) { net.rtc = new lib.TrysteroNetworkAdapter({ roomId: key, config: window.__collabRtcTestConfig }); net.adapters.push(net.rtc); }
+  if (on.has("tabs")) { net.bc  = new lib.BroadcastChannelNetworkAdapter();                   net.adapters.push(net.bc); }
+  return net;
 }
 
 function setLive(state, peers) {
@@ -2954,6 +3003,19 @@ function setLive(state, peers) {
   dot.className = state;                 // '', 'connecting', 'offline'
   document.getElementById("peerCount").textContent = peers ?? 1;
 }
+
+// Hovering the "● N" pill answers "why is/isn't this live?" — which transports are up right
+// now. Polled (not evented) to keep the adapters' internals at arm's length; 5s is plenty.
+function updateLiveTitle() {
+  const dot = document.getElementById("liveDot");
+  if (!collab.active || !collab.net) { dot.title = ""; return; }
+  const bits = [];
+  if (collab.net.ws)  bits.push("sync server: " + (collab.net.ws.socket?.readyState === 1 ? "connected" : "reconnecting…"));
+  if (collab.net.rtc) bits.push("direct p2p: " + collab.net.rtc.peerCount() + " peer(s)");
+  if (collab.net.bc)  bits.push("same-browser tabs: on");
+  dot.title = bits.join("\n");
+}
+setInterval(updateLiveTitle, 5000);
 
 function applyingRemoteSet(fn) { collab.applyingRemote = true; try { fn(); } finally { collab.applyingRemote = false; } }
 
@@ -3192,20 +3254,18 @@ function startPresence() {
   collab.renderPeers = renderPeers;   // S6b: expose so reconcileFromDoc + file-switch can repaint
 }
 
-async function findWithRetry(lib, url, tries = 8, delayMs = 1000) {
-  for (let i = 0; i < tries; i++) {
-    // Create a fresh Repo each attempt: automerge-repo caches "unavailable" state
-    // per Repo instance, so retrying against the same repo returns the cached miss.
-    const repo = new lib.Repo({ network: [new lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
-    try {
-      const h = await repo.find(url);
-      // find() resolves to a ready DocHandle or rejects (unavailable/failed)
-      if (h && !h.isUnavailable?.()) { collab.repo = repo; return h; }
-    } catch (e) { /* relay propagation race — retry */ }
-    try { await repo.shutdown?.(); } catch {}   // close this attempt's socket before retrying
-    await new Promise(r => setTimeout(r, delayMs));
-  }
-  return null;
+// Patient multi-transport find. ONE long-lived Repo (all transports attached) instead of the
+// old 8×1s fresh-Repo-per-attempt loop: `unavailable` is NOT terminal in automerge-repo — the
+// DocHandle state machine transitions unavailable→ready the moment ANY transport delivers the
+// doc (a late sync-server propagation, a WebRTC peer finishing its relay handshake, a same-
+// browser tab). So we grab the handle in whatever state it's in and wait for readiness with a
+// generous deadline, keeping every transport listening the whole time.
+async function findPatiently(repo, url, deadlineMs = 45000) {
+  const handle = await repo.find(url, { allowableStates: ["ready", "unavailable", "requesting", "loading"] });
+  if (handle.isReady?.() || handle.state === "ready") return handle;
+  const ready = handle.whenReady().then(() => handle);
+  const timeout = new Promise(r => setTimeout(() => r(null), deadlineMs));
+  return Promise.race([ready, timeout]);
 }
 
 async function startRoom() {
@@ -3214,9 +3274,17 @@ async function startRoom() {
   // collapse/confirm. A single-file project is the depth-1 case (one encoded key) so
   // collab.mjs keeps passing. `serialize()` returns human paths; encodeProject re-keys.
   const seed = encodeProject(project.serialize());
-  collab.repo = new collab.lib.Repo({ network: [new collab.lib.WebSocketClientAdapter("wss://sync.automerge.org")] });
+  // The p2p adapter needs the room id, which IS the doc id — so create the doc over
+  // ws+tabs first, then attach the p2p transport to the live repo (supported API).
+  collab.net = makeNetwork(collab.lib, null);
+  collab.repo = new collab.lib.Repo({ network: collab.net.adapters });
   collab.handle = collab.repo.create(seed);
   await collab.handle.whenReady();
+  if (collabTransports().has("p2p")) {
+    collab.net.rtc = new collab.lib.TrysteroNetworkAdapter({ roomId: roomKey(collab.handle.url), config: window.__collabRtcTestConfig });
+    collab.net.adapters.push(collab.net.rtc);
+    collab.repo.networkSubsystem.addNetworkAdapter(collab.net.rtc);
+  }
   location.hash = "#room=" + collab.handle.url;
   await enterRoom();
   copyRoomLink();
@@ -3226,9 +3294,16 @@ async function joinRoom(url) {
   collab.starting = true;                       // block a Collaborate click during the join
   try {
     collab.lib = await loadAutomerge();
-    // findWithRetry creates fresh Repo instances per attempt and assigns collab.repo on success
-    collab.handle = await findWithRetry(collab.lib, url);
-    if (!collab.handle) { console.warn("Room not found or unavailable; staying solo."); setLive("offline", 1); return; }
+    setLive("connecting", 1);
+    collab.net = makeNetwork(collab.lib, roomKey(url));
+    collab.repo = new collab.lib.Repo({ network: collab.net.adapters });
+    collab.handle = await findPatiently(collab.repo, url);
+    if (!collab.handle) {
+      console.warn("Room not found on any transport within 45s; staying solo.");
+      try { await collab.repo.shutdown?.(); } catch {}
+      collab.repo = null; collab.net = null;
+      setLive("offline", 1); return;
+    }
     // S6a (G3): adopt the WHOLE multi-file project — same code path as opening a saved
     // multi-file project, sourced from the doc. project.load rebuilds every file's Doc +
     // swapDoc's the active one, so the joiner shows ALL files (no ghost tabs / no lost files).
@@ -3246,6 +3321,7 @@ async function joinRoom(url) {
 async function enterRoom() {
   collab.active = true;
   setLive("", 1);
+  updateLiveTitle();
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
   if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
   renderTabs();   // explorer is always-on; repaint from the (now shared) project.order
@@ -3271,8 +3347,30 @@ document.getElementById("collabBtn").addEventListener("click", () => {
 // The Collaboration panel's visible button delegates to the #collabBtn engine seam.
 document.getElementById("collabStartBtn").addEventListener("click", () => document.getElementById("collabBtn").click());
 
+// Connection-pathway checkboxes ⇄ localStorage. Reflect the SAVED preference (the ?transports=
+// URL seam is transient and never shown or persisted). At least one box must stay checked —
+// unchecking the last one snaps back. All three checked = default = key removed.
+{
+  const boxes = [...document.querySelectorAll('#transportPrefs input[data-transport]')];
+  const saved = storedTransports();
+  if (saved) boxes.forEach(b => { b.checked = saved.has(b.dataset.transport); });
+  boxes.forEach(box => box.addEventListener("change", () => {
+    const on = boxes.filter(b => b.checked).map(b => b.dataset.transport);
+    if (!on.length) { box.checked = true; return; }   // never allow zero pathways
+    try {
+      if (on.length === ALL_TRANSPORTS.length) localStorage.removeItem(TRANSPORTS_KEY);
+      else localStorage.setItem(TRANSPORTS_KEY, on.join(","));
+    } catch {}
+  }));
+}
+
 addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });
 addEventListener("online",  () => { if (collab.active) setLive("", document.getElementById("peerCount").textContent); });
+// Polite exit: tell WebRTC peers + relays we're leaving so remote cursors vanish immediately
+// instead of after the peer-timeout. Fire-and-forget — pagehide can't await. Skipped when the
+// page is merely entering the back/forward cache (persisted): a bfcache restore would revive
+// the app with a dead repo, silently killing the room.
+addEventListener("pagehide", (e) => { if (e.persisted) return; try { collab.repo?.shutdown?.(); } catch {} });
 
 // ---------------------------------------------------------------- explicit window seams (spec §4.1)
 // Every name below is reached by tests via window.* or a bare name that must resolve through

@@ -12,7 +12,7 @@
 // (they mix strings and Uint8Arrays) and sent as one binary payload — trystero chunks
 // and reassembles large payloads itself, so multi-megabyte first syncs are fine.
 import { NetworkAdapter } from "@automerge/automerge-repo/slim";
-import { joinRoom } from "trystero/nostr";
+import { joinRoom, getRelaySockets } from "trystero/nostr";
 import { encode, decode } from "cbor-x";
 
 export class TrysteroNetworkAdapter extends NetworkAdapter {
@@ -40,6 +40,15 @@ export class TrysteroNetworkAdapter extends NetworkAdapter {
   /** live WebRTC peer count — for status UI */
   peerCount() { return this.#byTid.size; }
 
+  /** most recent WebRTC join failure (e.g. NAT traversal impossible) — for status UI */
+  lastJoinError = null;
+
+  /** signaling-relay health: { connected, total } — for status UI */
+  relayStatus() {
+    const socks = Object.values(getRelaySockets() ?? {});
+    return { connected: socks.filter(s => s?.readyState === 1).length, total: socks.length };
+  }
+
   connect(peerId, peerMetadata) {
     this.peerId = peerId;
     this.peerMetadata = peerMetadata;
@@ -52,7 +61,15 @@ export class TrysteroNetworkAdapter extends NetworkAdapter {
 
     this.#room = joinRoom(
       { appId: this.#appId, password: "pw:" + this.#roomId, ...this.#extraConfig },
-      this.#roomId
+      this.#roomId,
+      // Surface WebRTC connection failures (e.g. "could not connect after exchanging SDP" —
+      // the both-sides-behind-symmetric-NAT case) instead of failing silently: the status UI
+      // reads lastJoinError, and the browser console gets the full story. trystero retries
+      // joining on its own after this fires.
+      { onJoinError: (e) => {
+          this.lastJoinError = e?.error ?? String(e);
+          console.warn("collab p2p:", this.lastJoinError);
+        } }
     );
     this.#hello = this.#room.makeAction("amhello");
     this.#sync = this.#room.makeAction("amsync");
@@ -77,6 +94,7 @@ export class TrysteroNetworkAdapter extends NetworkAdapter {
       if (data.kind === "arrive") {
         this.#hello.send({ kind: "welcome", peerId: this.peerId, peerMetadata: this.peerMetadata ?? null }, { target: tid });
       }
+      this.lastJoinError = null;               // a peer made it through — clear stale failure
       this.#byTid.set(tid, data.peerId);
       this.#byPeerId.set(data.peerId, tid);
       if (!this.#announced.has(data.peerId)) {

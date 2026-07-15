@@ -332,6 +332,8 @@
   #liveDot[hidden] { display: none; }   /* display:inline-block above would otherwise defeat the hidden attribute */
   #liveDot.connecting { color: var(--warn); }
   #liveDot.offline { color: var(--bad); }
+  #transportStatus { margin-top: 4px; font-size: 12px; opacity: .8; line-height: 1.6; }
+  #transportStatus .bad { color: var(--bad); }
   #transportPrefs { margin-top: 10px; }
   #transportPrefs summary { cursor: pointer; user-select: none; }
   #transportPrefs label { display: flex; gap: 7px; align-items: center; margin-top: 6px; cursor: pointer; }
@@ -494,6 +496,7 @@
         <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
         <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
+        <div id="transportStatus" hidden></div>
         <details id="transportPrefs">
           <summary>Connection pathways</summary>
           <label><input type="checkbox" data-transport="ws" checked> Sync server (automerge.org)</label>
@@ -3004,16 +3007,35 @@ function setLive(state, peers) {
   document.getElementById("peerCount").textContent = peers ?? 1;
 }
 
-// Hovering the "● N" pill answers "why is/isn't this live?" — which transports are up right
-// now. Polled (not evented) to keep the adapters' internals at arm's length; 5s is plenty.
+// The pathway status line answers "why is/isn't this live?" — which transports are up right
+// now, per line, in the Collaboration panel (and mirrored on the ● pill's tooltip). When
+// direct p2p has 0 peers, it says WHY when it can: signaling relays down vs. WebRTC blocked
+// (NAT) vs. simply nobody met yet. Polled (not evented) to keep the adapters' internals at
+// arm's length; 5s is plenty.
 function updateLiveTitle() {
-  const dot = document.getElementById("liveDot");
-  if (!collab.active || !collab.net) { dot.title = ""; return; }
-  const bits = [];
-  if (collab.net.ws)  bits.push("sync server: " + (collab.net.ws.socket?.readyState === 1 ? "connected" : "reconnecting…"));
-  if (collab.net.rtc) bits.push("direct p2p: " + collab.net.rtc.peerCount() + " peer(s)");
-  if (collab.net.bc)  bits.push("same-browser tabs: on");
-  dot.title = bits.join("\n");
+  const dot = document.getElementById("liveDot"), box = document.getElementById("transportStatus");
+  if (!collab.active || !collab.net) { dot.title = ""; box.hidden = true; return; }
+  const rows = [];
+  if (collab.net.ws) {
+    const up = collab.net.ws.socket?.readyState === 1;
+    rows.push(["sync server: " + (up ? "connected" : "reconnecting…"), !up]);
+  }
+  if (collab.net.rtc) {
+    const n = collab.net.rtc.peerCount(), relays = collab.net.rtc.relayStatus();
+    let note = n + (n === 1 ? " peer" : " peers"), bad = false;
+    if (!n && relays.total && !relays.connected) { note += " — signaling relays unreachable"; bad = true; }
+    else if (!n && collab.net.rtc.lastJoinError)  { note += " — a direct connection couldn't be made (firewall/NAT); other pathways still carry the room"; bad = true; }
+    rows.push([`direct p2p: ${note}` + (relays.total ? ` (relays ${relays.connected}/${relays.total})` : ""), bad]);
+  }
+  if (collab.net.bc) rows.push(["same-browser tabs: on", false]);
+  dot.title = rows.map(r => r[0]).join("\n");
+  box.hidden = false;
+  box.replaceChildren(...rows.map(([text, bad]) => {
+    const d = document.createElement("div");
+    if (bad) d.className = "bad";
+    d.textContent = text;
+    return d;
+  }));
 }
 setInterval(updateLiveTitle, 5000);
 

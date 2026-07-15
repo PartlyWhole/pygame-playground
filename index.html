@@ -495,14 +495,15 @@
       <div class="side-body"><div id="collabPanel">
         <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
         <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
+        <button id="collabLeaveBtn" class="btn" style="width:100%;justify-content:center;margin-top:6px" hidden>🚪 Leave room</button>
         <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
         <div id="transportStatus" hidden></div>
         <details id="transportPrefs">
-          <summary>Connection pathways</summary>
+          <summary>Room pathways</summary>
           <label><input type="checkbox" data-transport="ws" checked> Sync server (automerge.org)</label>
           <label><input type="checkbox" data-transport="p2p" checked> Direct peer-to-peer (WebRTC)</label>
           <label><input type="checkbox" data-transport="tabs" checked> Same-browser tabs</label>
-          <div class="hint">A room uses every checked pathway; any one working keeps it live. Changes apply the next time you start or join a room.</div>
+          <div class="hint">Applies to rooms <em>you</em> create: the link carries your choice, so everyone who joins connects the same way — nothing to configure on their end.</div>
         </details>
       </div></div>
     </section>
@@ -2068,10 +2069,15 @@ document.getElementById("uploadBtn").addEventListener("click", (e) => {
   ]);
 });
 
-const roomFromHash = location.hash.startsWith("#room=") ? location.hash.slice(6) : null;
+// Room links look like "#room=<automerge url>[&via=p2p,tabs]" — the creator's pathway choice
+// travels IN the link, so joiners connect the same way with zero settings of their own.
+// No &via (older links / all pathways) = everything on.
+const _roomMatch = /^#room=([^&]+)(?:&via=([a-z0-9,]+))?$/.exec(location.hash);   // [a-z0-9]: "p2p" has a digit!
+const roomFromHash = _roomMatch ? _roomMatch[1] : null;
+const viaFromHash  = _roomMatch?.[2] ?? null;
 loadInitialProject();
 renderTabs();
-if (roomFromHash) joinRoom(roomFromHash).catch((e) => console.error("join failed", e));
+if (roomFromHash) joinRoom(roomFromHash, viaFromHash).catch((e) => console.error("join failed", e));
 
 // Build the initial project. Precedence: #room (multi-file project, joined+adopted async
 // above) > saved project > legacy code > default example.
@@ -2972,8 +2978,10 @@ async function loadAutomerge() {
 //   ws   — Automerge's public sync server (also persists the doc while nobody's online)
 //   p2p  — direct WebRTC between browsers; peers meet via public Nostr relays (trystero)
 //   tabs — BroadcastChannel; two tabs of the same browser sync with zero network
-// Precedence: `?transports=p2p` (comma list of ws,p2p,tabs — a debugging/test seam that
-// never persists) > the Collaboration-panel checkboxes (localStorage) > all three.
+// THE CREATOR DECIDES the room's pathways: their checkboxes apply when creating a room and
+// ride along in the link (&via=…), so joiners connect the same way automatically — joiners'
+// own checkboxes are ignored. Precedence, both roles: `?transports=` (a debugging/test seam
+// that never persists) > role source (creator: checkboxes; joiner: link) > all three.
 const TRANSPORTS_KEY = "pygame-playground:transports";
 const ALL_TRANSPORTS = ["ws", "p2p", "tabs"];
 function parseTransports(raw) {
@@ -2984,14 +2992,12 @@ function parseTransports(raw) {
 function storedTransports() {
   try { return parseTransports(localStorage.getItem(TRANSPORTS_KEY)); } catch { return null; }
 }
-function collabTransports() {
-  return parseTransports(new URLSearchParams(location.search).get("transports"))
-      ?? storedTransports()
-      ?? new Set(ALL_TRANSPORTS);
-}
+const paramTransports = () => parseTransports(new URLSearchParams(location.search).get("transports"));
+const creationTransports = () => paramTransports() ?? storedTransports() ?? new Set(ALL_TRANSPORTS);
+const joinTransports = (via) => paramTransports() ?? parseTransports(via) ?? new Set(ALL_TRANSPORTS);
 const roomKey = (docUrl) => String(docUrl).replace(/^automerge:/, "");   // trystero room id
-function makeNetwork(lib, key) {
-  const on = collabTransports(), net = { adapters: [] };
+function makeNetwork(lib, key, on) {
+  const net = { adapters: [] };
   if (on.has("ws"))   { net.ws  = new lib.WebSocketClientAdapter("wss://sync.automerge.org"); net.adapters.push(net.ws); }
   // window.__collabRtcTestConfig: test-battery seam (headless Chromium can't resolve mDNS
   // host candidates, so tests pass trystero's loopback fallback). Undefined in production.
@@ -3299,26 +3305,29 @@ async function startRoom() {
   const seed = encodeProject(project.serialize());
   // The p2p adapter needs the room id, which IS the doc id — so create the doc over
   // ws+tabs first, then attach the p2p transport to the live repo (supported API).
-  collab.net = makeNetwork(collab.lib, null);
+  const on = creationTransports();
+  collab.net = makeNetwork(collab.lib, null, on);
   collab.repo = new collab.lib.Repo({ network: collab.net.adapters });
   collab.handle = collab.repo.create(seed);
   await collab.handle.whenReady();
-  if (collabTransports().has("p2p")) {
+  if (on.has("p2p")) {
     collab.net.rtc = new collab.lib.TrysteroNetworkAdapter({ roomId: roomKey(collab.handle.url), config: window.__collabRtcTestConfig });
     collab.net.adapters.push(collab.net.rtc);
     collab.repo.networkSubsystem.addNetworkAdapter(collab.net.rtc);
   }
-  location.hash = "#room=" + collab.handle.url;
+  // All three pathways = the default = a clean link; anything narrower rides in &via= so
+  // joiners connect the creator's way automatically.
+  location.hash = "#room=" + collab.handle.url + (on.size === ALL_TRANSPORTS.length ? "" : "&via=" + [...on].join(","));
   await enterRoom();
   copyRoomLink();
 }
 
-async function joinRoom(url) {
+async function joinRoom(url, via) {
   collab.starting = true;                       // block a Collaborate click during the join
   try {
     collab.lib = await loadAutomerge();
     setLive("connecting", 1);
-    collab.net = makeNetwork(collab.lib, roomKey(url));
+    collab.net = makeNetwork(collab.lib, roomKey(url), joinTransports(via));
     collab.repo = new collab.lib.Repo({ network: collab.net.adapters });
     collab.handle = await findPatiently(collab.repo, url);
     if (!collab.handle) {
@@ -3346,6 +3355,11 @@ async function enterRoom() {
   setLive("", 1);
   updateLiveTitle();
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
+  // In-room panel: the primary button becomes "copy link", Leave appears, and the pathway
+  // checkboxes hide (a room's pathways are fixed at creation — nothing to configure here).
+  document.getElementById("collabStartBtn").textContent = "🔗 Copy room link";
+  document.getElementById("collabLeaveBtn").hidden = false;
+  document.getElementById("transportPrefs").hidden = true;
   if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
   renderTabs();   // explorer is always-on; repaint from the (now shared) project.order
 }
@@ -3369,6 +3383,17 @@ document.getElementById("collabBtn").addEventListener("click", () => {
 });
 // The Collaboration panel's visible button delegates to the #collabBtn engine seam.
 document.getElementById("collabStartBtn").addEventListener("click", () => document.getElementById("collabBtn").click());
+
+// Leave room: confirm, tell peers (repo.shutdown → trystero leave + socket close), then
+// reload without the hash — loadInitialProject restores the solo autosaved project, which
+// was never touched while in the room. A full reload is deliberate: it tears down every
+// room binding (editor hooks, presence, markers) with zero leftover state.
+document.getElementById("collabLeaveBtn").addEventListener("click", async () => {
+  if (!(await confirmModal({ title: "Leave room", message: "Leave this live room? Your own saved project will be restored. Others keep collaborating without you.", confirmLabel: "Leave" }))) return;
+  try { collab.repo?.shutdown?.(); } catch {}
+  history.replaceState(null, "", location.pathname + location.search);   // drop #room=… before reload
+  location.reload();
+});
 
 // Connection-pathway checkboxes ⇄ localStorage. Reflect the SAVED preference (the ?transports=
 // URL seam is transient and never shown or persisted). At least one box must stay checked —

@@ -4,7 +4,7 @@
 //   direct data channels. Needs internet for the relays; if they're unreachable the
 //   scenario reports SKIPPED (like collab-multifile's relay probe) rather than failing.
 // Both scenarios assert that NO websocket to sync.automerge.org is ever opened.
-import { launch } from './_harness.mjs';
+import { launch, acceptModal } from './_harness.mjs';
 const b = await launch();
 const fail = (m) => { console.error('FAIL:', m); process.exitCode = 1; };
 
@@ -55,18 +55,23 @@ async function scenario(name, transports, { adoptTimeout, skipOnTimeout }) {
   }
 }
 
-// The Collaboration-panel "Connection pathways" checkboxes: persist to localStorage,
-// snap back when the last one is unchecked, and actually gate the room (no URL param).
+// The creator's "Room pathways" checkboxes: persist to localStorage, snap back when the
+// last one is unchecked, ride in the link as &via=, gate a JOINER IN A DIFFERENT BROWSER
+// CONTEXT (no shared localStorage — only the link can carry the choice), and the joiner
+// can leave the room cleanly.
 async function uiPrefsScenario() {
   const name = 'ui-prefs';
-  const ctx = await b.newContext();
+  const ctxA = await b.newContext();
+  const ctxB = await b.newContext();
   try {
-    await ctx.addInitScript(() => { window.__collabRtcTestConfig = { _test_only_mdnsHostFallbackToLoopback: true }; });
     const syncServerHits = [];
-    const A = await ctx.newPage();
+    for (const c of [ctxA, ctxB]) await c.addInitScript(() => { window.__collabRtcTestConfig = { _test_only_mdnsHostFallbackToLoopback: true }; });
+    const A = await ctxA.newPage();
     A.on('websocket', ws => { if (ws.url().includes('sync.automerge.org')) syncServerHits.push(ws.url()); });
     await A.goto('http://localhost:8923/');
-    await A.waitForFunction(() => document.getElementById('collabBtn') !== null, null, { timeout: 30000 });
+    // window.run is assigned at the END of app startup — waiting on it (not #collabBtn, which
+    // exists in static markup) guarantees the checkbox listeners are attached before we click.
+    await A.waitForFunction(() => typeof window.run === 'function', null, { timeout: 30000 });
 
     // uncheck "Sync server" → localStorage records the remaining pathways
     const stored = await A.evaluate(() => {
@@ -87,21 +92,34 @@ async function uiPrefsScenario() {
     console.log(`[${name}] last-checkbox snap-back OK`);
     await A.evaluate(() => { document.querySelector('#transportPrefs input[data-transport="p2p"]').click(); }); // back to p2p,tabs
 
-    // start a room WITHOUT any ?transports= param — the saved preference must gate it
+    // start a room WITHOUT any ?transports= param — the checkboxes must gate it AND the link must carry &via=
     await A.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('via_ui_prefs = 1'));
     await A.click('#collabBtn');
     const hash = await A.waitForFunction(() => location.hash.startsWith('#room=') ? location.hash : false, null, { timeout: 30000 }).then(h => h.jsonValue());
+    if (!hash.includes('&via=p2p,tabs')) return fail(`[${name}] link missing &via= (got ${hash.slice(0, 60)}…)`);
+    console.log(`[${name}] link carries pathways:`, hash.slice(hash.indexOf('&via=')));
 
-    const B = await ctx.newPage();   // same context → same localStorage preference
+    // join from a DIFFERENT context: fresh localStorage, so only &via= can gate the joiner.
+    // tabs (BroadcastChannel) does not cross contexts — this join is carried by p2p alone.
+    const B = await ctxB.newPage();
     B.on('websocket', ws => { if (ws.url().includes('sync.automerge.org')) syncServerHits.push(ws.url()); });
     await B.goto('http://localhost:8923/' + hash);
-    await B.waitForFunction(() => document.querySelector('.CodeMirror')?.CodeMirror.getValue().includes('via_ui_prefs'), null, { timeout: 20000 })
-      .then(() => console.log(`[${name}] JOIN OK under saved preference`), () => fail(`[${name}] join failed under saved preference`));
+    await B.waitForFunction(() => document.querySelector('.CodeMirror')?.CodeMirror.getValue().includes('via_ui_prefs'), null, { timeout: 60000 })
+      .then(() => console.log(`[${name}] JOIN OK — fresh-context joiner gated by the link`), () => fail(`[${name}] fresh-context join failed`));
 
-    if (syncServerHits.length) fail(`[${name}] saved preference did not gate the sync server (${syncServerHits.length} websocket(s))`);
-    else console.log(`[${name}] sync-server websockets: 0 (checkbox gating OK)`);
+    if (syncServerHits.length) fail(`[${name}] &via= did not gate the sync server (${syncServerHits.length} websocket(s))`);
+    else console.log(`[${name}] sync-server websockets: 0 (link gating OK)`);
+
+    // leave room: open the Collaboration panel (rail tab), then Leave → confirm → back to solo
+    const leaveVisible = await B.evaluate(() => !document.getElementById('collabLeaveBtn').hidden);
+    if (!leaveVisible) return fail(`[${name}] Leave button not visible in room`);
+    await B.click('#tab-collab');
+    await B.click('#collabLeaveBtn');
+    await acceptModal(B);
+    await B.waitForFunction(() => !location.hash && document.getElementById('collabLeaveBtn')?.hidden && document.getElementById('liveDot')?.hidden, null, { timeout: 20000 })
+      .then(() => console.log(`[${name}] LEAVE OK — back to solo, hash cleared`), () => fail(`[${name}] leave did not return to solo`));
   } finally {
-    await ctx.close();
+    await ctxA.close(); await ctxB.close();
   }
 }
 

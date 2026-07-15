@@ -41,10 +41,14 @@ the project from whichever source answers first (the old behavior — 8 quick re
 the sync server alone — is what made joins feel flaky). Hover the "● Live (N)" pill to see
 per-transport status.
 
-**Choosing pathways:** the Collaboration panel's *Connection pathways* section has a checkbox
-per transport, persisted in the browser (localStorage); at least one always stays checked, and
-changes apply the next time you start or join a room. `?transports=ws,p2p,tabs` (any subset)
-overrides the checkboxes for that page load — a debugging/test seam that never persists.
+**The creator decides the room's pathways.** The Collaboration panel's *Room pathways*
+checkboxes (persisted in the browser; at least one always stays checked) apply to rooms *you*
+create, and the choice rides in the link (`…#room=<id>&via=p2p,tabs`; all three = no suffix) —
+so people who join connect the creator's way automatically, with nothing to configure on
+their end. Joiners' own checkboxes are ignored. In a room, the panel shows **🔗 Copy room
+link** and **🚪 Leave room** (leaving restores your own saved solo project untouched; the
+others keep collaborating). `?transports=ws,p2p,tabs` (any subset) overrides everything for
+that page load — a debugging/test seam that never persists.
 
 Because `automerge-repo` can't be loaded from a CDN with no build step, it ships as a
 committed, pre-built vendor bundle (`vendor/automerge-collab.mjs`, built by `build/build.mjs`

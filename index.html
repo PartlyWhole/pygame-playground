@@ -332,6 +332,11 @@
   #liveDot[hidden] { display: none; }   /* display:inline-block above would otherwise defeat the hidden attribute */
   #liveDot.connecting { color: var(--warn); }
   #liveDot.offline { color: var(--bad); }
+  /* The hidden attribute must ALWAYS win inside the collab panel: .btn and #liveDot set
+     their own display, which would otherwise defeat it (the "Leave room visible before any
+     room exists" bug). Scoped !important kills the whole bug class, not one instance. */
+  #collabPanel [hidden] { display: none !important; }
+  #collabError { margin-top: 8px; font-size: 12.5px; color: var(--bad); line-height: 1.5; }
   #transportStatus { margin-top: 4px; font-size: 12px; opacity: .8; line-height: 1.6; }
   #transportStatus .bad { color: var(--bad); }
   #transportPrefs { margin-top: 10px; }
@@ -492,13 +497,16 @@
     <section class="panelview" id="panel-collab" data-panel="collab" role="tabpanel" aria-labelledby="tab-collab" hidden>
       <div class="side-head"><span>Collaboration</span></div>
       <!-- Static intro is in the markup below; the engine seam #collabBtn keeps its own click listener. -->
+      <!-- The panel is a 3-state machine (solo / connecting / live); renderCollabPanel()
+           shows each element iff the current state is in its data-when list. -->
       <div class="side-body"><div id="collabPanel">
-        <div>Invite others to edit this file together in real time. Everyone runs against the same code.</div>
-        <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px">👥 Collaborate</button>
-        <button id="collabLeaveBtn" class="btn" style="width:100%;justify-content:center;margin-top:6px" hidden>🚪 Leave room</button>
-        <span id="liveDot" hidden>● <span id="peerCount">1</span></span>
-        <div id="transportStatus" hidden></div>
-        <details id="transportPrefs">
+        <div data-when="solo connecting">Invite others to edit this file together in real time. Everyone runs against the same code.</div>
+        <button id="collabStartBtn" class="btn primary" style="width:100%;justify-content:center;margin-top:8px" data-when="solo connecting live">👥 Collaborate</button>
+        <button id="collabLeaveBtn" class="btn" style="width:100%;justify-content:center;margin-top:6px" data-when="live" hidden>🚪 Leave room</button>
+        <div id="collabError" hidden></div><!-- no data-when: shown only explicitly, on failure -->
+        <span id="liveDot" data-when="live" hidden>● <span id="peerCount">1</span></span>
+        <div id="transportStatus" data-when="live" hidden></div>
+        <details id="transportPrefs" data-when="solo">
           <summary>Room pathways</summary>
           <label><input type="checkbox" data-transport="ws" checked> Sync server (automerge.org)</label>
           <label><input type="checkbox" data-transport="p2p" checked> Direct peer-to-peer (WebRTC)</label>
@@ -2077,7 +2085,13 @@ const roomFromHash = _roomMatch ? _roomMatch[1] : null;
 const viaFromHash  = _roomMatch?.[2] ?? null;
 loadInitialProject();
 renderTabs();
-if (roomFromHash) joinRoom(roomFromHash, viaFromHash).catch((e) => console.error("join failed", e));
+if (roomFromHash) {
+  renderCollabPanel("connecting", { verb: "join" });   // hoisted; panel shows joining feedback immediately
+  joinRoom(roomFromHash, viaFromHash).catch((e) => {
+    console.error("join failed", e);
+    collabFail("Couldn't join this room — reload to retry, or ask for a fresh link.");
+  });
+}
 
 // Build the initial project. Precedence: #room (multi-file project, joined+adopted async
 // above) > saved project > legacy code > default example.
@@ -3007,6 +3021,32 @@ function makeNetwork(lib, key, on) {
   return net;
 }
 
+// ---------------------------------------------------------------- collab panel state machine
+// The panel is in exactly one of three states; every element declares (via data-when) which
+// states it belongs to, and this is the ONLY place panel visibility changes. Scattered
+// ad-hoc hidden-flips are what let "Leave room" render before any room existed.
+//   solo        — intro + Collaborate + Room pathways
+//   connecting  — Collaborate disabled, showing progress wording
+//   live        — Copy link + Leave + ● N + per-pathway status
+function renderCollabPanel(state, { verb = "create" } = {}) {
+  collab.panelState = state;
+  for (const el of document.querySelectorAll("#collabPanel [data-when]"))
+    el.hidden = !el.dataset.when.split(" ").includes(state);
+  const btn = document.getElementById("collabStartBtn");
+  btn.disabled = state === "connecting";
+  btn.textContent = state === "live" ? "🔗 Copy room link"
+                  : state === "connecting" ? (verb === "join" ? "⏳ Joining room…" : "⏳ Creating room…")
+                  : "👥 Collaborate";
+  if (state !== "solo") document.getElementById("collabError").hidden = true;
+}
+// Failure lands the user back in solo WITH an explanation in the panel (not just the console).
+function collabFail(message) {
+  renderCollabPanel("solo");
+  const e = document.getElementById("collabError");
+  e.textContent = message;
+  e.hidden = false;
+}
+
 function setLive(state, peers) {
   const dot = document.getElementById("liveDot");
   dot.hidden = !collab.active;
@@ -3334,7 +3374,9 @@ async function joinRoom(url, via) {
       console.warn("Room not found on any transport within 45s; staying solo.");
       try { await collab.repo.shutdown?.(); } catch {}
       collab.repo = null; collab.net = null;
-      setLive("offline", 1); return;
+      setLive("offline", 1);
+      collabFail("Couldn't reach this room — the person who created it may have closed their tab, or the link may be stale. Ask them for a fresh link and reload.");
+      return;
     }
     // S6a (G3): adopt the WHOLE multi-file project — same code path as opening a saved
     // multi-file project, sourced from the doc. project.load rebuilds every file's Doc +
@@ -3355,11 +3397,7 @@ async function enterRoom() {
   setLive("", 1);
   updateLiveTitle();
   document.getElementById("collabBtn").textContent = "🔗 Copy room link";
-  // In-room panel: the primary button becomes "copy link", Leave appears, and the pathway
-  // checkboxes hide (a room's pathways are fixed at creation — nothing to configure here).
-  document.getElementById("collabStartBtn").textContent = "🔗 Copy room link";
-  document.getElementById("collabLeaveBtn").hidden = false;
-  document.getElementById("transportPrefs").hidden = true;
+  renderCollabPanel("live");
   if (!collab.bound) { collab.bound = true; bindEditor(); startPresence(); }  // attach listeners once
   renderTabs();   // explorer is always-on; repaint from the (now shared) project.order
 }
@@ -3377,9 +3415,13 @@ document.getElementById("collabBtn").addEventListener("click", () => {
   if (collab.active) return copyRoomLink();
   if (collab.starting) return;                 // ignore re-entrant clicks while a room is being set up
   collab.starting = true;
+  renderCollabPanel("connecting", { verb: "create" });
   setLive("connecting", 1);
-  startRoom().catch((e) => { console.error(e); setLive("offline", 1); })
-             .finally(() => { collab.starting = false; });
+  startRoom().catch((e) => {
+    console.error(e);
+    setLive("offline", 1);
+    collabFail("Couldn't create the room — check your internet connection and try again.");
+  }).finally(() => { collab.starting = false; });
 });
 // The Collaboration panel's visible button delegates to the #collabBtn engine seam.
 document.getElementById("collabStartBtn").addEventListener("click", () => document.getElementById("collabBtn").click());

@@ -73,6 +73,15 @@ async function uiPrefsScenario() {
     // exists in static markup) guarantees the checkbox listeners are attached before we click.
     await A.waitForFunction(() => typeof window.run === 'function', null, { timeout: 30000 });
 
+    // SOLO state: room-only controls must be INVISIBLE BY COMPUTED STYLE, not just [hidden] —
+    // .btn/#liveDot set their own display, which once defeated the hidden attribute and left
+    // "Leave room" clickable before any room existed.
+    const soloLeaks = await A.evaluate(() =>
+      ['collabLeaveBtn', 'liveDot', 'transportStatus'].filter(id =>
+        getComputedStyle(document.getElementById(id)).display !== 'none'));
+    if (soloLeaks.length) return fail(`[${name}] room-only controls visible in solo state: ${soloLeaks.join(', ')}`);
+    console.log(`[${name}] solo state: room-only controls invisible (computed style)`);
+
     // uncheck "Sync server" → localStorage records the remaining pathways
     const stored = await A.evaluate(() => {
       document.querySelector('#transportPrefs input[data-transport="ws"]').click();
@@ -110,13 +119,23 @@ async function uiPrefsScenario() {
     if (syncServerHits.length) fail(`[${name}] &via= did not gate the sync server (${syncServerHits.length} websocket(s))`);
     else console.log(`[${name}] sync-server websockets: 0 (link gating OK)`);
 
+    // LIVE state: Leave + status visible, pathway checkboxes hidden, button relabeled
+    const live = await B.evaluate(() => ({
+      leave: getComputedStyle(document.getElementById('collabLeaveBtn')).display !== 'none',
+      prefsHidden: getComputedStyle(document.getElementById('transportPrefs')).display === 'none',
+      label: document.getElementById('collabStartBtn').textContent,
+    }));
+    if (!live.leave || !live.prefsHidden || !live.label.includes('Copy room link'))
+      return fail(`[${name}] live-state panel wrong: ${JSON.stringify(live)}`);
+    console.log(`[${name}] live state: Leave shown, pathways hidden, button = copy link`);
+
     // leave room: open the Collaboration panel (rail tab), then Leave → confirm → back to solo
-    const leaveVisible = await B.evaluate(() => !document.getElementById('collabLeaveBtn').hidden);
-    if (!leaveVisible) return fail(`[${name}] Leave button not visible in room`);
     await B.click('#tab-collab');
     await B.click('#collabLeaveBtn');
     await acceptModal(B);
-    await B.waitForFunction(() => !location.hash && document.getElementById('collabLeaveBtn')?.hidden && document.getElementById('liveDot')?.hidden, null, { timeout: 20000 })
+    await B.waitForFunction(() => !location.hash
+      && getComputedStyle(document.getElementById('collabLeaveBtn')).display === 'none'
+      && getComputedStyle(document.getElementById('liveDot')).display === 'none', null, { timeout: 20000 })
       .then(() => console.log(`[${name}] LEAVE OK — back to solo, hash cleared`), () => fail(`[${name}] leave did not return to solo`));
   } finally {
     await ctxA.close(); await ctxB.close();

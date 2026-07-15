@@ -45,9 +45,12 @@ per-transport status.
 checkboxes (persisted in the browser; at least one always stays checked) apply to rooms *you*
 create, and the choice rides in the link (`…#room=<id>&via=p2p,tabs`; all three = no suffix) —
 so people who join connect the creator's way automatically, with nothing to configure on
-their end. Joiners' own checkboxes are ignored. In a room, the panel shows **🔗 Copy room
-link** and **🚪 Leave room** (leaving restores your own saved solo project untouched; the
-others keep collaborating). `?transports=ws,p2p,tabs` (any subset) overrides everything for
+their end. Joiners' own checkboxes are ignored. The panel is a strict three-state machine —
+solo (Collaborate + pathway choices), connecting ("⏳ Creating/Joining room…", button
+disabled), live (**🔗 Copy room link**, **🚪 Leave room**, per-pathway status) — so controls
+only appear in states where they're actionable, and a failed create/join lands back in solo
+with a plain-language explanation in the panel. Leaving restores your own saved solo project
+untouched; the others keep collaborating. `?transports=ws,p2p,tabs` (any subset) overrides everything for
 that page load — a debugging/test seam that never persists.
 
 Because `automerge-repo` can't be loaded from a CDN with no build step, it ships as a

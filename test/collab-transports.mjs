@@ -82,24 +82,22 @@ async function uiPrefsScenario() {
     if (soloLeaks.length) return fail(`[${name}] room-only controls visible in solo state: ${soloLeaks.join(', ')}`);
     console.log(`[${name}] solo state: room-only controls invisible (computed style)`);
 
-    // uncheck "Sync server" → localStorage records the remaining pathways
+    // pick "Peer-to-peer only" → localStorage records the mapped transport list
     const stored = await A.evaluate(() => {
-      document.querySelector('#transportPrefs input[data-transport="ws"]').click();
+      document.querySelector('#roomType input[value="p2p"]').click();
       return localStorage.getItem('pygame-playground:transports');
     });
     if (stored !== 'p2p,tabs') return fail(`[${name}] expected stored "p2p,tabs", got ${JSON.stringify(stored)}`);
-    console.log(`[${name}] checkbox persisted:`, stored);
+    console.log(`[${name}] room type persisted:`, stored);
 
-    // unchecking the remaining two must snap the last one back (never zero pathways)
-    const snap = await A.evaluate(() => {
-      document.querySelector('#transportPrefs input[data-transport="p2p"]').click();
-      document.querySelector('#transportPrefs input[data-transport="tabs"]').click();
-      return { tabs: document.querySelector('#transportPrefs input[data-transport="tabs"]').checked,
-               stored: localStorage.getItem('pygame-playground:transports') };
+    // the other room types map correctly; "anywhere" (the default) clears the key
+    const map = await A.evaluate(() => {
+      const pick = v => { document.querySelector(`#roomType input[value="${v}"]`).click(); return localStorage.getItem('pygame-playground:transports'); };
+      return { tabs: pick('tabs'), anywhere: pick('anywhere'), back: pick('p2p') };
     });
-    if (!snap.tabs || snap.stored !== 'tabs') return fail(`[${name}] last-checkbox guard broken: ${JSON.stringify(snap)}`);
-    console.log(`[${name}] last-checkbox snap-back OK`);
-    await A.evaluate(() => { document.querySelector('#transportPrefs input[data-transport="p2p"]').click(); }); // back to p2p,tabs
+    if (map.tabs !== 'tabs' || map.anywhere !== null || map.back !== 'p2p,tabs')
+      return fail(`[${name}] room-type mapping wrong: ${JSON.stringify(map)}`);
+    console.log(`[${name}] room-type mapping OK (tabs/anywhere/p2p)`);
 
     // start a room WITHOUT any ?transports= param — the checkboxes must gate it AND the link must carry &via=
     await A.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('via_ui_prefs = 1'));
@@ -122,12 +120,17 @@ async function uiPrefsScenario() {
     // LIVE state: Leave + status visible, pathway checkboxes hidden, button relabeled
     const live = await B.evaluate(() => ({
       leave: getComputedStyle(document.getElementById('collabLeaveBtn')).display !== 'none',
-      prefsHidden: getComputedStyle(document.getElementById('transportPrefs')).display === 'none',
+      prefsHidden: getComputedStyle(document.getElementById('roomType')).display === 'none',
       label: document.getElementById('collabStartBtn').textContent,
     }));
     if (!live.leave || !live.prefsHidden || !live.label.includes('Copy room link'))
       return fail(`[${name}] live-state panel wrong: ${JSON.stringify(live)}`);
-    console.log(`[${name}] live state: Leave shown, pathways hidden, button = copy link`);
+    console.log(`[${name}] live state: Leave shown, room-type picker hidden, button = copy link`);
+
+    // the REMAINING peer (A) must show 2 before B leaves — this A↔B link is p2p-only (tabs
+    // don't cross browser contexts), so this exercises exactly the reported p2p leave path.
+    await A.waitForFunction(() => document.getElementById('peerCount').textContent === '2', null, { timeout: 30000 })
+      .then(() => console.log(`[${name}] A sees 2 peers before leave`), () => fail(`[${name}] A never saw B join (peerCount stayed 1)`));
 
     // leave room: open the Collaboration panel (rail tab), then Leave → confirm → back to solo
     await B.click('#tab-collab');
@@ -137,6 +140,11 @@ async function uiPrefsScenario() {
       && getComputedStyle(document.getElementById('collabLeaveBtn')).display === 'none'
       && getComputedStyle(document.getElementById('liveDot')).display === 'none', null, { timeout: 20000 })
       .then(() => console.log(`[${name}] LEAVE OK — back to solo, hash cleared`), () => fail(`[${name}] leave did not return to solo`));
+
+    // THE BUG: after B leaves, A's count must drop back to 1 (goodbye → instant, else ≤15s TTL).
+    // 25s window covers the TTL-prune fallback even if the goodbye didn't flush over p2p.
+    await A.waitForFunction(() => document.getElementById('peerCount').textContent === '1', null, { timeout: 25000 })
+      .then(() => console.log(`[${name}] A count returned to 1 after B left (no stuck peer)`), () => fail(`[${name}] A still shows a departed peer — count did not decrement`));
   } finally {
     await ctxA.close(); await ctxB.close();
   }

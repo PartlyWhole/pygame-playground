@@ -41,11 +41,12 @@ the project from whichever source answers first (the old behavior — 8 quick re
 the sync server alone — is what made joins feel flaky). Hover the "● Live (N)" pill to see
 per-transport status.
 
-**The creator decides the room's pathways.** The Collaboration panel's *Room pathways*
-checkboxes (persisted in the browser; at least one always stays checked) apply to rooms *you*
-create, and the choice rides in the link (`…#room=<id>&via=p2p,tabs`; all three = no suffix) —
-so people who join connect the creator's way automatically, with nothing to configure on
-their end. Joiners' own checkboxes are ignored. The panel is a strict three-state machine —
+**The creator decides the room type.** The Collaboration panel offers three plain-language
+room types — 🌐 *Anywhere* (all transports; recommended), 🔒 *Peer-to-peer only* (no server;
+maps to p2p+tabs), 🖥 *This browser only* (tabs) — persisted in the browser and applied to
+rooms *you* create. The choice rides in the link (`…#room=<id>&via=p2p,tabs`; Anywhere = no
+suffix), so people who join connect the creator's way automatically, with nothing to
+configure on their end. The panel is a strict three-state machine —
 solo (Collaborate + pathway choices), connecting ("⏳ Creating/Joining room…", button
 disabled), live (**🔗 Copy room link**, **🚪 Leave room**, per-pathway status) — so controls
 only appear in states where they're actionable, and a failed create/join lands back in solo

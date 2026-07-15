@@ -339,11 +339,13 @@
   #collabError { margin-top: 8px; font-size: 12.5px; color: var(--bad); line-height: 1.5; }
   #transportStatus { margin-top: 4px; font-size: 12px; opacity: .8; line-height: 1.6; }
   #transportStatus .bad { color: var(--bad); }
-  #transportPrefs { margin-top: 10px; }
-  #transportPrefs summary { cursor: pointer; user-select: none; }
-  #transportPrefs label { display: flex; gap: 7px; align-items: center; margin-top: 6px; cursor: pointer; }
-  #transportPrefs input { accent-color: var(--accent); }
-  #transportPrefs .hint { margin-top: 6px; font-size: 12px; opacity: .75; }
+  #roomType { margin-top: 12px; }
+  #roomType .rt-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .7; margin-bottom: 2px; }
+  #roomType label { display: flex; gap: 8px; align-items: baseline; margin-top: 7px; cursor: pointer; }
+  #roomType input { accent-color: var(--accent); flex: none; position: relative; top: 1px; }
+  #roomType strong { font-weight: 600; color: var(--text); }
+  #roomType .rt-desc { display: block; font-size: 12px; opacity: .7; }
+  #roomType .hint { margin-top: 8px; font-size: 12px; opacity: .75; }
 
   /* ---------- splitters ---------- */
   .split { flex: 0 0 6px; background: var(--edge); cursor: col-resize; transition: background .12s; z-index: 5; }
@@ -506,13 +508,19 @@
         <div id="collabError" hidden></div><!-- no data-when: shown only explicitly, on failure -->
         <span id="liveDot" data-when="live" hidden>● <span id="peerCount">1</span></span>
         <div id="transportStatus" data-when="live" hidden></div>
-        <details id="transportPrefs" data-when="solo">
-          <summary>Room pathways</summary>
-          <label><input type="checkbox" data-transport="ws" checked> Sync server (automerge.org)</label>
-          <label><input type="checkbox" data-transport="p2p" checked> Direct peer-to-peer (WebRTC)</label>
-          <label><input type="checkbox" data-transport="tabs" checked> Same-browser tabs</label>
-          <div class="hint">Applies to rooms <em>you</em> create: the link carries your choice, so everyone who joins connects the same way — nothing to configure on their end.</div>
-        </details>
+        <!-- Room type: the plain-language face of transport selection. Each option maps to a
+             transport set (anywhere: ws,p2p,tabs / p2p: p2p,tabs / tabs: tabs); the choice is
+             the CREATOR's, rides in the link as &via=, and joiners follow it automatically. -->
+        <div id="roomType" data-when="solo">
+          <div class="rt-head">Room type</div>
+          <label><input type="radio" name="roomType" value="anywhere" checked>
+            <span><strong>🌐 Anywhere</strong> <span class="rt-desc">works across any network — recommended</span></span></label>
+          <label><input type="radio" name="roomType" value="p2p">
+            <span><strong>🔒 Peer-to-peer only</strong> <span class="rt-desc">code goes browser-to-browser, never through a server</span></span></label>
+          <label><input type="radio" name="roomType" value="tabs">
+            <span><strong>🖥 This browser only</strong> <span class="rt-desc">between tabs on this device — demos &amp; testing</span></span></label>
+          <div class="hint">Your choice travels in the room link — people who join connect the same way automatically.</div>
+        </div>
       </div></div>
     </section>
 
@@ -3277,8 +3285,11 @@ function startPresence() {
   const me = { name: pickFrom(NAME_ADJ) + " " + pickFrom(NAME_ANIMAL),
                color: "hsl(" + Math.floor(Math.random() * 360) + ",70%,60%)" };
   collab.presence = new collab.lib.Presence({ handle: collab.handle });
+  // heartbeat 5s; a peer that misses 3 (15s) is pruned. This is the fallback for an
+  // UNGRACEFUL exit (tab crash, network drop, laptop sleep) where no goodbye is sent — a
+  // graceful Leave broadcasts a goodbye that drops the peer immediately (see leave handler).
   collab.presence.start({ initialState: { cursor: { line: 0, ch: 0 }, user: me },
-                          heartbeatMs: 5000, peerTtlMs: 60000 });
+                          heartbeatMs: 5000, peerTtlMs: 15000 });
   editor.on("cursorActivity", () => {
     const head = editor.getCursor("head"), anchor = editor.getCursor("anchor");
     collab.presence.broadcast("cursor", {
@@ -3320,6 +3331,10 @@ function startPresence() {
   };
   collab.presence.on("update", renderPeers);
   collab.presence.on("snapshot", renderPeers);
+  // A peer LEAVING must repaint too, or the "● N" count and their cursor never clear:
+  // "goodbye" = a peer's graceful Leave; "pruning" = a peer that stopped heartbeating (TTL).
+  collab.presence.on("goodbye", renderPeers);
+  collab.presence.on("pruning", renderPeers);
   collab.renderPeers = renderPeers;   // S6b: expose so reconcileFromDoc + file-switch can repaint
 }
 
@@ -3432,35 +3447,47 @@ document.getElementById("collabStartBtn").addEventListener("click", () => docume
 // room binding (editor hooks, presence, markers) with zero leftover state.
 document.getElementById("collabLeaveBtn").addEventListener("click", async () => {
   if (!(await confirmModal({ title: "Leave room", message: "Leave this live room? Your own saved project will be restored. Others keep collaborating without you.", confirmLabel: "Leave" }))) return;
+  // presence.stop() broadcasts a "goodbye" so peers drop us (count + cursor) INSTANTLY rather
+  // than after the 15s TTL. Flush it before tearing down the transport it rides on: a brief
+  // pause lets the ephemeral message reach the WebRTC datachannel / socket, then shut down.
+  try { collab.presence?.stop?.(); } catch {}
+  await new Promise(r => setTimeout(r, 200));
   try { collab.repo?.shutdown?.(); } catch {}
   history.replaceState(null, "", location.pathname + location.search);   // drop #room=… before reload
   location.reload();
 });
 
-// Connection-pathway checkboxes ⇄ localStorage. Reflect the SAVED preference (the ?transports=
-// URL seam is transient and never shown or persisted). At least one box must stay checked —
-// unchecking the last one snaps back. All three checked = default = key removed.
+// Room-type radios ⇄ localStorage (still stored as a transport list, so older saved values
+// and the ?transports= test seam keep working). anywhere = default = key removed. "This
+// browser only" is honest: tabs only. "Peer-to-peer only" keeps tabs too — same-device tabs
+// never touch a server, so the option's promise ("no server") holds.
 {
-  const boxes = [...document.querySelectorAll('#transportPrefs input[data-transport]')];
+  const ROOM_TYPES = { anywhere: null, p2p: "p2p,tabs", tabs: "tabs" };
+  const radios = [...document.querySelectorAll('#roomType input[name="roomType"]')];
   const saved = storedTransports();
-  if (saved) boxes.forEach(b => { b.checked = saved.has(b.dataset.transport); });
-  boxes.forEach(box => box.addEventListener("change", () => {
-    const on = boxes.filter(b => b.checked).map(b => b.dataset.transport);
-    if (!on.length) { box.checked = true; return; }   // never allow zero pathways
+  const current = !saved || saved.has("ws") ? "anywhere" : saved.has("p2p") ? "p2p" : "tabs";
+  radios.forEach(r => { r.checked = r.value === current; });
+  radios.forEach(r => r.addEventListener("change", () => {
+    if (!r.checked) return;
     try {
-      if (on.length === ALL_TRANSPORTS.length) localStorage.removeItem(TRANSPORTS_KEY);
-      else localStorage.setItem(TRANSPORTS_KEY, on.join(","));
+      if (ROOM_TYPES[r.value] == null) localStorage.removeItem(TRANSPORTS_KEY);
+      else localStorage.setItem(TRANSPORTS_KEY, ROOM_TYPES[r.value]);
     } catch {}
   }));
 }
 
 addEventListener("offline", () => { if (collab.active) setLive("offline", document.getElementById("peerCount").textContent); });
 addEventListener("online",  () => { if (collab.active) setLive("", document.getElementById("peerCount").textContent); });
-// Polite exit: tell WebRTC peers + relays we're leaving so remote cursors vanish immediately
-// instead of after the peer-timeout. Fire-and-forget — pagehide can't await. Skipped when the
-// page is merely entering the back/forward cache (persisted): a bfcache restore would revive
-// the app with a dead repo, silently killing the room.
-addEventListener("pagehide", (e) => { if (e.persisted) return; try { collab.repo?.shutdown?.(); } catch {} });
+// Polite exit: broadcast a presence goodbye (peers drop our count + cursor at once), then
+// tell WebRTC peers + relays we're leaving. Best-effort — pagehide can't await, so the
+// datachannel send may not flush; the 15s TTL prune is the guaranteed backstop. Skipped when
+// the page is merely entering the back/forward cache (persisted): a bfcache restore would
+// revive the app with a dead repo, silently killing the room.
+addEventListener("pagehide", (e) => {
+  if (e.persisted) return;
+  try { collab.presence?.stop?.(); } catch {}
+  try { collab.repo?.shutdown?.(); } catch {}
+});
 
 // ---------------------------------------------------------------- explicit window seams (spec §4.1)
 // Every name below is reached by tests via window.* or a bare name that must resolve through
